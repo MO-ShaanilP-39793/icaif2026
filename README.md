@@ -84,6 +84,32 @@ the holds overtake it. Scaling inv_vol_hold's gross exposure leaves Sharpe flat
 That is the design doc's exposure dial, measured. The field is our guess at the
 rivals; every conclusion here is conditional on it.
 
+## Features and labels (`tools/feature_report.py`)
+
+`features.build`: 21 per-ticker features (returns over 1/2/5/10/20 sessions, raw and
+sector-relative; vol 5d/20d, vol ratio, Parkinson, prior gap, overnight variance
+share; volume vs 20d and vs the same clock time; distance from the 20d high/low and
+the 5d mean in σ). They are cross-sectionally ranked to [−0.5, 0.5] and joined with 7
+raw `ctx_*` market features. All are defined in sessions or clock time, because the
+information grid changes on 2026-01-01. `labels.build`: alphabt-features' composite
+(reward-to-risk 0.4, terminal 0.3, path Sharpe 0.3) over 7 and 21 rounds, top 30%.
+
+Univariate IC, rounds 1 and 4, 2021–2026 (label-shuffle canary: max |IC| 0.004):
+
+| Feature | IC vs 1-day label | IC vs 3-day label | Reading |
+| --- | --- | --- | --- |
+| dist_low_20d | +0.009 | **+0.017** | names far above their 20d low keep going |
+| volume_today_ratio | **−0.015** (t −2.7) | −0.007 | heavy volume so far today → reversal |
+| ret_1s | −0.012 | −0.011 | short-term reversal, as expected in mega-caps |
+
+Every single feature is weak (|IC| ≤ 0.017), about 2–4× the canary. That is the
+expected size for mega-cap intraday signal, and it leaves the question for step 4:
+does the ensemble combine them into the 0.02–0.05 we guessed? The composite label is
+not clearly easier to rank than plain forward return (unlike alphaBT's quarterly
+upside result). Session features agree across the two grids (r ≥ 0.97); same-day ones
+less so (ret_1s 0.96, volume_today 0.94 at round 4), because a :30-grid bar is 30
+minutes staler at a given deadline.
+
 ## Credentials
 
 Registration returns `TEAM_ID` and a **one-time team token that is never reset**.
