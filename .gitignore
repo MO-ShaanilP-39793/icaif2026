@@ -11,3 +11,6 @@ starter-kit/.env
 starter-kit/.icaif/
 starter-kit/private/
 starter-kit/output/
+
+# Local environment.
+.venv/

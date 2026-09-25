@@ -40,11 +40,15 @@ return spans the overnight gap, so it dominates round-return variance.
   fills. Only the 09:30 execution is exactly observable; mid-day fills must be
   approximated from the bar that contains them, and the approximation should be
   stated wherever a backtest number is shown.
-- `adj_close == close` everywhere, and prices are **split-adjusted** (no jump at
-  NVDA 2024-06-10, AMZN 2022-06-06, TSLA 2022-08-25, GOOGL 2022-07-18). Live prices
-  will be raw — irrelevant unless a split lands during the competition.
-- 14:30 / 15:30 bars appear only on early-close days; ~150 ticker-days have fewer
-  than 7 bars. A panel pivot will carry NaNs there.
+- Prices are **split-adjusted but not spin-off-adjusted**. T 2022-04-11 and GE
+  2023-01-04 / 2024-04-02 each gap down ~20% on a distribution, not a loss.
+  `data.CORPORATE_ACTIONS` back-adjusts them; a scan of 2021–25 against Yahoo found
+  no other permanent step.
+- **Early-close days carry extended-hours bars** (13:00–15:00, plus odd 14:30/15:30
+  prints) on all 10 half-days. The loader keeps the regular session only; the 16:00
+  "close" of a half-day was otherwise a thin post-market trade.
+- 85 ticker-days across 5 days (2021-04-19, 2021-10-25, 2022-01-24, 2022-01-26,
+  2022-03-08) are missing bars; recorded in `DataIssues`, not filled.
 - The kit ships a **metrics calculator, not a backtester**. `kit/evaluation.py` is
   the official formula (self-check passes); the simulator that produces its inputs
   is ours to write.
@@ -57,11 +61,30 @@ it is gitignored here. Never push this branch to `hf`/`cchf` — both push a pub
 HuggingFace mirror. Final reproducibility materials are built from `icaif2026/`
 alone, never the repo.
 
+## Public feed vs organizer panel (`reports/data_parity.json`)
+
+Yahoo 60m bars sit on the **live :30 grid** back to Oct 2023; 30m/5m bars reach only
+~60 days back. Snapshots are dated in `data/public/` because the windows roll forward
+and cannot be refetched. Measured 2026-09-25, after spin-off adjustment:
+
+| Check | Result |
+| --- | --- |
+| Daily close, organizer vs Yahoo (16.4k ticker-days) | median 0 bps, p99 11 bps |
+| 09:30 open, organizer vs Yahoo | median 0, p95 26 bps; 11% differ > 10 bps |
+| Yahoo 60m vs 30m open at :30 | identical (p99 0 bps) |
+| Guessing a :30 fill from the containing :00 organizer bar | best is OHLC/4: median 11 bps, p95 45 bps |
+
+So a backtest on the organizer grid carries fill noise the size of the 10 bp cost on
+every round-2–7 trade (unbiased, mean 0.3 bps, but not small). And the 09:30 open is
+vendor-dependent: which print the organizers fill round 1 at is unknown until
+Validation receipts show it.
+
 ## Setup
 
-Base `python3` (3.13, has `httpx`/`pandas`/`pyarrow`) is sufficient. Data:
-`data/hourly_market_data_2021_2026.parquet` (copied from the Codabench Files tab;
-not committed).
+Own venv (pandas 2.3, for AutoGluon later): `python3 -m venv .venv &&
+.venv/bin/pip install -r requirements.txt`. Tests: `.venv/bin/python -m pytest -q`.
+Data: `data/hourly_market_data_2021_2026.parquet` (from the Codabench Files tab; not
+committed).
 
 ```bash
 cd icaif2026/starter-kit

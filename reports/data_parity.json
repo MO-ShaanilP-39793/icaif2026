@@ -1,0 +1,258 @@
+{
+  "organizer_issues": {
+    "summary": "dropped 820 extended-hours bars; spin-off-adjusted 11392 bars; 85 ticker-days short of a full session across 5 days",
+    "short_sessions": {
+      "2021-04-19": [
+        "BA",
+        "BAC",
+        "CAT",
+        "CRM",
+        "CVX",
+        "DIS",
+        "GE",
+        "GS",
+        "JNJ",
+        "JPM",
+        "KO",
+        "LLY",
+        "NEE",
+        "NKE",
+        "PFE",
+        "T",
+        "TMO",
+        "UNH",
+        "V",
+        "WMT",
+        "XOM"
+      ],
+      "2021-10-25": [
+        "BA",
+        "BAC",
+        "CAT",
+        "CRM",
+        "CVX",
+        "DIS",
+        "GE",
+        "GS",
+        "JNJ",
+        "JPM",
+        "LLY",
+        "NEE",
+        "NKE",
+        "PFE",
+        "T",
+        "TMO",
+        "UNH",
+        "V",
+        "WMT",
+        "XOM"
+      ],
+      "2022-01-24": [
+        "BA",
+        "BAC",
+        "CAT",
+        "CRM",
+        "CVX",
+        "DIS",
+        "KO",
+        "LLY",
+        "NEE",
+        "NKE",
+        "PFE",
+        "T",
+        "TMO",
+        "UNH",
+        "V",
+        "WMT",
+        "XOM"
+      ],
+      "2022-01-26": [
+        "T",
+        "TMO",
+        "UNH",
+        "V",
+        "WMT",
+        "XOM"
+      ],
+      "2022-03-08": [
+        "BA",
+        "CRM",
+        "CVX",
+        "DIS",
+        "GE",
+        "GS",
+        "JPM",
+        "LLY",
+        "NEE",
+        "NKE",
+        "T",
+        "TMO",
+        "UNH",
+        "WMT",
+        "XOM",
+        "BAC",
+        "CAT",
+        "JNJ",
+        "KO",
+        "PFE",
+        "V"
+      ]
+    },
+    "spin_offs_adjusted": [
+      {
+        "ticker": "T",
+        "ex_date": "2022-04-11",
+        "factor": 0.755287,
+        "event": "Warner Bros. Discovery spin-off"
+      },
+      {
+        "ticker": "GE",
+        "ex_date": "2023-01-04",
+        "factor": 0.78064,
+        "event": "GE HealthCare spin-off"
+      },
+      {
+        "ticker": "GE",
+        "ex_date": "2024-04-02",
+        "factor": 0.798268,
+        "event": "GE Vernova spin-off"
+      }
+    ]
+  },
+  "source_parity_vs_yahoo_60m": {
+    "window": [
+      "2023-10-26 09:30:00-04:00",
+      "2025-12-31 16:00:00-05:00"
+    ],
+    "days_organizer_only": [],
+    "days_public_only": [],
+    "ticker_days_compared": 16403,
+    "open_0930": {
+      "n": 16403,
+      "mean_bps": 0.03,
+      "median_abs_bps": 0.0,
+      "p95_abs_bps": 25.73,
+      "p99_abs_bps": 67.18,
+      "share_over_10bps": 0.1098
+    },
+    "session_close": {
+      "n": 16403,
+      "mean_bps": -0.08,
+      "median_abs_bps": 0.0,
+      "p95_abs_bps": 3.73,
+      "p99_abs_bps": 10.81,
+      "share_over_10bps": 0.0109
+    },
+    "day_high": {
+      "n": 16403,
+      "mean_bps": -0.31,
+      "median_abs_bps": 0.0,
+      "p95_abs_bps": 1.31,
+      "p99_abs_bps": 22.85,
+      "share_over_10bps": 0.0174
+    },
+    "day_low": {
+      "n": 16403,
+      "mean_bps": 0.21,
+      "median_abs_bps": 0.0,
+      "p95_abs_bps": 1.25,
+      "p99_abs_bps": 20.86,
+      "share_over_10bps": 0.0163
+    },
+    "volume_ratio_median": 1.0082,
+    "volume_ratio_p05_p95": [
+      0.8753,
+      1.0795
+    ],
+    "close_err_worst_tickers_median_abs_bps": {
+      "GE": 0.4,
+      "UNH": 0.15,
+      "LLY": 0.11,
+      "TMO": 0.0,
+      "V": 0.0
+    },
+    "open_err_worst_rows": [
+      {
+        "day": "2024-03-07",
+        "ticker": "TMO",
+        "bps": -571.4,
+        "organizer": 595.0,
+        "public": 561.0
+      },
+      {
+        "day": "2024-03-21",
+        "ticker": "TMO",
+        "bps": -485.9,
+        "organizer": 580.0,
+        "public": 551.8200073242188
+      },
+      {
+        "day": "2024-12-12",
+        "ticker": "TMO",
+        "bps": 282.9,
+        "organizer": 531.33,
+        "public": 546.3621826171875
+      },
+      {
+        "day": "2025-04-07",
+        "ticker": "BAC",
+        "bps": -274.5,
+        "organizer": 34.97,
+        "public": 34.0099983215332
+      },
+      {
+        "day": "2024-12-17",
+        "ticker": "TMO",
+        "bps": 254.3,
+        "organizer": 526.01,
+        "public": 539.385009765625
+      }
+    ]
+  },
+  "fill_guess_error_vs_true_half_hour_open": {
+    "bar_open": {
+      "n": 10794,
+      "mean_bps": 0.59,
+      "median_abs_bps": 18.25,
+      "p95_abs_bps": 79.36,
+      "p99_abs_bps": 131.3,
+      "share_over_10bps": 0.6983
+    },
+    "bar_close": {
+      "n": 10794,
+      "mean_bps": 0.33,
+      "median_abs_bps": 17.47,
+      "p95_abs_bps": 70.81,
+      "p99_abs_bps": 119.8,
+      "share_over_10bps": 0.6919
+    },
+    "mid_open_close": {
+      "n": 10794,
+      "mean_bps": 0.46,
+      "median_abs_bps": 13.29,
+      "p95_abs_bps": 53.07,
+      "p99_abs_bps": 88.87,
+      "share_over_10bps": 0.6017
+    },
+    "ohlc4": {
+      "n": 10794,
+      "mean_bps": 0.3,
+      "median_abs_bps": 11.35,
+      "p95_abs_bps": 44.57,
+      "p99_abs_bps": 75.85,
+      "share_over_10bps": 0.5494
+    },
+    "_window": [
+      "2026-07-01 09:30:00-04:00",
+      "2026-09-24 15:30:00-04:00"
+    ]
+  },
+  "yahoo_60m_vs_30m_open_at_half_hour": {
+    "n": 12593,
+    "mean_bps": -0.01,
+    "median_abs_bps": 0.0,
+    "p95_abs_bps": 0.0,
+    "p99_abs_bps": 0.0,
+    "share_over_10bps": 0.0006
+  }
+}
