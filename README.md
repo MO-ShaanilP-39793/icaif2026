@@ -49,6 +49,16 @@ return spans the overnight gap, so it dominates round-return variance.
   "close" of a half-day was otherwise a thin post-market trade.
 - 85 ticker-days across 5 days (2021-04-19, 2021-10-25, 2022-01-24, 2022-01-26,
   2022-03-08) are missing bars; recorded in `DataIssues`, not filled.
+- **A float weight can fail the cap.** The backend checks `Decimal(str(w)) <= 0.30`,
+  so a computed `0.1 + 0.2` (`0.30000000000000004`) makes the whole decision invalid
+  and the round silently holds. `sim.run` validates through the kit's own contract,
+  so this shows in backtests as `invalid_rounds`.
+- **Yahoo has no 12:30–13:00 bar on half-days**, and gaps on 2026-01-30 / 02-02.
+  `sim.market_from_public_60m` stands in the last close and lists the day in
+  `issues["degraded_days"]`; windows touching one should be skipped, not scored.
+- **Sizing against the fee is unconfirmed.** `sim.run(sizing="pre_fee")` (default)
+  sizes targets on pre-fee NAV, leaving cash −0.1% × notional when fully invested;
+  `post_fee` covers the fee. Validation receipts will show which the backend does.
 - The kit ships a **metrics calculator, not a backtester**. `kit/evaluation.py` is
   the official formula (self-check passes); the simulator that produces its inputs
   is ours to write.
