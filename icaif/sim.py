@@ -66,6 +66,20 @@ class Market:
         n = np.searchsorted(self._ends, pd.Timestamp(as_of).value, side="right")
         return self.info_bars.iloc[:n]
 
+    def recent_closes(self, as_of: pd.Timestamp, n: int) -> pd.DataFrame:
+        """The last `n` bar closes (rows = bar end, columns = tickers) ended by `as_of`.
+
+        The same cutoff as `history`, on a wide panel built once. Pivoting `history()`
+        every round is ~5k pivots per backtest year per strategy.
+        """
+        if not hasattr(self, "_close_panel"):
+            self._close_panel = (self.info_bars.pivot_table(
+                index="end", columns="ticker", values="close", aggfunc="last")
+                .sort_index().reindex(columns=self.tickers))
+            self._panel_ends = pd.DatetimeIndex(self._close_panel.index).asi8
+        k = np.searchsorted(self._panel_ends, pd.Timestamp(as_of).value, side="right")
+        return self._close_panel.iloc[max(0, k - n):k]
+
 
 def market_from_public_60m(bars_60m: pd.DataFrame, info_bars: pd.DataFrame) -> Market:
     """Execution prices from public 60m bars, which sit on the live :30 grid.
@@ -134,6 +148,9 @@ class RoundContext:
 
     def history(self) -> pd.DataFrame:
         return self.market.history(self.deadline)
+
+    def recent_closes(self, n: int) -> pd.DataFrame:
+        return self.market.recent_closes(self.deadline, n)
 
 
 # A strategy returns target weights for all 30 tickers, or None to skip the round.

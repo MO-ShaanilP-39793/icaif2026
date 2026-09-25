@@ -63,6 +63,27 @@ return spans the overnight gap, so it dominates round-return variance.
   the official formula (self-check passes); the simulator that produces its inputs
   is ours to write.
 
+## Baselines vs the field (`tools/baselines_report.py --exposure-scan`)
+
+40 non-overlapping 15-day windows, Nov 2023 – Sep 2026 (windows touching a degraded
+day skipped), fills on Yahoo's :30 opens, ranked by the official rules. Lower mean
+overall score is better; SE ≈ 0.1–0.2, so gaps under ~0.3 are not established.
+
+| Strategy | Mean score | Mean return | Mean MDD | Mean turnover |
+| --- | --- | --- | --- | --- |
+| cash | 2.69 | 0 | 0 | 0 |
+| inv_vol_hold | 3.05 | 0.81% | 2.92% | 0.95% |
+| ew_hold | 3.26 | 0.99% | 3.21% | 0.95% |
+| kit_momentum_hourly | 7.51 | −5.41% | 8.42% | 69.3% |
+
+All cash ranks first against this field. It wins drawdown and turnover outright in every
+window, and the three churners sink below it on return. Against a churner-heavy field
+the holds overtake it. Scaling inv_vol_hold's gross exposure leaves Sharpe flat
+(1.63–1.68) while return, MDD and turnover scale linearly. **75% gross beats 100%
+(2.74 vs 3.05)**, because it undercuts every fully invested hold on MDD and turnover.
+That is the design doc's exposure dial, measured. The field is our guess at the
+rivals; every conclusion here is conditional on it.
+
 ## Credentials
 
 Registration returns `TEAM_ID` and a **one-time team token that is never reset**.
