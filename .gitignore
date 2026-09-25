@@ -1,0 +1,13 @@
+# Competition data is licensed to registered participants; it is not ours to commit.
+data/
+
+# Credentials. The team token is issued once and never reset, so a leaked token
+# cannot be rotated away — keep every place it can land out of git.
+.env
+.icaif/
+private/
+output/
+starter-kit/.env
+starter-kit/.icaif/
+starter-kit/private/
+starter-kit/output/
