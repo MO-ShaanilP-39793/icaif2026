@@ -22,7 +22,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import numpy as np  # noqa: E402
 import pandas as pd  # noqa: E402
 
-from icaif import data, features, labels, markets  # noqa: E402
+from icaif import data, earnings, external, features, labels, markets  # noqa: E402
 
 TRAIN_ROUNDS = (1, 4)
 HORIZON_DAYS = {"h7": 1, "h21": 3, "h35": 5}
@@ -49,7 +49,8 @@ def summarise_ic(ic: pd.Series, horizon_days: int) -> dict:
 
 def main() -> None:
     market = markets.research_market()
-    f = features.build(market.info_bars)
+    f = features.build(market.info_bars, events=earnings.quarterly(external.load("earnings")),
+                       ctx_daily=external.load("yahoo_daily_context"))
     lab = labels.build(markets.label_exec_prices())
     df = f.join(lab, how="inner")
     df = df[df["ctx_round"].isin(TRAIN_ROUNDS)]

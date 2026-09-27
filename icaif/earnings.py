@@ -127,7 +127,9 @@ def reaction_session(accepted: pd.Series, sessions: pd.DatetimeIndex) -> pd.Seri
     is_session = (pos < len(sessions)) & (sessions[pos.clip(max=len(sessions) - 1)] == day)
     pos = pos + (after_open & is_session).astype(int)
     out = pd.Series(pd.NaT, index=accepted.index, dtype="datetime64[ns]")
-    ok = pos < len(sessions)
+    # A release before the calendar starts has no session here. Without the second test
+    # it would map to the first session and read as a release on that day.
+    ok = (pos < len(sessions)) & (day >= sessions[0]).to_numpy()
     out[ok] = sessions[pos[ok]]
     return out
 
@@ -137,11 +139,15 @@ NEXT_KNOWN_SESSIONS = 10
 
 def proximity(events: pd.DataFrame, decisions: pd.DataFrame,
               sessions: pd.DatetimeIndex) -> pd.DataFrame:
-    """Sessions since the last release and to the next, per (decision, ticker).
+    """Sessions since the last release and to the next, per (decision row, ticker).
 
     `events` is (ticker, accepted), already one per quarter; `decisions` is
-    (day, deadline). A release counts as past only if it was accepted before the
-    decision's deadline, whatever its reaction session.
+    (day, deadline), any number per day. Returns columns row (the decision's
+    position), ticker, since, to_next.
+
+    A release counts as past only if it was accepted before the decision's deadline.
+    One accepted mid-session reacts at the next open, but it is already known to the
+    decisions after it that day, so `since` is 0 there rather than negative.
 
     "Sessions to next" reads the actual future release, which is only fair while its
     date would have been announced: companies publish the date roughly two to four
@@ -153,7 +159,7 @@ def proximity(events: pd.DataFrame, decisions: pd.DataFrame,
     pos = pd.Series(range(len(sessions)), index=sessions)
     day_pos = pos.reindex(pd.DatetimeIndex(decisions["day"])).to_numpy()
     deadlines = decisions["deadline"].to_numpy()
-    out = {}
+    frames = []
     for ticker, e in events.sort_values("accepted").groupby("ticker"):
         acc = e["accepted"].to_numpy()
         react = reaction_session(e["accepted"], sessions)
@@ -161,12 +167,11 @@ def proximity(events: pd.DataFrame, decisions: pd.DataFrame,
         n_past = acc.searchsorted(deadlines, side="left")  # releases before each deadline
         since = np.full(len(decisions), np.nan)
         has_past = n_past > 0
-        since[has_past] = day_pos[has_past] - r_pos[n_past[has_past] - 1]
+        since[has_past] = np.maximum(day_pos[has_past] - r_pos[n_past[has_past] - 1], 0)
         to_next = np.full(len(decisions), np.nan)
         has_next = has_past & (n_past < len(acc))
         to_next[has_next] = r_pos[n_past[has_next]] - day_pos[has_next]
         to_next[to_next > NEXT_KNOWN_SESSIONS] = np.nan
-        out[ticker] = pd.DataFrame({"since": since, "to_next": to_next})
-    frame = pd.concat(out, names=["ticker", "row"]).reset_index()
-    frame["day"] = decisions["day"].to_numpy()[frame["row"]]
-    return frame.drop(columns="row").set_index(["day", "ticker"]).sort_index()
+        frames.append(pd.DataFrame({"row": np.arange(len(decisions)), "ticker": ticker,
+                                    "since": since, "to_next": to_next}))
+    return pd.concat(frames, ignore_index=True)

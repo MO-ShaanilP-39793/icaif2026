@@ -19,7 +19,7 @@ volume so far reach into today.
 import numpy as np
 import pandas as pd
 
-from icaif import calendar, data
+from icaif import calendar, data, earnings
 
 RETURN_SESSIONS = (1, 2, 5, 10, 20)
 
@@ -70,8 +70,15 @@ def centred_rank(panel: pd.DataFrame) -> pd.DataFrame:
     return (r.sub(1).div((n - 1).where(n > 1), axis=0)) - 0.5
 
 
-def build(info_bars: pd.DataFrame) -> pd.DataFrame:
-    """The feature frame: index (execution, ticker)."""
+def build(info_bars: pd.DataFrame, events: pd.DataFrame | None = None,
+          ctx_daily: pd.DataFrame | None = None) -> pd.DataFrame:
+    """The feature frame: index (execution, ticker).
+
+    `events` (earnings, one per quarter) adds `e_sessions_since` / `e_sessions_to_next`,
+    per decision: a release accepted at 09:20 is unknown at round 1 and known from
+    round 2. `ctx_daily` (Yahoo context closes) adds the daily model's `ctx_*` market
+    columns as of the prior close, the latest a decision before today's close has.
+    """
     universe = data.load_universe()
     tickers = sorted(universe)
     decisions = decision_times(info_bars)
@@ -167,4 +174,27 @@ def build(info_bars: pd.DataFrame) -> pd.DataFrame:
         "ctx_mkt_ret_5d": at_prev(ctx_session[["ctx_mkt_ret_5d"]]).iloc[:, 0].to_numpy(),
     }, index=last.index)
     out = long.join(ctx, on="execution")
+
+    days = pd.DatetimeIndex(pd.to_datetime(decisions["day"]))
+    executions = pd.DatetimeIndex(decisions["execution"])
+    ctx_close = None
+    if ctx_daily is not None:
+        from icaif.daily_features import context  # daily_features imports this module
+        ctx_close = context(ctx_daily)
+        daily_ctx = ctx_close.shift(1).reindex(days)  # row d = as of the close of d-1
+        daily_ctx.index = executions
+        out = out.join(daily_ctx, on="execution")
+    if events is not None:
+        # The session calendar must reach back before the first decision, or a release
+        # from before 2021 has no session and "since" is unknown for months.
+        calendar_days = days.unique()
+        if ctx_close is not None:
+            calendar_days = calendar_days.union(ctx_close.index)
+        prox = earnings.proximity(events, pd.DataFrame({"day": days,
+                                                        "deadline": decisions["deadline"]}),
+                                  calendar_days)
+        prox["execution"] = executions[prox["row"].to_numpy()]
+        prox = prox.set_index(["execution", "ticker"])[["since", "to_next"]]
+        prox.columns = ["e_sessions_since", "e_sessions_to_next"]
+        out = out.join(prox)
     return out.sort_index()

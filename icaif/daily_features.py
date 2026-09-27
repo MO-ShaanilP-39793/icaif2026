@@ -127,8 +127,8 @@ def _earnings_columns(events: pd.DataFrame, dates: pd.DatetimeIndex,
     decisions = pd.DataFrame({"day": dates, "deadline": [
         calendar.at(d.date(), DEADLINE) for d in dates]})
     prox = earnings.proximity(events, decisions, dates)
-    prox.index = prox.index.set_names(["date", "ticker"])
-    prox = prox.reindex(index)
+    prox["date"] = dates[prox["row"].to_numpy()]
+    prox = prox.set_index(["date", "ticker"]).reindex(index)
     # The last release's reaction-day move, available from the session after it
     # (row d of reaction_asof_prior holds the move on d-1).
     since = prox["since"].to_numpy()

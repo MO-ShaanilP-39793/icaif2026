@@ -132,3 +132,29 @@ def test_no_two_features_are_the_same_column_under_another_name(month):
     corr = f.corr().abs().to_numpy()
     np.fill_diagonal(corr, 0)
     assert corr.max() < 0.999
+
+
+@needs_panel
+def test_an_earnings_release_is_seen_from_the_first_decision_after_it(month):
+    """Accepted at 09:20, a release moves that day's open, but the round-1 decision
+    (deadline 09:10) hasn't seen it; round 2 (deadline 10:25) has."""
+    t = sorted(data.load_universe())[0]
+    events = pd.DataFrame({"ticker": t, "accepted": pd.to_datetime(
+        ["2024-06-11 16:30", "2024-06-13 09:20"]).tz_localize(calendar.TZ)})
+    f = features.build(month, events=events)
+    at = lambda day, rnd: f[(f.index.get_level_values("execution").date == pd.Timestamp(day).date())
+                            & (f["ctx_round"] == rnd)].xs(t, level="ticker").iloc[0]
+    assert at("2024-06-12", 1)["e_sessions_since"] == 0  # after yesterday's close
+    assert at("2024-06-13", 1)["e_sessions_since"] == 1 and at("2024-06-13", 1)["e_sessions_to_next"] == 0
+    assert at("2024-06-13", 2)["e_sessions_since"] == 0
+
+
+@needs_panel
+def test_daily_context_on_day_d_is_the_close_of_d_minus_1(month):
+    dates = pd.bdate_range("2024-03-01", "2024-07-31")
+    vix = pd.Series(np.arange(len(dates), dtype=float) + 10, index=dates)
+    ctx = pd.concat([pd.DataFrame({"date": dates, "ticker": s, "close": vix.to_numpy() if s == "^VIX" else 100.0})
+                     for s in ["^VIX", "SPY", "^TNX", "^IRX", "XLK"]], ignore_index=True)
+    f = features.build(month, ctx_daily=ctx)
+    row = f[f.index.get_level_values("execution").date == pd.Timestamp("2024-06-12").date()].iloc[0]
+    assert row["ctx_vix"] == vix[pd.Timestamp("2024-06-11")]
