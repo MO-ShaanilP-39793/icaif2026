@@ -17,8 +17,8 @@ from icaif.universe import EXTERNAL, latest
 START = "1999-01-01"
 # Market context for the market node / ctx features. XLRE starts 2015 and XLC 2018;
 # a context feature from them is NaN before that, not zero.
-# Rates are Cboe's Treasury yield indices on Yahoo (13-week, 5-year, 10-year, quoted as
-# yield x 10 for ^FVX/^TNX), not FRED: Python's strict TLS checks fail against FRED
+# Rates are Cboe's Treasury yield indices on Yahoo (13-week, 5-year, 10-year, quoted in
+# percent: 5.18 is 5.18%), not FRED: Python's strict TLS checks fail against FRED
 # on this network, and loosening certificate checks to reach it is not worth a series
 # Yahoo already carries. Like any close, a value dated d is usable from d+1's decisions.
 RATE_SYMBOLS = ["^IRX", "^FVX", "^TNX"]

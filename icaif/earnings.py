@@ -15,6 +15,7 @@ up as an empty result rather than an error.
 import os
 import time
 
+import numpy as np
 import pandas as pd
 
 from icaif import calendar
@@ -129,3 +130,43 @@ def reaction_session(accepted: pd.Series, sessions: pd.DatetimeIndex) -> pd.Seri
     ok = pos < len(sessions)
     out[ok] = sessions[pos[ok]]
     return out
+
+
+NEXT_KNOWN_SESSIONS = 10
+
+
+def proximity(events: pd.DataFrame, decisions: pd.DataFrame,
+              sessions: pd.DatetimeIndex) -> pd.DataFrame:
+    """Sessions since the last release and to the next, per (decision, ticker).
+
+    `events` is (ticker, accepted), already one per quarter; `decisions` is
+    (day, deadline). A release counts as past only if it was accepted before the
+    decision's deadline, whatever its reaction session.
+
+    "Sessions to next" reads the actual future release, which is only fair while its
+    date would have been announced: companies publish the date roughly two to four
+    weeks ahead. Beyond NEXT_KNOWN_SESSIONS it is NaN, not a count a live system
+    could not have known. Both are NaN before a ticker's first recorded release, so a
+    name whose EDGAR history starts late (a re-registration) reads as unknown rather
+    than as years since its last results.
+    """
+    pos = pd.Series(range(len(sessions)), index=sessions)
+    day_pos = pos.reindex(pd.DatetimeIndex(decisions["day"])).to_numpy()
+    deadlines = decisions["deadline"].to_numpy()
+    out = {}
+    for ticker, e in events.sort_values("accepted").groupby("ticker"):
+        acc = e["accepted"].to_numpy()
+        react = reaction_session(e["accepted"], sessions)
+        r_pos = pos.reindex(pd.DatetimeIndex(react)).to_numpy()
+        n_past = acc.searchsorted(deadlines, side="left")  # releases before each deadline
+        since = np.full(len(decisions), np.nan)
+        has_past = n_past > 0
+        since[has_past] = day_pos[has_past] - r_pos[n_past[has_past] - 1]
+        to_next = np.full(len(decisions), np.nan)
+        has_next = has_past & (n_past < len(acc))
+        to_next[has_next] = r_pos[n_past[has_next]] - day_pos[has_next]
+        to_next[to_next > NEXT_KNOWN_SESSIONS] = np.nan
+        out[ticker] = pd.DataFrame({"since": since, "to_next": to_next})
+    frame = pd.concat(out, names=["ticker", "row"]).reset_index()
+    frame["day"] = decisions["day"].to_numpy()[frame["row"]]
+    return frame.drop(columns="row").set_index(["day", "ticker"]).sort_index()

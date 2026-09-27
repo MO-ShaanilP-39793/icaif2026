@@ -148,6 +148,34 @@ cross-section), and a reused symbol would carry the later company's prices.
 Earnings dates come from EDGAR 8-K item 2.02 acceptance times (`earnings.py`). This
 needs `SEC_USER_AGENT="<name> <email>"` in the environment.
 
+## Daily-model features (`tools/daily_feature_report.py`)
+
+`daily_features.build` gives one row per (date, name) in the day's universe: 718k rows,
+1999–2026, a median of 104 names a day. It holds 23 per-name features ranked within
+the universe, three raw earnings-timing columns and 13 raw `ctx_*` columns. Every value
+is as of the close of d−1, since the decision is before d's open.
+
+IC against the 5-day composite (label shuffled within each day: max |IC| 0.007):
+
+| Feature | 2001–10 | 2011–19 | 2020–22 | 2023+ |
+| --- | --- | --- | --- | --- |
+| e_sessions_to_next (earnings within 10 sessions) | +0.021 | +0.030 | +0.017 | **+0.062** |
+| mom_12_1 | +0.016 | +0.026 | +0.006 | +0.030 |
+| ret_5d (short-term reversal) | −0.027 | −0.006 | −0.017 | −0.015 |
+| vol_20d | +0.004 | −0.018 | −0.021 | +0.023 |
+| e_last_reaction (post-earnings drift) | +0.018 | +0.019 | −0.004 | 0.000 |
+
+- **Earnings inside the label window is the strongest single effect.** An upcoming
+  release adds a jump to the path, which the drawdown-aware composite penalises and
+  the upside target rewards (IC −0.066 there). It depends on release dates being
+  announced ahead of time: the feature only looks 10 sessions forward, and live it
+  needs an earnings calendar, not EDGAR.
+- **Volatility changes sign by era.** Low volatility won in 2011–22 and high volatility
+  since 2023. A model trained on all eras will average that away, which is one more
+  reason the training start year is a tested setting.
+- **Post-earnings drift has faded** since 2020, as the literature says it has.
+- **The upside target is again mostly volatility** (Parkinson IC 0.16–0.20 in every era).
+
 ## Credentials
 
 Registration returns `TEAM_ID` and a **one-time team token that is never reset**.

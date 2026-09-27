@@ -39,18 +39,26 @@ from numpy.lib.stride_tricks import sliding_window_view
 
 HORIZONS = {"h7": 7, "h21": 21, "h35": 35}
 UPSIDE_HORIZONS = ("h21", "h35")
+# The daily model decides once a day, at round 1, so its path is the 09:30 open of
+# each following session: 3 and 5 steps, one per session.
+DAILY_HORIZONS = {"d3": 3, "d5": 5}
 WEIGHTS = {"reward_to_risk": 0.4, "terminal": 0.3, "path_sharpe": 0.3}
 TOP_FRAC = 0.40
 QUARTER_SESSIONS = 63
 ROUNDS_PER_SESSION = 7
 
 
-def _floor(h: int) -> float:
-    return 0.01 * np.sqrt((h / ROUNDS_PER_SESSION) / QUARTER_SESSIONS)
+def _floor(h: int, per_session: int = ROUNDS_PER_SESSION) -> float:
+    return 0.01 * np.sqrt((h / per_session) / QUARTER_SESSIONS)
 
 
-def components(exec_prices: pd.DataFrame, h: int) -> dict[str, pd.DataFrame]:
-    """Raw components at every round with a full h-round path ahead (round x ticker)."""
+def components(exec_prices: pd.DataFrame, h: int,
+               per_session: int = ROUNDS_PER_SESSION) -> dict[str, pd.DataFrame]:
+    """Raw components at every step with a full h-step path ahead (step x ticker).
+
+    A step is a round (7 a session) for the intraday model and a session for the daily
+    model; `per_session` rescales the drawdown floor to the same calendar span.
+    """
     px = exec_prices.sort_index().to_numpy(dtype=float)
     n = px.shape[0] - h
     if n <= 0:
@@ -67,7 +75,7 @@ def components(exec_prices: pd.DataFrame, h: int) -> dict[str, pd.DataFrame]:
     top_k = np.sort(rel, axis=2)[:, :, -k:].mean(axis=2) - 1
     with np.errstate(divide="ignore", invalid="ignore"):
         out = {
-            "reward_to_risk": upside / (drawdown + _floor(h)),
+            "reward_to_risk": upside / (drawdown + _floor(h, per_session)),
             "terminal": rel[:, :, -1] - 1,
             "path_sharpe": top_k / (step.std(axis=2) + 1e-10),
             "upside": top_k,
@@ -97,7 +105,10 @@ def top_label(score: pd.DataFrame) -> pd.DataFrame:
             .le(k, axis=0)).astype(float).where(score.notna())
 
 
-def build(exec_prices: pd.DataFrame) -> pd.DataFrame:
+def build(exec_prices: pd.DataFrame, horizons: dict[str, int] = HORIZONS,
+          upside_horizons: tuple[str, ...] = UPSIDE_HORIZONS,
+          per_session: int = ROUNDS_PER_SESSION,
+          universe: pd.DataFrame | None = None) -> pd.DataFrame:
     """Labels for every horizon: index (execution, ticker).
 
     Columns per horizon: `<h>_pct` and `<h>_label` (composite), `<h>_terminal` (plain
@@ -105,20 +116,26 @@ def build(exec_prices: pd.DataFrame) -> pd.DataFrame:
     folds); for 3 and 5 days also `<h>_up_pct` and `<h>_up_label` (upside on fills).
     A ticker with any missing price on the path gets no label, rather than a label
     computed on a hole.
+
+    `universe` (step x ticker, bool) restricts who is ranked at each step: the daily
+    model's cross-section is that day's universe. Paths still read every price, so a
+    name that leaves the universe mid-path keeps its label.
     """
     ordered = exec_prices.sort_index()
     frames = []
-    for name, h in HORIZONS.items():
-        comps = components(ordered, h)
+    for name, h in horizons.items():
+        comps = components(ordered, h, per_session)
         idx = comps["terminal"].index
         valid = ~np.isnan(sliding_window_view(ordered.to_numpy(float), h + 1, axis=0)[:len(idx)]
                           ).any(axis=2)
         valid = pd.DataFrame(valid, index=idx, columns=ordered.columns)
+        if universe is not None:
+            valid &= universe.reindex(index=idx, columns=ordered.columns).fillna(False).astype(bool)
         score = sum(w * comps[c].where(valid).rank(axis=1, pct=True) for c, w in WEIGHTS.items())
         cols = {f"{name}_pct": unit_rank(score),
                 f"{name}_label": top_label(score),
                 f"{name}_terminal": comps["terminal"].where(valid)}
-        if name in UPSIDE_HORIZONS:
+        if name in upside_horizons:
             up = comps["upside"].where(valid)
             cols[f"{name}_up_pct"] = unit_rank(up)
             cols[f"{name}_up_label"] = top_label(up)
