@@ -2,7 +2,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from icaif import calendar, data, features, labels
+from icaif import calendar, data, features, labels, markets
 
 needs_panel = pytest.mark.skipif(not data.ORGANIZER_PARQUET.exists(),
                                  reason="organizer parquet not present")
@@ -68,7 +68,7 @@ def test_a_label_reads_its_own_horizon_and_not_one_round_beyond():
 
 
 def test_a_missing_price_on_the_path_gives_no_label_rather_than_a_label_on_a_hole():
-    idx = pd.DatetimeIndex([r["execution"] for d in pd.bdate_range("2026-09-01", periods=5)
+    idx = pd.DatetimeIndex([r["execution"] for d in pd.bdate_range("2026-09-01", periods=7)
                             for r in calendar.rounds_for(d.date())])
     px = pd.DataFrame(100.0, index=idx, columns=sorted(data.load_universe()))
     px.iloc[3, 0] = np.nan
@@ -78,15 +78,49 @@ def test_a_missing_price_on_the_path_gives_no_label_rather_than_a_label_on_a_hol
     assert first["h7_label"].notna().sum() == 29
 
 
-def test_labels_mark_the_top_thirty_percent_at_each_decision():
-    idx = pd.DatetimeIndex([r["execution"] for d in pd.bdate_range("2026-09-01", periods=8)
+def test_labels_mark_the_top_forty_percent_at_each_decision():
+    idx = pd.DatetimeIndex([r["execution"] for d in pd.bdate_range("2026-09-01", periods=10)
                             for r in calendar.rounds_for(d.date())])
     rng = np.random.default_rng(1)
     px = pd.DataFrame(100 * np.exp(np.cumsum(rng.normal(0, 0.01, (len(idx), 30)), axis=0)),
                       index=idx, columns=sorted(data.load_universe()))
     out = labels.build(px)
-    per_decision = out["h7_label"].groupby(level="execution").sum().dropna()
-    assert (per_decision[per_decision > 0] == 9).all()
+    for col in ("h7_label", "h35_label", "h35_up_label"):
+        per_decision = out[col].groupby(level="execution").sum()
+        counted = out[col].groupby(level="execution").count()
+        assert (per_decision[counted == 30] == 12).all(), col
+
+
+def test_upside_is_the_mean_of_the_best_k_fills_not_the_single_best_or_the_last():
+    """At 21 rounds k = 2, so upside = mean of the two highest fills / entry - 1. Using
+    the max alone rewards one spike; using the last fill makes it a terminal return."""
+    h = labels.HORIZONS["h21"]
+    path = np.full(h + 1, 100.0)
+    path[5], path[9], path[-1] = 110.0, 106.0, 101.0
+    idx = pd.date_range("2026-09-01 09:30", periods=h + 1, freq="h", tz=calendar.TZ)
+    up = labels.components(pd.DataFrame({"A": path}, index=idx), h)["upside"].iloc[0, 0]
+    assert up == pytest.approx(0.08)
+
+
+def test_a_percentile_target_spans_zero_to_one_whatever_the_cross_section_size():
+    """A pct rank tops out at 1 but bottoms at 1/n, so its mean drifts with how many
+    names have a label that day. The regression target should not."""
+    panel = pd.DataFrame([[3.0, 1.0, 2.0, np.nan], [1.0, 2.0, 3.0, 4.0]])
+    r = labels.unit_rank(panel)
+    assert r.min(axis=1).tolist() == [0.0, 0.0] and r.max(axis=1).tolist() == [1.0, 1.0]
+
+
+def test_a_missing_public_open_is_filled_by_the_organizer_guess_never_by_the_last_close():
+    """A last-close stand-in is a zero return then a catch-up jump: a fake path inside
+    every label that spans it. A hole with no guess must stay a hole."""
+    ex = pd.date_range("2025-06-02 09:30", periods=4, freq="h", tz=calendar.TZ)
+    exact = pd.DataFrame({"A": [10.0, np.nan, np.nan, 13.0]}, index=ex[:4])
+    guessed = pd.DataFrame({"A": [9.0, 9.5, np.nan, 12.0]}, index=ex[:4])
+    earlier = pd.DataFrame({"A": [8.0]}, index=[ex[0] - pd.Timedelta(days=1)])
+    out = markets.merge_fills(exact, pd.concat([earlier, guessed]))
+    assert out["A"].tolist()[0] == 8.0  # before the exact span: the guess
+    assert out["A"].tolist()[1:3] == [10.0, 9.5]
+    assert np.isnan(out["A"].iloc[3]) and out["A"].iloc[4] == 13.0
 
 
 @needs_panel

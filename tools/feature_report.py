@@ -25,7 +25,7 @@ import pandas as pd  # noqa: E402
 from icaif import data, features, labels, markets  # noqa: E402
 
 TRAIN_ROUNDS = (1, 4)
-HORIZON_DAYS = {"h7": 1, "h21": 3}
+HORIZON_DAYS = {"h7": 1, "h21": 3, "h35": 5}
 
 
 def ic_by_decision(x: pd.Series, y: pd.Series) -> pd.Series:
@@ -57,7 +57,8 @@ def main() -> None:
 
     rows = []
     for h, days in HORIZON_DAYS.items():
-        for target in (f"{h}_score", f"{h}_terminal"):
+        targets = [f"{h}_pct", f"{h}_terminal"] + ([f"{h}_up_pct"] if f"{h}_up_pct" in df else [])
+        for target in targets:
             for col in per_ticker:
                 s = summarise_ic(ic_by_decision(df[col], df[target]), days)
                 rows.append({"horizon": h, "target": target.split("_", 1)[1], "feature": col, **s})
@@ -73,10 +74,10 @@ def main() -> None:
           f"IC {tmax['ic']:.4f}, t {tmax['t']:.2f}")
 
     rng = np.random.default_rng(0)
-    shuffled = df["h7_score"].groupby(level="execution").transform(
+    shuffled = df["h7_pct"].groupby(level="execution").transform(
         lambda s: s.sample(frac=1, random_state=int(rng.integers(1 << 31))).to_numpy())
     canary = [summarise_ic(ic_by_decision(df[c], shuffled), 1)["ic"] for c in per_ticker]
-    print(f"\ncanary (h7 score shuffled within decision): max |IC| over features "
+    print(f"\ncanary (h7 composite shuffled within decision): max |IC| over features "
           f"{np.max(np.abs(canary)):.4f}")
 
     organizer, _ = data.load_organizer_bars()

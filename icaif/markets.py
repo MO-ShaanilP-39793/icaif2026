@@ -50,14 +50,43 @@ def organizer_exec_prices(organizer: pd.DataFrame) -> pd.DataFrame:
     return pd.DataFrame(rows, index=pd.DatetimeIndex(idx, name="execution"))
 
 
+def public_exec_opens(bars_60m: pd.DataFrame) -> pd.DataFrame:
+    """Each round's exact fill from public 60m bars, with holes left as NaN.
+
+    Unlike `sim.market_from_public_60m`, nothing stands in for a missing bar. A stand-in
+    (the last close) is a zero return followed by a catch-up move, which is harmless
+    for valuing a ledger but writes a fake path into any label that spans it.
+    """
+    opens = bars_60m.pivot(index="start", columns="ticker", values="open").sort_index()
+    days = sorted({ts.date() for ts in opens.index})
+    exec_ts = pd.DatetimeIndex([r["execution"] for d in days for r in calendar.rounds_for(d)],
+                               name="execution")
+    out = opens.reindex(exec_ts)
+    everyone_seen = out.notna().cummax().all(axis=1)
+    return out[everyone_seen.to_numpy()]
+
+
+def merge_fills(exact: pd.DataFrame, guessed: pd.DataFrame) -> pd.DataFrame:
+    """Exact fills where they exist, the organizer-grid guess only for their holes.
+
+    Never forward-filled: a round with neither stays NaN, so every label whose path
+    crosses it is dropped rather than computed on a price that never traded.
+    """
+    exact = exact.reindex(columns=guessed.columns)
+    before = guessed[guessed.index < exact.index.min()]
+    during = exact.combine_first(guessed.reindex(exact.index))
+    return pd.concat([before, during]).sort_index()
+
+
 def label_exec_prices() -> pd.DataFrame:
-    """Fill prices for labels: organizer guesses through 2025, exact public opens after."""
+    """Fill prices for labels: exact public opens from Nov 2023, organizer guesses before.
+
+    The exact span is the one the scorekeeper ranks strategies over, so its labels carry
+    no fill-guess error (median 11 bps otherwise). Half-days, where Yahoo has no 12:30
+    bar, borrow the organizer guess for that one round.
+    """
     organizer, _ = data.load_organizer_bars()
-    guessed = organizer_exec_prices(organizer)
-    exact = sim.market_from_public_60m(latest_public("60m"), organizer).exec_prices
-    joined_at = organizer["end"].max()
-    out = pd.concat([guessed, exact[exact.index > joined_at]]).sort_index()
-    return out[~out.index.duplicated(keep="first")]
+    return merge_fills(public_exec_opens(latest_public("60m")), organizer_exec_prices(organizer))
 
 
 def research_market() -> sim.Market:

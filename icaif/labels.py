@@ -1,4 +1,14 @@
-"""Labels: alphabt-features' composite path score, on a horizon of rounds, not a quarter.
+"""Labels: two ranking targets on a horizon of rounds, not a quarter.
+
+**Composite** (every horizon): alphabt-features' path score, below.
+**Upside on fills** (3 and 5 days): alphaBT's Target 2, rescaled. The mean of the top-k
+fills on the path, against entry. Target 1 (the same on bar highs) is left out on
+purpose: that upside is only capturable with a resting limit order, and here the only
+prices we can trade at are round opens.
+
+Each target comes in two forms. `_pct` is the cross-sectional percentile in [0, 1], the
+regression target: bounded, so no single outlier dominates, and it keeps the ordering
+a binary cut discards. `_label` is 1 for the top 40% (alphaBT's cut), run as an ablation.
 
 For a decision executing at round i and a horizon of h rounds, the path is the fill
 price at rounds i+1 .. i+h. We sample only fills, not every bar, because a strategy can
@@ -9,8 +19,8 @@ only trade at a round, so a peak between rounds cannot be captured. Components, 
 - terminal       = return from entry to round i+h                            weight 0.3
 - path_sharpe    = (mean of the top-k path prices / entry - 1) / step vol    weight 0.3
 
-Each component is ranked across the 30 names at the decision, the weighted ranks are
-summed, and the top 30% is label 1.
+Each component is ranked across the 30 names at the decision and the weighted ranks are
+summed into the composite.
 
 Two constants are rescaled from the quarterly original, and both choices are
 deliberate. The quarterly `+0.01` drawdown floor is small beside a quarter's ~10% moves
@@ -18,17 +28,19 @@ but larger than a typical 1-day move, so left alone it flattens every short-hori
 reward_to_risk towards upside / 1%. It scales by sqrt(horizon / 63 sessions). The top-5
 of ~63 closes becomes the top 8% of the path, at least 1.
 
-Entry is the round's own fill: the organizer-grid guess before 2026 (median error 11 bp,
-small beside a 1-3 day move) and the exact public open after.
+Entry is the round's own fill: the organizer-grid guess before Nov 2023 (median error
+11 bp, small beside a multi-day move) and the exact public open after
+(`markets.label_exec_prices`).
 """
 
 import numpy as np
 import pandas as pd
 from numpy.lib.stride_tricks import sliding_window_view
 
-HORIZONS = {"h7": 7, "h21": 21}
+HORIZONS = {"h7": 7, "h21": 21, "h35": 35}
+UPSIDE_HORIZONS = ("h21", "h35")
 WEIGHTS = {"reward_to_risk": 0.4, "terminal": 0.3, "path_sharpe": 0.3}
-TOP_FRAC = 0.30
+TOP_FRAC = 0.40
 QUARTER_SESSIONS = 63
 ROUNDS_PER_SESSION = 7
 
@@ -58,18 +70,41 @@ def components(exec_prices: pd.DataFrame, h: int) -> dict[str, pd.DataFrame]:
             "reward_to_risk": upside / (drawdown + _floor(h)),
             "terminal": rel[:, :, -1] - 1,
             "path_sharpe": top_k / (step.std(axis=2) + 1e-10),
+            "upside": top_k,
         }
     idx = exec_prices.sort_index().index[:n]
     return {name: pd.DataFrame(v, index=idx, columns=exec_prices.columns)
             for name, v in out.items()}
 
 
+def unit_rank(panel: pd.DataFrame) -> pd.DataFrame:
+    """Cross-sectional percentile scaled to exactly [0, 1] (worst 0, best 1)."""
+    r = panel.rank(axis=1)
+    n = panel.notna().sum(axis=1)
+    return r.sub(1).div((n - 1).where(n > 1), axis=0)
+
+
+def top_label(score: pd.DataFrame) -> pd.DataFrame:
+    """1 for the top 40% at each decision, exactly round(n x 0.4) names.
+
+    Ties at the cut are broken by column order (tickers sorted). With average ranks, a
+    tie straddling the cut labels one name too many, and the base rate drifts with how
+    often scores tie.
+    """
+    n = score.notna().sum(axis=1)
+    k = (n * TOP_FRAC).round()
+    return (score.rank(axis=1, method="first", ascending=False)
+            .le(k, axis=0)).astype(float).where(score.notna())
+
+
 def build(exec_prices: pd.DataFrame) -> pd.DataFrame:
     """Labels for every horizon: index (execution, ticker).
 
-    Columns per horizon: `<h>_score` (composite rank score), `<h>_label` (top 30% = 1),
-    `<h>_end` (the round the label's path ends at, for purging folds). A ticker with any
-    missing price on the path gets no label, rather than a label computed on a hole.
+    Columns per horizon: `<h>_pct` and `<h>_label` (composite), `<h>_terminal` (plain
+    forward return, a reference), `<h>_end` (the round the path ends at, for purging
+    folds); for 3 and 5 days also `<h>_up_pct` and `<h>_up_label` (upside on fills).
+    A ticker with any missing price on the path gets no label, rather than a label
+    computed on a hole.
     """
     ordered = exec_prices.sort_index()
     frames = []
@@ -80,19 +115,16 @@ def build(exec_prices: pd.DataFrame) -> pd.DataFrame:
                           ).any(axis=2)
         valid = pd.DataFrame(valid, index=idx, columns=ordered.columns)
         score = sum(w * comps[c].where(valid).rank(axis=1, pct=True) for c, w in WEIGHTS.items())
-        # Ties at the cut are broken by column order (tickers sorted), so each decision
-        # labels exactly round(30 x 0.3) = 9 names. With average ranks, a tie straddling
-        # the cut labels 10, and the base rate drifts with how often scores tie.
-        n = score.notna().sum(axis=1)
-        k = (n * TOP_FRAC).round()
-        label = (score.rank(axis=1, method="first", ascending=False)
-                 .le(k, axis=0)).astype(float).where(score.notna())
-        end = pd.Series(ordered.index[h:h + len(idx)], index=idx)
-        f = pd.concat({f"{name}_score": score.stack(future_stack=True),
-                       f"{name}_label": label.stack(future_stack=True),
-                       f"{name}_terminal": comps["terminal"].where(valid).stack(future_stack=True)},
-                      axis=1)
+        cols = {f"{name}_pct": unit_rank(score),
+                f"{name}_label": top_label(score),
+                f"{name}_terminal": comps["terminal"].where(valid)}
+        if name in UPSIDE_HORIZONS:
+            up = comps["upside"].where(valid)
+            cols[f"{name}_up_pct"] = unit_rank(up)
+            cols[f"{name}_up_label"] = top_label(up)
+        f = pd.concat({c: v.stack(future_stack=True) for c, v in cols.items()}, axis=1)
         f.index.names = ["execution", "ticker"]
+        end = pd.Series(ordered.index[h:h + len(idx)], index=idx)
         f[f"{name}_end"] = f.index.get_level_values("execution").map(end)
         frames.append(f)
     return pd.concat(frames, axis=1).sort_index()

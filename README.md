@@ -92,8 +92,18 @@ sector-relative; vol 5d/20d, vol ratio, Parkinson, prior gap, overnight variance
 share; volume vs 20d and vs the same clock time; distance from the 20d high/low and
 the 5d mean in σ). They are cross-sectionally ranked to [−0.5, 0.5] and joined with 7
 raw `ctx_*` market features. All are defined in sessions or clock time, because the
-information grid changes on 2026-01-01. `labels.build`: alphabt-features' composite
-(reward-to-risk 0.4, terminal 0.3, path Sharpe 0.3) over 7 and 21 rounds, top 30%.
+information grid changes on 2026-01-01. `labels.build` builds two targets:
+- alphabt-features' composite (reward-to-risk 0.4, terminal 0.3, path Sharpe 0.3), over 7, 21 and 35 rounds;
+- alphaBT's Target 2 rescaled ("upside on fills": the mean of the top-k fills against entry), over 21 and 35 rounds.
+
+Each comes as a [0, 1] percentile, the regression target, and as a top-40% binary for
+ablation. Label fills are exact Yahoo opens from Nov 2023, with nothing standing in for a
+missing bar.
+
+**The upside target is mostly a volatility bet.** Trailing volatility ranks it with IC
+0.13–0.18 (t 15), ten times any other feature. Upside-only targets reward names that
+move, whichever way. That is why alphaBT divides the probability by trailing
+volatility, and why that division happens after the model rather than inside it.
 
 Univariate IC, rounds 1 and 4, 2021–2026 (label-shuffle canary: max |IC| 0.004):
 
