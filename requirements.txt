@@ -7,3 +7,4 @@ pyarrow==25.0.1
 yfinance==1.7.0
 httpx==0.28.1
 pytest
+truststore==0.10.4
