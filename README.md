@@ -168,11 +168,14 @@ IC against the 5-day composite (label shuffled within each day: max |IC| 0.007):
 | vol_20d | +0.004 | −0.018 | −0.021 | +0.023 |
 | e_last_reaction (post-earnings drift) | +0.018 | +0.019 | −0.004 | 0.000 |
 
-- **Earnings inside the label window is the strongest single effect.** An upcoming
-  release adds a jump to the path, which the drawdown-aware composite penalises and
-  the upside target rewards (IC −0.066 there). It depends on release dates being
-  announced ahead of time: the feature only looks 10 sessions forward, and live it
-  needs an earnings calendar, not EDGAR.
+- **The earnings row is measured on a subset, so its size is overstated.**
+  `e_sessions_to_next` is NaN unless a release is within 10 sessions, so its IC counts
+  only the ~5 names a day with one coming. Among those, a nearer release scores worse
+  on the drawdown-aware composite and better on upside (IC −0.066 there): the release
+  adds a jump to the path. Across the full cross-section, with "no release" treated as
+  a value, its IC is about 0 (tools/intraday_diagnosis.py). It is a risk flag, not a
+  ranking signal. Live, it needs an earnings calendar, since EDGAR only records
+  releases after they happen.
 - **Volatility changes sign by era.** Low volatility won in 2011–22 and high volatility
   since 2023. A model trained on all eras will average that away, which is one more
   reason the training start year is a tested setting.
