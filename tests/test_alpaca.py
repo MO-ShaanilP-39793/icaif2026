@@ -1,6 +1,9 @@
-import pandas as pd
+import glob
 
-from icaif import alpaca, calendar
+import pandas as pd
+import pytest
+
+from icaif import alpaca, calendar, data
 
 
 def _bars_30m(day: str, starts: list[str]) -> pd.DataFrame:
@@ -48,3 +51,20 @@ def test_a_half_day_ends_with_a_half_hour_bar_at_the_early_close():
     out = alpaca.to_60m(_bars_30m(str(day), starts))
     assert out.iloc[-1]["start"].strftime("%H:%M") == "12:30"
     assert out.iloc[-1]["end"].strftime("%H:%M") == "13:00"
+
+
+SNAPSHOTS = sorted(glob.glob(str(data.ROOT / "data" / "public" / "alpaca_30m_2*.parquet")))
+
+
+@pytest.mark.skipif(not SNAPSHOTS, reason="no alpaca_30m snapshot")
+def test_the_calendar_knows_every_half_day_in_the_data_and_no_others():
+    """A half-day missing from EARLY_CLOSES reads as a full session: rounds after 13:00
+    fill on thin after-close prints. It happened for 2016-2020 until this test.
+    After 13:30, a half-day trades ~0% of its volume; an ordinary day trades ~30%."""
+    raw = pd.read_parquet(SNAPSHOTS[-1], columns=["start", "volume"])
+    day = raw["start"].dt.date
+    late = raw["start"].dt.hour * 60 + raw["start"].dt.minute >= 13 * 60 + 30
+    share = raw[late].groupby(day[late])["volume"].sum() / raw.groupby(day)["volume"].sum()
+    in_data = set(share.index)
+    looks_half = {d for d, s in share.items() if s < 0.05} | (in_data - set(share.dropna().index))
+    assert looks_half == {d for d in calendar.EARLY_CLOSES if d in in_data}

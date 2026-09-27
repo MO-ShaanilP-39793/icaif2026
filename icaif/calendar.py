@@ -23,6 +23,22 @@ EARLY_CLOSE = time(13, 0)
 EARLY_CLOSES = frozenset(
     date.fromisoformat(d)
     for d in (
+        # 2016-2020 were added when Alpaca extended history to 2016. Without them the
+        # half-days read as full sessions: rounds after 13:00 scored on thin after-close
+        # prints, which is the extended-hours trap the organizer panel had. Confirmed in
+        # the data, not just the NYSE calendar: volume from 13:30 on is ~0 on exactly these
+        # days (tests/test_alpaca.py).
+        "2016-11-25",
+        "2017-07-03",
+        "2017-11-24",
+        "2018-07-03",
+        "2018-11-23",
+        "2018-12-24",
+        "2019-07-03",
+        "2019-11-29",
+        "2019-12-24",
+        "2020-11-27",
+        "2020-12-24",
         "2021-11-26",
         "2022-11-25",
         "2023-07-03",

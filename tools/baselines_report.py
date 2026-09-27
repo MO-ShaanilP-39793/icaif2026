@@ -1,6 +1,8 @@
 """Rank the baseline field in every non-overlapping 15-day window.
 
-    .venv/bin/python tools/baselines_report.py [--stride 15]
+    .venv/bin/python tools/baselines_report.py [--stride 15] [--fills alpaca|yahoo]
+
+Fills default to Alpaca's :30 opens from 2016 (markets.research_market).
 
 Writes reports/baselines_summary.csv (per strategy) and reports/baselines_windows.csv
 (per window x strategy), and prints the summary.
@@ -22,12 +24,13 @@ from icaif import baselines, data, markets, windows  # noqa: E402
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--stride", type=int, default=windows.WINDOW_DAYS)
+    ap.add_argument("--fills", choices=["alpaca", "yahoo"], default="alpaca")
     ap.add_argument("--exposure-scan", action="store_true",
                     help="also rank inv_vol_hold at 25/50/75/100%% gross against the field")
     args = ap.parse_args()
 
     t0 = time.time()
-    market = markets.research_market()
+    market = markets.research_market(args.fills)
     starts = windows.window_starts(market, stride=args.stride)
     results = windows.run_field(baselines.FIELD, market, starts)
     summary = windows.summarise(results)

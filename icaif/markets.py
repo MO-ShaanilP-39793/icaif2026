@@ -1,14 +1,10 @@
-"""The research market: fills from public 60m bars, information from the organizer panel.
+"""Where prices come from: fills, labels and what a decision may look at.
 
-The split agreed in the design doc. Execution prices come from Yahoo's 60m bars, which
-sit exactly on the live :30 grid (Nov 2023 on). What a decision may look at is the
-organizer panel while it lasts (spin-off adjusted, through 2025-12-31), then Yahoo's
-60m bars.
-
-The information grid changes at the join, from bars ending on :00 to bars ending on :30.
-Anything that counts bars (a "last 6 closes" signal) means half an hour later after the
-join. That is fine for baselines; a model feature must be defined in clock time, not in
-bars, or its meaning shifts silently on 2026-01-01.
+Alpaca is the organizer's own vendor (reports/alpaca_parity.json: its bars match the
+organizer panel to 0 bps). So from 2016 everything reads Alpaca's bars paired into the
+live :30 grid. Yahoo 60m bars, on the same grid, take over after Alpaca's last fetch
+and are what the live system reads. The organizer panel (:00 grid, 2021-25) is now a
+fallback for holes and a cross-check.
 """
 
 import glob
@@ -85,7 +81,10 @@ def latest_alpaca_60m() -> pd.DataFrame:
     paths = sorted(glob.glob(str(data.ROOT / "data" / "public" / "alpaca_30m_2*.parquet")))
     if not paths:
         raise FileNotFoundError("no alpaca_30m snapshot; run tools/alpaca_report.py")
-    return alpaca.to_60m(pd.read_parquet(paths[-1]))
+    # The session filter runs again on load, not only at fetch: a snapshot saved before
+    # a calendar fix (the 2016-2020 half-days) still holds that day's after-close bars.
+    bars, _ = data.regular_session(pd.read_parquet(paths[-1]))
+    return alpaca.to_60m(bars)
 
 
 def label_exec_prices() -> pd.DataFrame:
@@ -115,11 +114,22 @@ def intraday_info_bars() -> pd.DataFrame:
     return pd.concat([a60, p60[p60["start"] >= joined_at]], ignore_index=True)
 
 
-def research_market() -> sim.Market:
-    organizer, _ = data.load_organizer_bars()
-    p60 = latest_public("60m")
-    joined_at = organizer["end"].max()
-    info = pd.concat([organizer, p60[p60["start"] >= joined_at]], ignore_index=True)
-    market = sim.market_from_public_60m(p60, info)
-    market.issues["info_grid_joined_at"] = str(joined_at)
+def research_market(fills: str = "alpaca") -> sim.Market:
+    """The market strategies are scored on.
+
+    fills="alpaca" (default): execution at Alpaca's :30 opens from 2016, the
+    organizer's own vendor, so every scored fill is the price the competition would
+    most likely pay, over ~4x the windows Yahoo allows. fills="yahoo": Yahoo's :30
+    opens from Nov 2023, the earlier setup, kept for comparison.
+
+    Information bars are `intraday_info_bars()` either way: one :30 grid throughout.
+    """
+    info = intraday_info_bars()
+    if fills == "alpaca":
+        market = sim.market_from_public_60m(latest_alpaca_60m(), info)
+    elif fills == "yahoo":
+        market = sim.market_from_public_60m(latest_public("60m"), info)
+    else:
+        raise ValueError(f"fills must be 'alpaca' or 'yahoo', not {fills!r}")
+    market.issues["fills"] = fills
     return market
