@@ -78,15 +78,41 @@ def merge_fills(exact: pd.DataFrame, guessed: pd.DataFrame) -> pd.DataFrame:
     return pd.concat([before, during]).sort_index()
 
 
-def label_exec_prices() -> pd.DataFrame:
-    """Fill prices for labels: exact public opens from Nov 2023, organizer guesses before.
+def latest_alpaca_60m() -> pd.DataFrame:
+    """Alpaca's 30m bars paired into the live 60m grid (see alpaca.to_60m)."""
+    from icaif import alpaca
 
-    The exact span is the one the scorekeeper ranks strategies over, so its labels carry
-    no fill-guess error (median 11 bps otherwise). Half-days, where Yahoo has no 12:30
-    bar, borrow the organizer guess for that one round.
+    paths = sorted(glob.glob(str(data.ROOT / "data" / "public" / "alpaca_30m_2*.parquet")))
+    if not paths:
+        raise FileNotFoundError("no alpaca_30m snapshot; run tools/alpaca_report.py")
+    return alpaca.to_60m(pd.read_parquet(paths[-1]))
+
+
+def label_exec_prices() -> pd.DataFrame:
+    """Fill prices for labels: exact Alpaca :30 opens from 2016, holes filled from the rest.
+
+    The organizer panel *is* Alpaca's SIP bars on a :00 grid (reports/alpaca_parity.json:
+    0 bps on every open, close, high and low, identical volume). So Alpaca's :30 opens
+    are very likely the prices the competition fills at, and they reach back to 2016.
+    Yahoo's :30 opens (median 0, p99 21 bps from Alpaca) fill Alpaca's holes after Oct
+    2023, then the organizer-grid guess fills what is left. Never a forward fill.
     """
     organizer, _ = data.load_organizer_bars()
-    return merge_fills(public_exec_opens(latest_public("60m")), organizer_exec_prices(organizer))
+    fallback = merge_fills(public_exec_opens(latest_public("60m")), organizer_exec_prices(organizer))
+    return merge_fills(public_exec_opens(latest_alpaca_60m()), fallback)
+
+
+def intraday_info_bars() -> pd.DataFrame:
+    """What intraday decisions may look at: Alpaca's :30 grid from 2016, then Yahoo 60m.
+
+    The live system reads Yahoo 60m bars, which sit on the same :30 grid, so a model
+    trained here sees one grid throughout. The organizer's :00 grid is no longer in the
+    training path, and neither is the grid switch at 2026-01-01.
+    """
+    a60 = latest_alpaca_60m()
+    p60 = latest_public("60m")
+    joined_at = a60["end"].max()
+    return pd.concat([a60, p60[p60["start"] >= joined_at]], ignore_index=True)
 
 
 def research_market() -> sim.Market:

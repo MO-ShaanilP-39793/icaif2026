@@ -2,9 +2,12 @@
 # pandas stays below 2.4 because AutoGluon 1.5 (step 4) pins pandas<2.4.0; resolving that
 # later would mean re-validating every number produced before the switch.
 pandas==2.3.3
-numpy==2.5.3
+numpy==2.3.5
 pyarrow==25.0.1
 yfinance==1.7.0
 httpx==0.28.1
 pytest
 truststore==0.10.4
+# AutoGluon 1.5 pins numpy < 2.4 and pandas < 2.4. Foundation models (TabPFN,
+# TabICL, Mitra) are not in [all]; they come with the GPU pass.
+autogluon.tabular[all]==1.5.0

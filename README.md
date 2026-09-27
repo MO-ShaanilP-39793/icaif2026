@@ -151,8 +151,9 @@ needs `SEC_USER_AGENT="<name> <email>"` in the environment.
 ## Daily-model features (`tools/daily_feature_report.py`)
 
 `daily_features.build` gives one row per (date, name) in the day's universe: 718k rows,
-1999–2026, a median of 104 names a day. It holds 23 per-name features ranked within
-the universe, three raw earnings-timing columns and 13 raw `ctx_*` columns. Every value
+1999–2026, a median of 104 names a day. It holds 20 per-name features ranked within
+the universe, three raw earnings-timing columns, 13 raw `ctx_*` columns and the
+`is_competition` flag: 37 in all. Every value
 is as of the close of d−1, since the decision is before d's open.
 
 IC against the 5-day composite (label shuffled within each day: max |IC| 0.007):
@@ -200,6 +201,21 @@ So a backtest on the organizer grid carries fill noise the size of the 10 bp cos
 every round-2–7 trade (unbiased, mean 0.3 bps, but not small). And the 09:30 open is
 vendor-dependent: which print the organizers fill round 1 at is unknown until
 Validation receipts show it.
+
+## Alpaca is the organizer's vendor (`tools/alpaca_report.py`)
+
+Alpaca's free SIP 30m bars, paired into the live 60m grid (`alpaca.to_60m`), match the
+organizer panel **exactly**: 0 bps on every 09:30 open, close, high and low over 37.6k
+ticker-days, and identical volume. The organizers built their panel from Alpaca. So
+Alpaca's :30 opens, 2016 on, are the best estimate of the competition's fill prices,
+including the round-1 09:30 open that differs by vendor (Yahoo vs Alpaca :30 opens:
+median 0, p95 2, p99 21 bps).
+
+Label fills and the intraday model's information bars now come from Alpaca from 2016
+(`markets.label_exec_prices`, `markets.intraday_info_bars`), with Yahoo and then the
+organizer guess filling holes. That gives seven training years before the first test
+fold instead of two, all on the live grid. The simulator still fills on Yahoo from
+Nov 2023. Moving it to Alpaca would extend scoring back to 2016.
 
 ## Setup
 

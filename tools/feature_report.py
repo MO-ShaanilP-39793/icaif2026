@@ -48,8 +48,7 @@ def summarise_ic(ic: pd.Series, horizon_days: int) -> dict:
 
 
 def main() -> None:
-    market = markets.research_market()
-    f = features.build(market.info_bars, events=earnings.quarterly(external.load("earnings")),
+    f = features.build(markets.intraday_info_bars(), events=earnings.quarterly(external.load("earnings")),
                        ctx_daily=external.load("yahoo_daily_context"))
     lab = labels.build(markets.label_exec_prices())
     df = f.join(lab, how="inner")
@@ -68,7 +67,9 @@ def main() -> None:
     table.to_csv(out / "feature_ic.csv", index=False)
     wide = table.pivot_table(index="feature", columns=["horizon", "target"], values="ic")
     wide["abs_max"] = wide.abs().max(axis=1)
-    print("Univariate IC (per-decision rank corr, daily mean), rounds 1 and 4, 2021-2026")
+    span = df.index.get_level_values("execution")
+    print(f"Univariate IC (per-decision rank corr, daily mean), rounds 1 and 4, "
+          f"{span.min().date()}..{span.max().date()}")
     print(wide.sort_values("abs_max", ascending=False).drop(columns="abs_max").round(4).to_string())
     tmax = table.loc[table["t"].abs().idxmax()]
     print(f"\nlargest |t|: {tmax['feature']} vs {tmax['horizon']} {tmax['target']}: "
