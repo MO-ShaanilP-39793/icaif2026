@@ -76,6 +76,10 @@ def _as_of_close(p: dict[str, pd.DataFrame]) -> dict[str, pd.DataFrame]:
 def context(ctx_daily: pd.DataFrame) -> pd.DataFrame:
     """Market context known at each close (date index, not yet shifted)."""
     w = ctx_daily.pivot_table(index="date", columns="ticker", values="close").sort_index()
+    # The equity session calendar is SPY's. Yahoo's ^VIX prints on some exchange holidays
+    # (Memorial Day and Labor Day 2026) when SPY doesn't, and a union of dates puts a NaN
+    # SPY row there: every 20-session SPY return and vol after it is NaN for a month.
+    w = w[w["SPY"].notna()]
     spy = np.log(w["SPY"]).diff()
     sectors = [s for s in SECTOR_ETFS if s in w]
     sec5 = w[sectors].pct_change(5, fill_method=None)

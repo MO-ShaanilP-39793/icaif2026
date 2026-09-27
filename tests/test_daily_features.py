@@ -116,3 +116,16 @@ def test_a_release_after_the_deadline_is_not_yet_in_the_past():
     ev = _events("2024-07-11 16:30", "2024-08-05 09:20")
     got = earnings.proximity(ev, _decisions(["2024-08-05"]), SESSIONS)
     assert got["since"].iloc[0] == 16 and got["to_next"].iloc[0] == 0
+
+
+def test_a_holiday_print_in_one_context_series_does_not_blank_spy_features():
+    """Yahoo's ^VIX has bars on Memorial Day and Labor Day 2026 when SPY doesn't. On a
+    union of dates that NaN SPY row blanked ctx_spy_ret_20d and ctx_spy_vol_20d for 20
+    sessions, which the model never saw in training."""
+    ctx = _walk(CTX, seed=2)
+    holiday = pd.Timestamp(sorted(ctx["date"].unique())[200])
+    ctx = ctx[~((ctx["ticker"] != "^VIX") & (ctx["date"] == holiday))]  # only VIX prints
+    c = daily_features.context(ctx)
+    assert holiday not in c.index
+    after = c.loc[c.index > holiday, "ctx_spy_vol_20d"].iloc[:25]
+    assert after.notna().all()
