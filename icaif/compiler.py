@@ -14,19 +14,34 @@ Rules, in the order they apply:
 - **Exits** fire in any round: a held name on `avoid`, and (if `stop_sigma` is set) a
   held name whose price has fallen more than `stop_sigma` daily sigmas below the
   day's round-1 fill. An exit always trades, whatever the band.
-- **Selection** happens only in `rebalance_rounds`. The selection score is the
+- **Selection** happens only in `rebalance_rounds`, and only on a rebalance day: the
+  first session the strategy sees, then every `rebalance_every`-th session after the
+  last one. Sessions are counted from the strategy's own calls, not the calendar, so
+  a holiday never moves the cadence. The selection score is the
   score's percentile among selectable names divided by vol**gamma, the division
   alphaBT makes after the model because upside targets are largely a volatility bet.
   A held name stays while its selection rank is within top_k + buffer; the rest of
   the top_k slots go to the best new names. Frozen names occupy slots. Other rounds
   only hold or exit, so an hourly re-rank never churns the book.
-- **Sizing**: equal or inverse-vol across the book, scaled to `exposure` less the
-  frozen weight, capped at 0.30 with the excess spread to uncapped names and, when
+- **Tilt mode** (`weighting="tilt"`) starts from the baseline that wins, not from a
+  top-k book: every selectable name at inverse-vol weight, multiplied by
+  max(0, 1 + tilt x (2 pct - 1)), pct the selection score's unit rank (worst 0, best
+  1). tilt=0 is the plain inverse-vol hold; top_k and buffer are ignored.
+- **Sizing**: equal, inverse-vol or tilted across the book, scaled to `exposure` less
+  the frozen weight, capped at 0.30 with the excess spread to uncapped names and, when
   none is left, held as cash. Never over 0.30, never levered.
 - **Band**: a name staying in the book is not resized by less than `band`. Turnover
   is one of the four ranked metrics, so a 1% trim that buys nothing still costs a
   rank. Entries and exits ignore the band: a sub-band exit left undone is a stray
   position the selection no longer owns and nothing ever cleans up.
+- **Gross at a rebalance** lands on `exposure`, band-kept names included: the names
+  that trade absorb the kept names' drift. Left alone, every kept name that had
+  fallen stays short of its target and the book shrinks a little at each
+  rebalance (0.75 to 0.70 in three days, measured), a smaller book than the lever
+  says. If absorbing it would move a traded name more than a band off its own target,
+  the kept name furthest from target is released into the trade, and so on. When
+  every name is inside the band and gross is within one band of exposure, nothing
+  trades. Between rebalances gross drifts with prices, as any hold's does.
 - `weights.safe` last, so a float such as 0.1 + 0.2 never reaches the backend's
   Decimal check.
 """
@@ -45,7 +60,7 @@ from icaif import weights as W
 PREDS = data.ROOT / "output" / "preds" / "daily_d5_pct.parquet"
 # A weight at or below one grid step is the residue of flooring, not a position.
 HELD = W.GRID
-WEIGHTINGS = ("equal", "inverse_vol")
+WEIGHTINGS = ("equal", "inverse_vol", "tilt")
 
 
 @dataclass(frozen=True)
@@ -63,6 +78,8 @@ class Levers:
     rebalance_rounds: tuple = (1,)
     stop_sigma: Optional[float] = None
     avoid: frozenset = frozenset()
+    rebalance_every: int = 1
+    tilt: float = 0.0
 
     def __post_init__(self):
         object.__setattr__(self, "rebalance_rounds", tuple(sorted(set(self.rebalance_rounds))))
@@ -84,6 +101,10 @@ class Levers:
             problems.append(f"rebalance_rounds {self.rebalance_rounds} not all in 1-7")
         if self.stop_sigma is not None and not self.stop_sigma > 0:
             problems.append(f"stop_sigma {self.stop_sigma} must be positive or None")
+        if int(self.rebalance_every) != self.rebalance_every or self.rebalance_every < 1:
+            problems.append(f"rebalance_every {self.rebalance_every} is not a positive integer")
+        if not (np.isfinite(self.tilt) and self.tilt >= 0):
+            problems.append(f"tilt {self.tilt} must be finite and >= 0")
         if problems:
             raise ValueError("; ".join(problems))
 
@@ -135,14 +156,47 @@ def stop_exits(vol: pd.Series, held: pd.Series, stop_sigma: Optional[float],
     return held & (move < -stop_sigma * vol)
 
 
+def _size(book: list, raw: np.ndarray, cur: pd.Series, stay: set, budget: float,
+           band: float) -> pd.Series:
+    """Targets over `book` totalling `budget`, band-kept names left at their current weight.
+
+    The traded names absorb whatever the kept names' drift leaves over. If that would
+    push a traded name more than `band` off its own ideal (or the kept names alone
+    exceed the budget), the kept name furthest from its ideal is released into the
+    trade and the split is redone. So the book's gross is the lever, not the lever
+    minus every kept name's shortfall.
+    """
+    ideal = pd.Series(_water_fill(raw, budget, W.CAP), index=book, dtype=float)
+    raws = pd.Series(raw, index=book, dtype=float)
+    dev = (ideal - cur.reindex(book)).abs()
+    kept = [t for t in dev.sort_values(ascending=True, kind="stable").index
+            if t in stay and dev[t] < band]
+    while kept:
+        free = [t for t in book if t not in kept]
+        rest = budget - float(cur[kept].sum())
+        if not free:
+            if abs(rest) < band:
+                return cur[book].astype(float)  # all inside the band, gross within one band
+        elif rest >= 0:
+            t_free = pd.Series(_water_fill(raws[free].to_numpy(), rest, W.CAP), index=free)
+            if ((t_free - ideal[free]).abs() < band).all() and abs(t_free.sum() - rest) <= HELD:
+                return pd.concat([cur[kept].astype(float), t_free]).reindex(book)
+        kept.pop()  # release the kept name furthest from its ideal
+    return ideal
+
+
 def plan(scores: pd.Series, vol: pd.Series, current_weights, levers: Levers, round_no: int,
-         entry_prices=None, last_prices=None) -> tuple[pd.Series, pd.Index]:
+         entry_prices=None, last_prices=None, rebalance: Optional[bool] = None
+         ) -> tuple[pd.Series, pd.Index]:
     """Unrounded target weights, and the names whose weight the round actually changes.
 
     A name the compiler leaves alone keeps *exactly* its current weight, so "changed"
     is an exact test. The strategy uses it to skip the round entirely (see
     `CompiledStrategy`), which matters because a weight is re-applied at the execution
     price: a submitted "hold" at last close's weights is a small rebalance of every name.
+
+    `rebalance` says whether this round may re-select; None means "if `round_no` is in
+    `rebalance_rounds`". The strategy passes False on the days between rebalances.
     """
     tickers = scores.index
     s = scores.astype(float)
@@ -158,7 +212,9 @@ def plan(scores: pd.Series, vol: pd.Series, current_weights, levers: Levers, rou
     target = cur.copy()
     target[exits] = 0.0
 
-    if round_no in levers.rebalance_rounds:
+    if rebalance is None:
+        rebalance = round_no in levers.rebalance_rounds
+    if rebalance:
         eligible = selectable & ~stopped
         pct = s.where(eligible).rank(pct=True)
         sel = (pct / v.pow(levers.gamma)).where(eligible)
@@ -166,30 +222,37 @@ def plan(scores: pd.Series, vol: pd.Series, current_weights, levers: Levers, rou
         order = sel.dropna().sort_values(ascending=False, kind="stable").index
         rank = pd.Series(np.arange(1, len(order) + 1), index=order).reindex(tickers)
 
-        slots = max(0, levers.top_k - int(frozen.sum()))
-        keep = [t for t in order if held[t] and rank[t] <= levers.top_k + levers.buffer][:slots]
-        new = [t for t in order if t not in keep][:slots - len(keep)]
-        book = keep + new
+        if levers.weighting == "tilt":
+            n = len(order)
+            unit = (rank[order] - 1) / (n - 1) if n > 1 else pd.Series(0.5, index=order)
+            mult = (1 + levers.tilt * (2 * (1 - unit) - 1)).clip(lower=0.0)
+            book = [t for t in order if mult[t] > 0]
+            raw = (mult[book] / v[book]).to_numpy(dtype=float)
+        else:
+            slots = max(0, levers.top_k - int(frozen.sum()))
+            keep = [t for t in order
+                    if held[t] and rank[t] <= levers.top_k + levers.buffer][:slots]
+            new = [t for t in order if t not in keep][:slots - len(keep)]
+            book = keep + new
+            raw = (np.ones(len(book)) if levers.weighting == "equal"
+                   else 1.0 / v[book].to_numpy(dtype=float))
 
         budget = max(0.0, levers.exposure - float(cur[frozen].sum()))
-        raw = (np.ones(len(book)) if levers.weighting == "equal"
-               else 1.0 / v[book].to_numpy(dtype=float))
-        sized = pd.Series(_water_fill(raw, budget, W.CAP), index=book, dtype=float)
-
+        stay = {t for t in book if held[t]}
         target[~frozen] = 0.0
-        target[book] = sized
-        stay = pd.Series(tickers.isin(keep), index=tickers)
-        small = stay & ((target - cur).abs() < levers.band)
-        target[small] = cur[small]
+        if book:
+            target[book] = _size(book, raw, cur, stay, budget, levers.band)
 
     changed = tickers[(target - cur).abs() > HELD]
     return target, changed
 
 
 def compile_weights(scores: pd.Series, vol: pd.Series, current_weights, levers: Levers,
-                    round_no: int, entry_prices=None, last_prices=None) -> dict[str, float]:
+                    round_no: int, entry_prices=None, last_prices=None,
+                    rebalance: Optional[bool] = None) -> dict[str, float]:
     """One round's weights for every ticker in `scores`, legal by the backend's check."""
-    target, _ = plan(scores, vol, current_weights, levers, round_no, entry_prices, last_prices)
+    target, _ = plan(scores, vol, current_weights, levers, round_no, entry_prices,
+                     last_prices, rebalance)
     return W.safe(target.to_dict(), list(scores.index))
 
 
@@ -261,14 +324,31 @@ class CompiledStrategy:
     Current weights are valued at the last bar close the deadline can see. Returns None
     (hold: no trade, no fee) when the compiler changes nothing, because re-submitting
     the current weights re-sizes every name to the execution price and pays for it.
+
+    The rebalance cadence is counted in sessions this strategy has been called on. A
+    calendar count (business days since the last rebalance) would slide the cadence at
+    every holiday, and a 5-session hold would quietly become 4 in any week with one.
     """
 
     def __init__(self, scores: DailyPanel, vol: DailyPanel, levers: Levers = Levers()):
         self.scores, self.vol, self.levers = scores, vol, levers
+        self._day = None
+        self._session = -1
+        self._last_rebalance = None  # session index of the last rebalance; None = never
+        self._due = False
+
+    def _new_session(self, day) -> None:
+        self._day = day
+        self._session += 1
+        self._due = (self._last_rebalance is None
+                     or self._session - self._last_rebalance >= self.levers.rebalance_every)
 
     def __call__(self, ctx):
         lv = self.levers
-        if (ctx.round not in lv.rebalance_rounds and lv.stop_sigma is None
+        if ctx.day != self._day:
+            self._new_session(ctx.day)
+        rebalance = self._due and ctx.round in lv.rebalance_rounds
+        if (not rebalance and lv.stop_sigma is None
                 and not any(ctx.shares.get(t, 0) > 0 for t in lv.avoid)):
             # The compiler could only hold here (no selection, no stop, no avoided
             # holding), so skip its work: ~6 of every 7 rounds in a backtest.
@@ -289,9 +369,13 @@ class CompiledStrategy:
             current = pd.Series(0.0, index=tickers)
 
         entry = None
-        if self.levers.stop_sigma is not None and ctx.round not in self.levers.rebalance_rounds:
+        if lv.stop_sigma is not None and not rebalance:
             entry = _day_open(ctx)
-        target, changed = plan(s, v, current, self.levers, ctx.round, entry, last_px)
+        target, changed = plan(s, v, current, lv, ctx.round, entry, last_px, rebalance)
+        if rebalance and (s.notna() & v.notna()).any():
+            # Counted even when the band leaves nothing to trade: the book was reviewed.
+            # A day with no scores at all is not a review, so the next session retries.
+            self._last_rebalance = self._session
         if len(changed) == 0:
             return None
         return W.safe(target.to_dict(), tickers)

@@ -1,3 +1,5 @@
+from datetime import date
+
 import numpy as np
 import pandas as pd
 import pytest
@@ -77,7 +79,50 @@ def test_the_band_suppresses_resizes_smaller_than_itself():
     assert target[TICKERS[0]] == 0.26
     moved = {TICKERS[0]: 0.28, TICKERS[1]: 0.24, TICKERS[2]: 0.255}
     target, changed = plan(SCORES, FLAT_VOL, moved, lv, 1)
-    assert list(changed) == [TICKERS[0]] and target[TICKERS[0]] == pytest.approx(0.25)
+    # The traded name also absorbs the kept names' drift, so gross lands on 0.75.
+    assert list(changed) == [TICKERS[0]] and target[TICKERS[0]] == pytest.approx(0.255)
+    assert target.sum() == pytest.approx(0.75)
+
+
+def test_a_rebalance_lands_the_book_on_its_exposure_band_kept_names_included():
+    """With every kept name a little under target, keeping them all at their current
+    weight shrank the book from 0.75 to 0.70 in three days: a smaller bet than the
+    lever says, reported as the lever."""
+    lv = Levers(top_k=10, band=0.02, weighting="equal", exposure=0.75)
+    shrunk = {t: 0.07 for t in TICKERS[:10]}  # target 0.075 each, all inside the band
+    target, changed = plan(SCORES, FLAT_VOL, shrunk, lv, 1)
+    assert target.sum() == pytest.approx(0.75)
+    assert 0 < len(changed) < 10  # the fewest names that absorb it within a band each
+    assert ((target[TICKERS[:10]] - 0.075).abs() < 0.02).all()
+    near = {t: 0.074 for t in TICKERS[:10]}  # gross 0.74: within one band, nothing trades
+    assert len(plan(SCORES, FLAT_VOL, near, lv, 1)[1]) == 0
+
+
+def test_a_rebalance_never_lets_gross_run_over_exposure_through_kept_names():
+    lv = Levers(top_k=3, band=0.02, weighting="equal", exposure=0.75)
+    grown = {TICKERS[0]: 0.268, TICKERS[1]: 0.268, TICKERS[2]: 0.268}  # 0.804
+    target, _ = plan(SCORES, FLAT_VOL, grown, lv, 1)
+    assert target.sum() == pytest.approx(0.75)
+
+
+def test_tilt_zero_is_the_plain_inverse_vol_book_over_every_name():
+    """tilt=0 must reproduce the baseline it starts from, or a sweep over tilt measures
+    the gap between two different books rather than what the scores add."""
+    vol = pd.Series(np.linspace(0.01, 0.04, len(TICKERS)), index=TICKERS)
+    w = compile_weights(SCORES, vol, NONE, Levers(weighting="tilt", tilt=0.0, top_k=3), 1)
+    inv = 1 / vol
+    want = inv / inv.sum() * 0.75
+    assert _book(w) == set(TICKERS)  # top_k is ignored
+    for t in TICKERS:
+        assert w[t] == pytest.approx(want[t], abs=2e-6)
+
+
+def test_tilt_leans_toward_better_scores_and_drops_names_it_zeroes():
+    w = compile_weights(SCORES, FLAT_VOL, NONE, Levers(weighting="tilt", tilt=0.5, gamma=0), 1)
+    assert w[TICKERS[0]] == pytest.approx(3 * w[TICKERS[-1]], rel=1e-4)  # 1.5 vs 0.5
+    w = compile_weights(SCORES, FLAT_VOL, NONE, Levers(weighting="tilt", tilt=1.0, gamma=0), 1)
+    assert w[TICKERS[-1]] == 0.0 and len(_book(w)) == len(TICKERS) - 1
+    assert sum(w.values()) == pytest.approx(0.75, abs=30e-6)  # 29 floors to the 1e-6 grid
 
 
 def test_the_band_never_blocks_an_exit():
@@ -143,7 +188,8 @@ def test_the_stop_fires_only_past_its_threshold():
 def test_an_out_of_range_lever_raises_rather_than_being_clamped():
     """A clamped exposure of 1.2 runs a different book from the one the agent reports."""
     for bad in ({"exposure": 1.2}, {"top_k": 0}, {"weighting": "risk_parity"},
-                {"rebalance_rounds": (0,)}, {"stop_sigma": -1.0}):
+                {"rebalance_rounds": (0,)}, {"stop_sigma": -1.0}, {"rebalance_every": 0},
+                {"tilt": -0.5}):
         with pytest.raises(ValueError):
             Levers(**bad)
 
@@ -241,3 +287,21 @@ def test_ranking_one_candidate_against_the_field_matches_a_full_rerank():
         want = ranking.rank_window(pd.concat([m, cand.to_frame("x").T])).loc["x"]
         for col in want.index:
             assert got[col] == want[col], (w, col)
+
+
+def test_the_rebalance_cadence_counts_sessions_so_a_holiday_does_not_shift_it():
+    """Counted in business days, a 2-session cadence across a holiday rebalances after
+    one session instead of two; every holiday week would trade on a different rhythm."""
+    days = [date(2026, 9, 21), date(2026, 9, 22), date(2026, 9, 24), date(2026, 9, 25),
+            date(2026, 9, 28)]  # 9/23 stands in for a holiday
+    m = _market(days, info_bars=_info_bars(days))
+    # A different top 3 every day, so every rebalance day trades and no other day can.
+    rows = [np.roll(SCORES.values, 3 * i) for i in range(len(days))]
+    scores = compiler.DailyPanel(pd.DataFrame(rows, index=pd.to_datetime(days), columns=TICKERS),
+                                 TICKERS)
+    vol = compiler.DailyPanel(pd.DataFrame([FLAT_VOL] * len(days), index=pd.to_datetime(days)),
+                              TICKERS)
+    lv = Levers(top_k=3, buffer=0, band=0.0, rebalance_every=2)
+    res = sim.run(compiler.compiled(scores, vol, lv)(), m, days[0], len(days))
+    traded = sorted({p["execution"].date() for p in res.periods if p["traded_notional"] > 0})
+    assert traded == [days[0], days[2], days[4]]
