@@ -121,6 +121,33 @@ upside result). Session features agree across the two grids (r ≥ 0.97); same-d
 less so (ret_1s 0.96, volume_today 0.94 at round 4), because a :30-grid bar is 30
 minutes staler at a given deadline.
 
+## Daily data for the broad model (`tools/enrich_data.py`)
+
+Snapshots are dated in `data/external/`. The training universe on each date is the
+top 100 S&P 500 members by trailing dollar volume, plus the 30 competition names
+(`universe.build`, about 104 names a day). Membership is point-in-time, from
+[fja05680/sp500](https://github.com/fja05680/sp500) (MIT). Context series are VIX,
+SPY, 11 sector ETFs and Cboe Treasury yield indices, all from Yahoo, since 1999.
+
+**Survivorship is large before about 2015.** Yahoo keeps only symbols still trading,
+so delisted members have no prices. Share of S&P 500 members priced, by year:
+
+| 1999 | 2005 | 2010 | 2015 | 2020 | 2023 | 2026 |
+| --- | --- | --- | --- | --- | --- | --- |
+| 45% | 53% | 66% | 74% | 87% | 95% | 99% |
+
+The top 100 by dollar volume is likely covered better than the whole index, since
+delistings skew small. But the missing names can't be ranked, so we can't measure
+that. The daily model therefore treats its training start year as a setting to test,
+judged only on 2023+ test years, where coverage is 95% or more. Old data that teaches
+survivor behaviour will show up there as worse test IC.
+
+Also known: GOOG and GOOGL are both in the universe (near-duplicate rows in a
+cross-section), and a reused symbol would carry the later company's prices.
+
+Earnings dates come from EDGAR 8-K item 2.02 acceptance times (`earnings.py`). This
+needs `SEC_USER_AGENT="<name> <email>"` in the environment.
+
 ## Credentials
 
 Registration returns `TEAM_ID` and a **one-time team token that is never reset**.
