@@ -7,6 +7,7 @@ Sharpe says little about a 15-day rank.
 
 from datetime import date
 
+import numpy as np
 import pandas as pd
 
 from icaif import ranking, sim
@@ -65,3 +66,51 @@ def summarise(results: pd.DataFrame) -> pd.DataFrame:
         "invalid_rounds": g["invalid_rounds"].sum(),
     })
     return out.sort_values("mean_overall_score")
+
+
+def rank_against_field(candidate_results: pd.DataFrame, field_results: pd.DataFrame) -> pd.DataFrame:
+    """Rank ONE candidate in each window against a fixed, precomputed field.
+
+    `candidate_results`: one row per window (a `window` column and the four metrics),
+    e.g. `run_field({name: factory}, ...)`. `field_results`: `run_field(FIELD, ...)`.
+    Returns rows shaped like `run_field`'s, so `summarise` reads them.
+
+    The candidate enters each window as the only extra entrant, exactly as
+    `ranking.rank_window` would rank the field plus it, but without re-simulating the
+    field or ranking the candidates of a sweep against each other. That matters: in a
+    joint ranking, near-copies from the same sweep crowd each other's ranks, and the
+    best lever setting would be the one least like its neighbours rather than the one
+    that beats the field. A window absent from the field is dropped, never scored
+    against an empty field (where every candidate would place first).
+    """
+    metrics = list(ranking.METRICS)
+    cand = candidate_results.set_index("window")
+    rows = []
+    for w, f in field_results.groupby("window", sort=True):
+        if w not in cand.index:
+            continue
+        c = cand.loc[w]
+        fm = f[metrics].to_numpy(dtype=float)
+        cm = c[metrics].to_numpy(dtype=float)
+        # Average ranks with one extra entrant: 1 + (field strictly better) + half the
+        # field tied with it. Each field member moves down by the mirror image.
+        cand_rank = np.empty(len(metrics))
+        field_rank = np.empty_like(fm)
+        for j, (m, ascending) in enumerate(ranking.METRICS.items()):
+            better = fm[:, j] < cm[j] if ascending else fm[:, j] > cm[j]
+            equal = fm[:, j] == cm[j]
+            cand_rank[j] = 1 + better.sum() + 0.5 * equal.sum()
+            own = pd.Series(fm[:, j]).rank(ascending=ascending, method="average").to_numpy()
+            field_rank[:, j] = own + (~better & ~equal) + 0.5 * equal
+        overall = cand_rank.mean()
+        field_overall = field_rank.mean(axis=1)
+        key = (overall, -cm[0], -cm[1], cm[2], cm[3])
+        ahead = sum((fo, -r[0], -r[1], r[2], r[3]) < key for fo, r in zip(field_overall, fm))
+        name = c["strategy"] if "strategy" in cand.columns else "candidate"
+        rows.append({"window": w, "strategy": name,
+                     **{k: c[k] for k in cand.columns
+                        if k != "strategy" and not k.startswith("rank_")
+                        and k not in ("overall_score", "position")},
+                     **{f"rank_{m}": r for m, r in zip(metrics, cand_rank)},
+                     "overall_score": overall, "position": 1 + int(ahead)})
+    return pd.DataFrame(rows)
