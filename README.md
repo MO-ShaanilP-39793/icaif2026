@@ -2,8 +2,9 @@
 
 Entry for [Codabench competition 99](https://hackathon2.deepintomlf.ai/competitions/99/):
 hourly long-only target weights for 30 US large caps, $1M, 0.1% cost on traded
-notional, ≤30% per name, ≤100% gross. Lives on branch `icaif2026` beside alphaBT
-for context only — it never merges into `pipeline/dev` and imports nothing from `src/`.
+notional, ≤30% per name, ≤100% gross. Its own private GitHub repo, cloned into an
+alphaBT checkout as `icaif2026/` so alphaBT is at hand for context. It imports nothing
+from `src/`, and alphaBT never tracks it (see Setup), so CodeCommit never sees it.
 
 `starter-kit/` is the organizers' kit vendored verbatim from
 [DeepIntoStreams/2026ICAIF_Trading_Agent_Competition](https://github.com/DeepIntoStreams/2026ICAIF_Trading_Agent_Competition)
@@ -113,10 +114,9 @@ minutes staler at a given deadline.
 ## Credentials
 
 Registration returns `TEAM_ID` and a **one-time team token that is never reset**.
-It lands in `starter-kit/.icaif/credentials.json` (0600). Everything that can hold
-it is gitignored here. Never push this branch to `hf`/`cchf` — both push a public
-HuggingFace mirror. Final reproducibility materials are built from `icaif2026/`
-alone, never the repo.
+It lands in `starter-kit/.icaif/credentials.json` (0600), on the one host that runs
+the submitter; teammates never need it. Everything that can hold it is gitignored
+here. Final reproducibility materials are built from this repo alone, never alphaBT.
 
 ## Public feed vs organizer panel (`reports/data_parity.json`)
 
@@ -138,10 +138,24 @@ Validation receipts show it.
 
 ## Setup
 
+Clone into an existing alphaBT checkout, then hide the folder from alphaBT. The exclude
+line lives in `.git/info/exclude`, which is never committed. Adding `icaif2026/` to
+alphaBT's `.gitignore` instead would put a commit about this work on a branch bound for
+CodeCommit. Without either, one `git add -A` in alphaBT stages this whole repo, and
+`hf`/`cchf` push to a public HuggingFace mirror.
+
+```bash
+cd alphaBT
+git clone https://github.com/MO-ShaanilP-39793/icaif2026.git icaif2026
+echo 'icaif2026/' >> .git/info/exclude
+git status --short          # must not list icaif2026/
+```
+
 Own venv (pandas 2.3, for AutoGluon later): `python3 -m venv .venv &&
 .venv/bin/pip install -r requirements.txt`. Tests: `.venv/bin/python -m pytest -q`.
-Data: `data/hourly_market_data_2021_2026.parquet` (from the Codabench Files tab; not
-committed).
+Data is not committed. `data/hourly_market_data_2021_2026.parquet` comes from the
+Codabench Files tab. The dated Yahoo snapshots in `data/public/` cannot be refetched
+once their window rolls past, so copy them from a teammate rather than refetching.
 
 ```bash
 cd icaif2026/starter-kit
