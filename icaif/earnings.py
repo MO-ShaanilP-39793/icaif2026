@@ -23,6 +23,19 @@ TICKERS_URL = "https://www.sec.gov/files/company_tickers.json"
 SUBMISSIONS_URL = "https://data.sec.gov/submissions/{name}"
 EARNINGS_ITEM = "2.02"
 MARKET_OPEN = pd.Timestamp("09:30").time()
+# A company that re-registers gets a new CIK, and the current ticker map points only at
+# it: history under the old one silently disappears. Found by comparing each name's
+# release count with one a quarter since 2004 (tools/enrich_data.py prints the gaps).
+FORMER_CIKS = {
+    "XOM": (34088,),     # Exxon Mobil Corp, before the 2026 holding company
+    "DIS": (1001039,),   # The Walt Disney Co (now TWDC Enterprises 18), before 2019
+    "GOOGL": (1288776,), # Google Inc., before Alphabet in 2015
+    "GOOG": (1288776,),
+}
+# Broad-universe names with similar gaps (BLK, LIN, AVGO, MDT, ...) are listed by
+# tools/enrich_data.py; their earnings features are NaN before their first recorded
+# release rather than a stale "sessions since" count.
+CLUSTER_DAYS = 30
 
 
 def _client():
@@ -45,11 +58,12 @@ def parse_filings(block: dict) -> pd.DataFrame:
     f = pd.DataFrame({k: block[k] for k in ("form", "items", "acceptanceDateTime")})
     f = f[(f["form"] == "8-K") & f["items"].fillna("").str.split(",").map(
         lambda items: EARNINGS_ITEM in [i.strip() for i in items])]
-    # EDGAR writes Eastern wall-clock time with a misleading "Z" suffix (Apple's
-    # 16:30 ET releases read 16:30:xxZ, not 20:30Z); treating it as UTC would move
-    # every after-close release to before the next open.
-    accepted = pd.to_datetime(f["acceptanceDateTime"].str.rstrip("Z").str.replace(".000", ""))
-    return pd.DataFrame({"accepted": accepted.dt.tz_localize(calendar.TZ)})
+    # The "Z" is real: EDGAR stamps UTC. Apple's 16:30 ET releases read 20:30Z in
+    # summer and 21:30Z in winter. Read as Eastern wall-clock, every after-close
+    # release lands mid-session and maps to the wrong open. (This was first written
+    # the other way round; the timing check in tools/enrich_data.py caught it.)
+    accepted = pd.to_datetime(f["acceptanceDateTime"], utc=True)
+    return pd.DataFrame({"accepted": accepted.dt.tz_convert(calendar.TZ)})
 
 
 def fetch(tickers: list[str], sleep: float = 0.12) -> tuple[pd.DataFrame, list[str]]:
@@ -66,17 +80,35 @@ def fetch(tickers: list[str], sleep: float = 0.12) -> tuple[pd.DataFrame, list[s
             if cik is None:
                 missing.append(t)
                 continue
-            sub = client.get(SUBMISSIONS_URL.format(name=f"CIK{cik:010d}.json")).raise_for_status().json()
-            blocks = [sub["filings"]["recent"]]
-            for extra in sub["filings"].get("files", []):
+            blocks = []
+            for c in (cik, *FORMER_CIKS.get(t.upper(), ())):
+                sub = client.get(SUBMISSIONS_URL.format(name=f"CIK{c:010d}.json")).raise_for_status().json()
+                blocks.append(sub["filings"]["recent"])
+                for extra in sub["filings"].get("files", []):
+                    time.sleep(sleep)
+                    blocks.append(client.get(SUBMISSIONS_URL.format(name=extra["name"]))
+                                  .raise_for_status().json())
                 time.sleep(sleep)
-                blocks.append(client.get(SUBMISSIONS_URL.format(name=extra["name"]))
-                              .raise_for_status().json())
             events = pd.concat([parse_filings(b) for b in blocks], ignore_index=True)
             frames.append(events.assign(ticker=t))
             time.sleep(sleep)  # the SEC allows 10 requests a second
     out = pd.concat(frames, ignore_index=True).drop_duplicates()
     return out[["ticker", "accepted"]].sort_values(["ticker", "accepted"]).reset_index(drop=True), missing
+
+
+def quarterly(events: pd.DataFrame, cluster_days: int = CLUSTER_DAYS) -> pd.DataFrame:
+    """One earnings event per cluster of item-2.02 filings, keeping the last.
+
+    Item 2.02 also carries pre-announcements and interim updates (Tesla's delivery
+    numbers, Chevron's interim updates), a few weeks before the earnings release
+    itself. Kept, "sessions to next earnings" would point at the preview. Filings
+    less than `cluster_days` apart form one cluster, and the last is the release.
+    Duplicates filed under two CIKs on the same day collapse the same way.
+    """
+    e = events.sort_values(["ticker", "accepted"])
+    gap = e.groupby("ticker")["accepted"].diff()
+    cluster = (gap.isna() | (gap >= pd.Timedelta(days=cluster_days))).cumsum()
+    return e.groupby(cluster).tail(1).reset_index(drop=True)
 
 
 def reaction_session(accepted: pd.Series, sessions: pd.DatetimeIndex) -> pd.Series:

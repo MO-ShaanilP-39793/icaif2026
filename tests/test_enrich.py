@@ -55,11 +55,11 @@ def test_class_shares_map_to_yahoo_symbols():
     assert universe.yahoo_symbol("BRK.B") == "BRK-B"
 
 
-def test_edgar_times_are_eastern_wall_clock_despite_the_z_suffix():
-    """Read as UTC, a 16:30 ET release lands at 12:30 ET: before the close, so every
-    after-close release would look like it came out during the session."""
+def test_edgar_times_are_utc_so_an_after_close_release_stays_after_the_close():
+    """Apple's 16:30 ET release is stamped 20:30Z. Read as Eastern wall-clock, a pre-open
+    release stamped 12:00Z would land mid-session and map to the next day's open."""
     block = {"form": ["8-K"], "items": ["2.02,9.01"],
-             "acceptanceDateTime": ["2024-08-01T16:30:40.000Z"]}
+             "acceptanceDateTime": ["2024-08-01T20:30:40.000Z"]}
     ts = earnings.parse_filings(block)["accepted"].iloc[0]
     assert ts == pd.Timestamp("2024-08-01 16:30:40", tz=calendar.TZ)
 
@@ -83,3 +83,12 @@ def test_a_release_is_reflected_at_the_first_open_after_it(accepted, reflected):
                                  if d != pd.Timestamp("2024-07-04")])
     got = earnings.reaction_session(pd.Series([pd.Timestamp(accepted, tz=calendar.TZ)]), sessions)
     assert got.iloc[0] == pd.Timestamp(reflected)
+
+
+def test_a_preannouncement_weeks_before_earnings_is_not_the_earnings_event():
+    """Tesla files delivery numbers under item 2.02 about three weeks before results.
+    Kept as a separate event, "sessions to next earnings" would point at the preview."""
+    ts = pd.to_datetime(["2024-01-02 09:00", "2024-01-24 16:10", "2024-04-02 09:00",
+                         "2024-04-23 16:10"]).tz_localize(calendar.TZ)
+    got = earnings.quarterly(pd.DataFrame({"ticker": "TSLA", "accepted": ts}))
+    assert got["accepted"].tolist() == [ts[1], ts[3]]

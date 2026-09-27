@@ -75,8 +75,9 @@ def main() -> None:
     if args.skip_earnings or not os.environ.get("SEC_USER_AGENT"):
         print("\nearnings skipped: set SEC_USER_AGENT='<name> <email>' to fetch from EDGAR")
     else:
-        ev, missing["earnings"] = earnings.fetch(ever)
-        print(" ->", external.save(ev, "earnings"))
+        raw, missing["earnings"] = earnings.fetch(ever)
+        print(" ->", external.save(raw, "earnings"))
+        ev = earnings.quarterly(raw)
         per = ev.groupby("ticker").size()
         print(f"earnings: {len(ev)} releases for {per.size} of {len(ever)} symbols, "
               f"median {per.median():.0f} each, from {ev['accepted'].min().date()}")
@@ -89,6 +90,14 @@ def main() -> None:
         print("release timing:", share.to_dict())
         if share.get("in session", 0) > 0.3:
             print("WARNING: >30% of releases fall in session; check EDGAR's time zone")
+        # About one release a quarter from a name's first price (or 2004) is expected.
+        # A name far below that has history under a former CIK (earnings.FORMER_CIKS).
+        first = daily.groupby("ticker")["date"].min().clip(lower=pd.Timestamp("2004-09-01"))
+        expected = (daily["date"].max() - first.reindex(per.index)).dt.days / 91.3
+        ratio = (per / expected).round(2)
+        thin = ratio[ratio < 0.8].sort_values()
+        print(f"{len(thin)} symbols with under 80% of expected releases:",
+              thin.head(20).to_dict())
     (out / "enrich_missing.json").write_text(json.dumps(
         {k: {"count": len(v), "symbols": v} for k, v in missing.items()}, indent=1))
     print({k: len(v) for k, v in missing.items()}, "symbols with no data (reports/enrich_missing.json)")
