@@ -45,8 +45,9 @@ def main() -> None:
     if args.reuse:
         b30 = pd.read_parquet(sorted(glob.glob(str(CACHE / "alpaca_30m_*.parquet")))[-1])
     else:
-        b30 = alpaca.fetch_30m(sorted(data.load_universe()))
-        path = CACHE / f"alpaca_30m_{pd.Timestamp.now():%Y-%m-%d}.parquet"
+        stamp = f"{pd.Timestamp.now():%Y-%m-%d}"
+        b30 = alpaca.fetch_30m(sorted(data.load_universe()), CACHE / f"alpaca_30m_parts_{stamp}")
+        path = CACHE / f"alpaca_30m_{stamp}.parquet"
         b30.to_parquet(path, index=False)
         print("->", path)
     first = b30.groupby("ticker")["start"].min()

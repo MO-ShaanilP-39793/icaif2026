@@ -28,7 +28,6 @@ from icaif.data import COLUMNS, ROOT, adjust_spin_offs, regular_session
 BARS_URL = "https://data.alpaca.markets/v2/stocks/bars"
 START = "2016-01-01"
 PAGE = 10000
-PAUSE = 0.35  # free plan: 200 requests a minute
 
 
 def _credentials() -> dict[str, str]:
@@ -46,29 +45,46 @@ def _credentials() -> dict[str, str]:
             "APCA-API-SECRET-KEY": env["ALPACA_API_SECRET_KEY"]}
 
 
-def fetch_30m(symbols: list[str], start: str = START, end: str | None = None) -> pd.DataFrame:
-    """Regular-session 30-minute bars in the canonical frame (source `alpaca_30m`)."""
-    import httpx
+class _RateLimiter:
+    """At most `per_minute` requests across all threads (the free plan allows 200)."""
 
-    end = end or (pd.Timestamp.now(tz="UTC") - pd.Timedelta(days=1)).strftime("%Y-%m-%d")
+    def __init__(self, per_minute: int = 180):
+        import threading
+        self.gap = 60.0 / per_minute
+        self.lock = threading.Lock()
+        self.next = 0.0
+
+    def wait(self) -> None:
+        with self.lock:
+            now = time.monotonic()
+            slot = max(now, self.next)
+            self.next = slot + self.gap
+        time.sleep(max(0.0, slot - now))
+
+
+def _fetch_symbol(client, limiter: _RateLimiter, symbol: str, start: str, end: str) -> pd.DataFrame:
+    """Every 30m bar for one symbol. Pages hold about three weeks each, extended hours
+    included, whatever `limit` says, so ten years is ~180 requests a symbol."""
     rows, token = [], None
-    with httpx.Client(headers=_credentials(), verify=net.ssl_context(), timeout=120) as client:
-        while True:
-            params = {"symbols": ",".join(symbols), "timeframe": "30Min", "start": start,
-                      "end": end, "feed": "sip", "adjustment": "split", "limit": PAGE,
-                      "sort": "asc"}
-            if token:
-                params["page_token"] = token
-            r = client.get(BARS_URL, params=params)
-            r.raise_for_status()
-            j = r.json()
-            for sym, bars in (j.get("bars") or {}).items():
-                rows.extend((sym, b["t"], b["o"], b["h"], b["l"], b["c"], b["v"]) for b in bars)
-            token = j.get("next_page_token")
-            if not token:
-                break
-            time.sleep(PAUSE)
-    raw = pd.DataFrame(rows, columns=["ticker", "t", "open", "high", "low", "close", "volume"])
+    while True:
+        params = {"symbols": symbol, "timeframe": "30Min", "start": start, "end": end,
+                  "feed": "sip", "adjustment": "split", "limit": PAGE, "sort": "asc"}
+        if token:
+            params["page_token"] = token
+        limiter.wait()
+        r = client.get(BARS_URL, params=params)
+        r.raise_for_status()
+        j = r.json()
+        rows.extend((symbol, b["t"], b["o"], b["h"], b["l"], b["c"], b["v"])
+                    for b in (j.get("bars") or {}).get(symbol, []))
+        token = j.get("next_page_token")
+        if not token:
+            break
+    return pd.DataFrame(rows, columns=["ticker", "t", "open", "high", "low", "close", "volume"])
+
+
+def _canonical(raw: pd.DataFrame) -> pd.DataFrame:
+    raw = raw.copy()
     raw["start"] = pd.to_datetime(raw["t"], utc=True).dt.tz_convert(calendar.TZ)
     close = pd.Series([calendar.at(d, calendar.session_close(d)) for d in raw["start"].dt.date],
                       index=raw.index)
@@ -79,6 +95,34 @@ def fetch_30m(symbols: list[str], start: str = START, end: str | None = None) ->
     bars, _ = regular_session(raw)
     bars, _ = adjust_spin_offs(bars)
     return bars.sort_values(["start", "ticker"]).reset_index(drop=True)[COLUMNS]
+
+
+def fetch_30m(symbols: list[str], parts_dir, start: str = START, end: str | None = None,
+              workers: int = 4) -> pd.DataFrame:
+    """Regular-session 30m bars for `symbols`, resumable: each symbol is saved to
+    `parts_dir` as it completes and skipped on a rerun, so an interrupted fetch
+    (the whole set takes ~30 minutes) loses at most the symbols in flight."""
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+    from pathlib import Path
+
+    import httpx
+
+    parts = Path(parts_dir)
+    parts.mkdir(parents=True, exist_ok=True)
+    end = end or (pd.Timestamp.now(tz="UTC") - pd.Timedelta(days=1)).strftime("%Y-%m-%d")
+    todo = [s for s in symbols if not (parts / f"{s}.parquet").exists()]
+    print(f"alpaca: {len(symbols) - len(todo)} symbols already saved, {len(todo)} to fetch", flush=True)
+    limiter = _RateLimiter()
+    with httpx.Client(headers=_credentials(), verify=net.ssl_context(), timeout=120) as client, \
+            ThreadPoolExecutor(workers) as pool:
+        futures = {pool.submit(_fetch_symbol, client, limiter, s, start, end): s for s in todo}
+        for n, fut in enumerate(as_completed(futures), 1):
+            s = futures[fut]
+            bars = _canonical(fut.result())
+            bars.to_parquet(parts / f"{s}.parquet", index=False)
+            print(f"  {n}/{len(todo)} {s}: {len(bars):,} regular-session bars", flush=True)
+    frames = [pd.read_parquet(parts / f"{s}.parquet") for s in symbols]
+    return pd.concat(frames, ignore_index=True).sort_values(["start", "ticker"]).reset_index(drop=True)
 
 
 def to_60m(bars_30m: pd.DataFrame) -> pd.DataFrame:
