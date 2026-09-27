@@ -16,6 +16,7 @@ fit, not its bias-corrected variance, which would charge it s^2/2 of bias it doe
 have. The trailing baselines enter as they are: the log of a mean runs above the mean of
 logs, and that bias is part of what using trailing vol costs. `corr2_*` (squared
 correlation, bias forgiven) says how much of an R^2 gap is that level offset alone.
+`ratio_*` is mean realised / forecast: above 1, a vol target sized on it runs hot.
 
 The t-stat is on the daily cross-sectional mean of the QLIKE difference, with the sample
 counted as n_days / H, because overlapping H-day targets are not independent. Writes
@@ -47,6 +48,7 @@ def _scores(s: pd.DataFrame, h: int) -> dict:
         log_fc = s[f"harlog_h{h}"] if m == "har" else np.log(s[f"{m}_h{h}"])
         row[f"r2_{m}"] = vol.oos_r2(np.log(y), log_fc)
         row[f"corr2_{m}"] = np.corrcoef(np.log(y), log_fc)[0, 1] ** 2
+        row[f"ratio_{m}"] = (y / s[f"{m}_h{h}"]).mean()
     sess = s.index.get_level_values("session")
     for base in BASELINES:
         diff = vol.qlike(y, s[f"{base}_h{h}"]) - vol.qlike(y, s[f"har_h{h}"])
@@ -93,7 +95,7 @@ def main() -> None:
     table.to_csv(out, index=False)
 
     show = ["horizon", "scope", "year", "n", "r2_har", "r2_rv20", "qlike_har", "qlike_rv20",
-            "qlike_gain_vs_rv20_%", "t_vs_rv20", "qlike_gain_vs_rw5_%", "qlike_gain_vs_cc20_%"]
+            "qlike_gain_vs_rv20_%", "t_vs_rv20", "qlike_gain_vs_cc20_%", "ratio_har", "ratio_rv20"]
     agg = table[table["scope"].isin(["stocks", "market"])]
     print(f"Walk-forward from {FIRST_TEST}, quarterly refit. QLIKE lower is better; gain = % "
           "QLIKE reduction by HAR; t on the daily loss difference, n_eff = n_days / H.")

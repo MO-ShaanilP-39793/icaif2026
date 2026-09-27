@@ -143,3 +143,69 @@ def test_a_test_year_the_history_cannot_fit_raises_rather_than_forecasting_nan()
     quarter NaN, dropped downstream, and the year's verdict drawn from what survived."""
     with pytest.raises(ValueError, match="training rows"):
         vol.walk_forward(_synthetic_rv(), first_test="2021-01-01")
+
+
+def _random_bars(first="2021-01-04", last="2022-06-30", seed=1):
+    """A random walk on the live grid, half-days included: long enough to refit."""
+    rng = np.random.default_rng(seed)
+    frames, px = [], np.full(len(TICKERS), 100.0)
+    for d in pd.bdate_range(first, last).date:
+        starts, close = _starts(d, "live")
+        ends = starts[1:] + [close]
+        px = px * np.exp(rng.normal(0, 0.01, len(TICKERS)))  # overnight gap
+        o = px.copy()
+        scale = np.exp(rng.normal(0, 0.4))  # a vol regime that moves day to day
+        for s, e in zip(starts, ends):
+            c = o * np.exp(rng.normal(0, 0.006 * scale, len(TICKERS)))
+            frames.append(pd.DataFrame({"ticker": TICKERS, "start": s, "end": e, "open": o,
+                                        "high": np.maximum(o, c), "low": np.minimum(o, c),
+                                        "close": c, "volume": 1.0}))
+            o = c
+        px = o
+    return pd.concat(frames, ignore_index=True)
+
+
+@pytest.fixture(scope="module")
+def random_bars():
+    return _random_bars()
+
+
+def test_one_missing_session_does_not_blank_a_name_for_weeks(random_bars):
+    """A day's bars missing for one name cost it two RV sessions (the day and the next
+    gap). With strict 22-session windows every forecast of that name went NaN for a
+    month and a day, and whatever was sized on it fell back or stopped."""
+    hole = date(2022, 2, 15)
+    bars = random_bars[~((random_bars["ticker"] == "AAPL") & (random_bars["start"].dt.date == hole))]
+    rv = vol.realised_variance(bars)
+    assert rv.loc[[hole, date(2022, 2, 16)], "AAPL"].isna().all()
+    fc = vol.walk_forward(rv).xs("AAPL", level="ticker")
+    after = fc.loc[[d for d in fc.index if d > hole]]
+    assert after["har_h1"].notna().all()
+    assert after["har_h3"].notna().all()
+
+
+def test_the_live_forecast_is_the_walk_forward_forecast_and_reads_no_later_bar(random_bars):
+    """forecast_next is what trades and walk_forward is what was scored. Any drift
+    between them (another refit, a regressor window off by one, a session read before
+    it closed) would trade a forecast nobody measured. It gets every bar, including
+    the future, and must ignore all it could not have seen at the deadline."""
+    session = date(2022, 5, 16)
+    wf = vol.walk_forward(vol.realised_variance(random_bars)).xs(session, level="session")
+    for deadline in ("09:10", "12:25"):
+        as_of = calendar.at(session, pd.Timestamp(deadline).time())
+        live = vol.forecast_next(random_bars, as_of)
+        assert live.attrs["session"] == session
+        assert live.notna().all().all()
+        for h in vol.HORIZONS:
+            pd.testing.assert_series_equal(live[f"har_h{h}"], wf.loc[live.index, f"har_h{h}"],
+                                           check_names=False)
+        assert set(live.index) == set(TICKERS) | {vol.MARKET}
+    after_close = vol.forecast_next(random_bars, calendar.at(date(2022, 5, 13), pd.Timestamp("16:30").time()))
+    assert after_close.attrs["session"] == session
+    pd.testing.assert_frame_equal(after_close, live)
+
+
+def test_a_stale_feed_raises_rather_than_passing_last_week_off_as_yesterday(random_bars):
+    old = random_bars[random_bars["start"].dt.date <= date(2022, 5, 6)]
+    with pytest.raises(ValueError, match="stale"):
+        vol.forecast_next(old, calendar.at(date(2022, 5, 16), pd.Timestamp("09:10").time()))

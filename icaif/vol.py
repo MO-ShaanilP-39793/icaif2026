@@ -21,14 +21,38 @@ the names that happen to be present is a different, noisier basket.
 target is the log of mean daily RV over D .. D+H-1. The regressors are the log of RV on
 D-1, the mean over the last 5 sessions and the mean over the last 22, pooled across
 tickers (Corsi 2009, in logs). The market basket is fit on its own: pooled in with the
-30 names it would get 1/31 of the weight, and its persistence is not theirs. The
-forecast is exp(fit + s^2 / 2), which removes the log bias; without that correction
-every forecast runs low by the same factor, and a vol target built on it runs hot.
+30 names it would get 1/31 of the weight, and its persistence is not theirs.
+
+The forecast is exp(fit) times the fit's smearing factor, the mean of exp(residual) over
+its training rows (Duan 1983). exp(fit) alone is a median, and runs low. The lognormal
+correction exp(s^2 / 2) assumes the residuals are normal; earnings jumps give them a
+right tail, and with it stock forecasts ran 20% low out of sample, so a vol target built
+on them would run hot by the same margin. Smearing leaves them 7% low (the basket 4%),
+and the whole of that is the top 1% of surprises: drop those and the rest run 13% high.
+The remaining bias is unforecast jumps, which a smearing factor cannot fix and an
+earnings calendar might.
+
+**Gaps in the regressors.** A missing session costs a name two RV sessions (its own and
+the next day's unknown gap). With strict windows that blanked the name's forecasts for
+22 sessions. So the lag falls back to the latest RV in D-1 .. D-3, and each window mean
+takes the sessions it has, if at least 60% of them. Targets stay strict: a target with a
+hole in it is not the thing being forecast.
+
+**Half-days stay in the regressors as ordinary sessions**, on evidence. Their RV is low
+(3.5 hours), which looks like it would drag the next forecast down wrongly. It does not:
+the sessions after a half-day are the quiet holiday weeks, and with half-days kept the
+forecast for the session after already runs 14% high (realised / forecast 0.86 over 21
+half-days, 2017-26). Treating them as gaps raised it further and lost 1-day QLIKE (0.473
+vs 0.427 for the names, 0.510 vs 0.442 for the basket, on the session after); rescaling
+to a full session would raise it more. What does run high is the forecast *of* a
+half-day (realised / forecast 0.62): nothing here knows the session is short.
 
 **Walk-forward.** Refit at each quarter start on rows whose whole target window ended
 before the refit day. A row whose 3-session target straddles the refit would train on
 the first days being forecast.
 """
+
+from datetime import date
 
 import numpy as np
 import pandas as pd
@@ -38,6 +62,12 @@ from icaif import calendar
 HORIZONS = (1, 3)
 MARKET = "_MKT"
 HAR_COLUMNS = ["x_d", "x_w", "x_m"]
+# A window with more than 40% holes is a different window: a 22-session mean over 8
+# sessions is a 2-week mean labelled a monthly one.
+MIN_WINDOW_SHARE = 0.6
+# One missing session blanks two RV sessions (its own and the next gap), so the lag
+# reaches three back; further, and "yesterday" is last week.
+LAG_FALLBACK = 3
 # Fewer complete rows than this and a refit would be a few points' noise presented as
 # a coefficient; the caller has asked for a test year its data cannot support.
 MIN_TRAIN_ROWS = 100
@@ -97,13 +127,17 @@ def realised_variance(info_bars: pd.DataFrame) -> pd.DataFrame:
     return rv
 
 
+def _mean_available(lag: pd.DataFrame, n: int) -> pd.DataFrame:
+    return lag.rolling(n, min_periods=int(np.ceil(MIN_WINDOW_SHARE * n))).mean()
+
+
 def _har_frame(rv: pd.DataFrame, h: int) -> pd.DataFrame:
     """Rows (session D, ticker): regressors known before D opens, and D's target."""
     lag = rv.shift(1)
-    x_d = np.log(lag)
-    x_w = np.log(lag.rolling(5, min_periods=5).mean())
-    x_m = np.log(lag.rolling(22, min_periods=22).mean())
-    x_20 = np.log(lag.rolling(20, min_periods=20).mean())
+    x_d = np.log(lag.ffill(limit=LAG_FALLBACK - 1))
+    x_w = np.log(_mean_available(lag, 5))
+    x_m = np.log(_mean_available(lag, 22))
+    x_20 = np.log(_mean_available(lag, 20))
     fwd = rv[::-1].rolling(h, min_periods=h).mean()[::-1]
     y = np.log(fwd)
     frame = pd.concat({k: v.stack(future_stack=True) for k, v in
@@ -118,6 +152,7 @@ def _har_frame(rv: pd.DataFrame, h: int) -> pd.DataFrame:
 
 
 def _fit(train: pd.DataFrame, refit: pd.Timestamp) -> tuple[np.ndarray, float]:
+    """Coefficients and the smearing factor, the mean of exp(residual)."""
     t = train.dropna(subset=HAR_COLUMNS + ["y"])
     if len(t) < MIN_TRAIN_ROWS:
         raise ValueError(f"refit {refit.date()}: {len(t)} complete training rows, "
@@ -125,7 +160,26 @@ def _fit(train: pd.DataFrame, refit: pd.Timestamp) -> tuple[np.ndarray, float]:
     X = np.column_stack([np.ones(len(t)), t[HAR_COLUMNS]])
     beta, *_ = np.linalg.lstsq(X, t["y"].to_numpy(), rcond=None)
     resid = t["y"].to_numpy() - X @ beta
-    return beta, float(resid.var())
+    return beta, float(np.exp(resid).mean())
+
+
+def _predict(frame: pd.DataFrame, pool: np.ndarray, test: np.ndarray,
+             refit: pd.Timestamp) -> pd.DataFrame:
+    """Log fit and smearing factor for the `test` rows, from the refit at `refit`.
+
+    The one place a forecast is made, so the walk-forward that is scored and the live
+    call that trades cannot drift apart.
+    """
+    tend = pd.to_datetime(frame["target_end"])
+    beta, smear = _fit(frame[pool & (tend < refit)], refit)
+    rows = frame[test]
+    X = np.column_stack([np.ones(len(rows)), rows[HAR_COLUMNS]])
+    return pd.DataFrame({"log": X @ beta, "smear": smear}, index=rows.index)
+
+
+def _pools(frame: pd.DataFrame) -> list[np.ndarray]:
+    is_mkt = np.asarray(frame.index.get_level_values("ticker") == MARKET)
+    return [m for m in (~is_mkt, is_mkt) if m.any()]
 
 
 def walk_forward(rv: pd.DataFrame, first_test: str = "2022-01-01") -> pd.DataFrame:
@@ -135,7 +189,7 @@ def walk_forward(rv: pd.DataFrame, first_test: str = "2022-01-01") -> pd.DataFra
     and `rv20_h{H}` (mean RV over the last 5 and 20 sessions) and the realised
     `y_h{H}`, all in mean daily variance. `harlog_h{H}` is the fit in logs before the
     bias correction: the forecast of log RV itself, which a log-space R^2 must use, or
-    it charges HAR s^2/2 of bias it does not have. The other baseline,
+    it charges HAR a bias it does not have. The other baseline,
     `close_to_close_variance`, is joined by the caller.
     """
     out = []
@@ -144,28 +198,69 @@ def walk_forward(rv: pd.DataFrame, first_test: str = "2022-01-01") -> pd.DataFra
     for h in HORIZONS:
         frame = _har_frame(rv, h)
         sess = pd.to_datetime(frame.index.get_level_values("session"))
-        tend = pd.to_datetime(frame["target_end"])
-        is_mkt = frame.index.get_level_values("ticker") == MARKET
         preds = []
-        for pool in (~is_mkt, is_mkt):
-            if not pool.any():
-                continue
+        for pool in _pools(frame):
             for i, start in enumerate(refits):
                 stop = refits[i + 1] if i + 1 < len(refits) else sessions.max() + pd.Timedelta(days=1)
-                test = frame[pool & (sess >= start) & (sess < stop)]
-                if test.empty:
-                    continue
-                beta, s2 = _fit(frame[pool & (tend < start)], start)
-                X = np.column_stack([np.ones(len(test)), test[HAR_COLUMNS]])
-                preds.append(pd.DataFrame({"log": X @ beta, "s2": s2}, index=test.index))
+                test = pool & np.asarray((sess >= start) & (sess < stop))
+                if test.any():
+                    preds.append(_predict(frame, pool, test, start))
         p = pd.concat(preds).sort_index()
         f = frame.loc[p.index]
-        out.append(pd.DataFrame({f"har_h{h}": np.exp(p["log"] + p["s2"] / 2),
+        out.append(pd.DataFrame({f"har_h{h}": np.exp(p["log"]) * p["smear"],
                                  f"harlog_h{h}": p["log"],
                                  f"rw5_h{h}": np.exp(f["x_w"]),
                                  f"rv20_h{h}": np.exp(f["x_20"]),
                                  f"y_h{h}": np.exp(f["y"])}))
     return pd.concat(out, axis=1)
+
+
+def _session_to_forecast(as_of: pd.Timestamp) -> date:
+    """as_of's own date while its session is still to close, else the next weekday."""
+    d = as_of.date()
+    if d.weekday() < 5 and as_of < calendar.at(d, calendar.session_close(d)):
+        return d
+    return (pd.Timestamp(d) + pd.offsets.BDay(1)).date()
+
+
+def forecast_next(info_bars: pd.DataFrame, as_of: pd.Timestamp) -> pd.DataFrame:
+    """Live: the HAR forecast for the session in progress, or the next one to open.
+
+    Returns one row per name plus `_MKT`, with `har_h1` and `har_h3` in mean daily
+    variance (take the square root for daily vol), the same numbers `walk_forward`
+    scores for that session. `attrs` carries the session and the refit used.
+
+    Only sessions that had closed by `as_of` are read, so every deadline of a day gets
+    the forecast made before its open: a half-finished session would otherwise read as a
+    hole, or its first hours as a whole day. The refit is the latest quarter start on or
+    before the session, trained on targets that ended before it, as in the walk-forward.
+
+    Raises if the last closed session is more than 4 days before the one forecast: a feed
+    that stopped would otherwise pass off a week-old lag as yesterday. A single missing
+    weekday is not caught here (there is no holiday calendar); it reads as a gap.
+    """
+    as_of = pd.Timestamp(as_of)
+    if as_of.tzinfo is None:
+        raise ValueError("as_of must be tz-aware (America/New_York)")
+    day = info_bars["start"].dt.date
+    closes = pd.Series({d: calendar.at(d, calendar.session_close(d)) for d in day.unique()})
+    closed = info_bars[day.map(closes).le(as_of).to_numpy()]
+    rv = realised_variance(closed)
+    session = _session_to_forecast(as_of)
+    last = rv.index.max()
+    if (session - last).days > 4:
+        raise ValueError(f"last closed session {last} is stale for a forecast of {session}")
+    rv.loc[session] = np.nan
+    refit = pd.Timestamp(session).to_period("Q").start_time
+    out = {}
+    for h in HORIZONS:
+        frame = _har_frame(rv, h)
+        target = np.asarray(frame.index.get_level_values("session") == session)
+        p = pd.concat([_predict(frame, pool, pool & target, refit) for pool in _pools(frame)])
+        out[f"har_h{h}"] = (np.exp(p["log"]) * p["smear"]).droplevel("session")
+    res = pd.DataFrame(out)
+    res.attrs.update(session=session, refit=refit.date())
+    return res
 
 
 def close_to_close_variance(info_bars: pd.DataFrame) -> pd.DataFrame:
