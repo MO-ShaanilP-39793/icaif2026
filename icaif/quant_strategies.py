@@ -75,8 +75,25 @@ def shape_risk_parity(returns: pd.DataFrame) -> Optional[pd.Series]:
     return quant.risk_parity(cov, 1.0, cap=W.CAP)
 
 
+def shape_blend(alpha: float):
+    """alpha x risk parity + (1 - alpha) x inverse-vol, both fully invested.
+
+    The two shapes win against different fields (risk parity against the near-hold
+    field, inverse-vol against the active one), and the real field is unobservable
+    until the end; a blend is the hedge between them. Both parts are capped at 30%
+    per name, so their mix is too.
+    """
+    def shape(returns):
+        rp, iv = shape_risk_parity(returns), shape_inverse_vol(returns)
+        if rp is None or iv is None:
+            return None
+        return alpha * rp + (1 - alpha) * iv.reindex(rp.index)
+    return shape
+
+
 SHAPES = {"inverse_vol": shape_inverse_vol, "min_variance": shape_min_variance,
-          "risk_parity": shape_risk_parity}
+          "risk_parity": shape_risk_parity, "blend25": shape_blend(0.25),
+          "blend50": shape_blend(0.50), "blend75": shape_blend(0.75)}
 
 
 # ----------------------------------------------------------------------------- exposure policies

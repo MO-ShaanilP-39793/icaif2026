@@ -23,6 +23,13 @@ tilt loses to the hold after fees, and the GNN failed its stage-1 gate.
 
 ## Research (ask before each run)
 
+- [ ] **Correction (2026-09-29):** the ~0.1 score edge of risk parity (and of the
+      rule desk, "-0.100, SE 0.039") over `inv_vol_hold_75` is an artefact. The default
+      field holds `inv_vol_hold` at 100%, a near-clone of the reference; holding cash
+      shaves the clone's Sharpe ~0.4%, so it loses that near-tie in 89% of windows.
+      Without the clone every shape is within +-0.02 (2016-22) and +0.01..+0.06 worse
+      (2023-26). Re-score quant_report and agent_replay on a no-clone field too.
+
 - [x] Exposure-timing race (`tools/quant_report.py`, `icaif/quant.py`): vol target,
       Grossman-Zhou drawdown control, a 2-state HMM, min variance, risk parity, an OU
       residual tilt. Every rule that trades after entry loses to the hold; risk parity
