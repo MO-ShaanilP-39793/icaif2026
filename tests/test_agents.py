@@ -238,3 +238,57 @@ def test_the_call_budget_stops_spending_and_the_desk_keeps_trading_on_the_rule()
     desk, res = _run(brain, n=3)
     assert [e["source"] for e in desk.log] == ["brain", "fallback", "fallback"]
     assert res.invalid_rounds == []
+
+
+# ----------------------------------------------------------------------------- free desk
+
+from icaif import baselines  # noqa: E402
+from icaif.agents import prompts  # noqa: E402
+from icaif.agents.free import FreeDesk  # noqa: E402
+from icaif.agents.schemas import FreeDecision, NameWeight  # noqa: E402
+
+
+def _free(brain, arm="informed", n=3, market=None):
+    d = FreeDesk(brain, arm, DeskConfig(anonymize=True))
+    return d, sim.run(d, market or _mkt(), START, n)
+
+
+def test_a_failing_opus_trades_exactly_the_hold_we_would_submit():
+    """A lookalike fallback (inverse-vol on daily closes) scored 0.13-0.20 worse on
+    2025-26; every Opus-vs-fallback gap would have carried it."""
+    m = _mkt()
+    ref = sim.run(baselines.scaled(baselines.InverseVolHold, 0.75)(), m, START, 3)
+    desk, got = _free(Failing(), market=m)
+    pd.testing.assert_frame_equal(got.ledger, ref.ledger)
+    assert all(e["source"] == "fallback" for e in desk.log)
+
+
+def test_a_book_over_100pct_or_with_an_invented_name_is_rejected_not_rescaled():
+    over = FreeDecision(action="rebalance", rationale="x",
+                        weights=[NameWeight(name=f"S{i:02d}", weight=0.3) for i in range(1, 5)])
+    desk, _ = _free(Scripted(free_informed=over), n=1)
+    assert desk.log[0]["source"] == "fallback" and "> 1" in desk.log[0]["reason"]
+    bad = FreeDecision(action="rebalance", rationale="x", weights=[NameWeight(name="AAPL", weight=0.1)])
+    desk, _ = _free(Scripted(free_informed=bad), n=1)
+    assert desk.log[0]["source"] == "fallback"
+
+
+def test_the_blank_arm_sees_neither_the_rule_nor_the_backtest_evidence():
+    """If the blank arm saw the proposal, the test of "Opus on its own" would be a
+    test of Opus copying our rule."""
+    b = Scripted()
+    _free(b, arm="blank", n=2)
+    assert all("rule_proposal" not in p for _, p in b.seen)
+    assert "backtest" not in prompts.SYSTEM["free_blank"].lower()
+    assert "backtest" in prompts.SYSTEM["free_informed"].lower()
+
+
+def test_opus_holding_after_entry_trades_nothing_and_its_own_book_is_executed_exactly():
+    pick = FreeDecision(action="rebalance", rationale="x",
+                        weights=[NameWeight(name=f"S{i:02d}", weight=0.05) for i in range(1, 11)])
+    hold = FreeDecision(action="hold", weights=[], rationale="x")
+    answers = iter([pick, hold, hold])
+    desk, res = _free(Scripted(free_informed=lambda p: next(answers)))
+    traded = [p for p in res.periods if p["traded_notional"] > 0]
+    assert len(traded) == 1
+    assert _gross_after_trade(res, 0) == pytest.approx(0.5, abs=30 * W.GRID)

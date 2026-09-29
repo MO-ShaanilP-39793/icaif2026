@@ -55,3 +55,25 @@ class EventDecision(_Strict):
 
 
 SCHEMAS = {"entry": EntryDecision, "review": ReviewDecision, "event": EventDecision}
+
+
+class NameWeight(_Strict):
+    name: str
+    weight: float = Field(ge=0.0, le=0.30)
+
+
+class FreeDecision(_Strict):
+    """The whole decision, in the agent's hands: hold, or the full book to hold now.
+
+    Weights are listed per name (a map would not survive strict structured output);
+    names left out are sold. The desk checks the sum and the codes, and rejects rather
+    than rescales a book over 100%: a rescaled book is one the agent did not choose.
+    """
+
+    action: Literal["hold", "rebalance"]
+    weights: list[NameWeight] = Field(max_length=30,
+                                      description="Required for rebalance: every name to hold.")
+    rationale: str = Field(max_length=1500)
+
+
+SCHEMAS["free"] = FreeDecision

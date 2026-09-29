@@ -104,9 +104,14 @@ class Desk:
 
     # ------------------------------------------------------------------ plumbing
 
-    def _ask(self, role: str, payload: dict, schema: type[BaseModel], check) -> tuple:
-        """(decision, source): the brain's answer if it passes `check`, else the rule's."""
-        rule = schema.model_validate(payload["rule_proposal"])
+    def _ask(self, role: str, payload: dict, schema: type[BaseModel], check,
+             rule: Optional[dict] = None) -> tuple:
+        """(decision, source): the brain's answer if it passes `check`, else the rule's.
+
+        `rule` is the fallback when the payload must not show it (the blank arm of the
+        free desk); otherwise the payload's `rule_proposal` is both.
+        """
+        rule = schema.model_validate(rule if rule is not None else payload["rule_proposal"])
         left = self.cfg.round_budget_s - (time.perf_counter() - self._t_round)
         timeout = min(self.cfg.timeouts[role], left)
         t0 = time.perf_counter()

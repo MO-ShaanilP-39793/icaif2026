@@ -63,10 +63,16 @@ class ClaudeBrain:
     """Structured-output calls to an allowed Claude model, with usage logged per call."""
 
     def __init__(self, model: str = DEFAULT_MODEL, effort: str = "high",
-                 max_calls: Optional[int] = None, client=None):
+                 max_calls: Optional[int] = None, client=None,
+                 max_cost: Optional[float] = None):
+        """`max_cost` (USD) stops calling once spent: every later question falls back to
+        the rule, so an overrun ends a replay's spend, not its run."""
         if model not in ALLOWED_MODELS:
             raise ValueError(f"{model!r} is not on the competition's allowed list {ALLOWED_MODELS}")
-        self.model, self.effort, self.max_calls = model, effort, max_calls
+        import threading
+
+        self.model, self.effort, self.max_calls, self.max_cost = model, effort, max_calls, max_cost
+        self._lock = threading.Lock()
         self._client = client
         self.name = f"claude:{model}:{effort}"
         self.records: list[dict] = []
@@ -86,8 +92,11 @@ class ClaudeBrain:
                     + r["cache_creation_input_tokens"] * p_write) / 1e6 for r in self.records)
 
     def decide(self, role, system, payload, schema, timeout):
-        if self.max_calls is not None and len(self.records) >= self.max_calls:
-            raise BrainError(f"call budget of {self.max_calls} spent")
+        with self._lock:
+            if self.max_calls is not None and len(self.records) >= self.max_calls:
+                raise BrainError(f"call budget of {self.max_calls} spent")
+            if self.max_cost is not None and self.cost() >= self.max_cost:
+                raise BrainError(f"dollar cap of ${self.max_cost:.2f} spent")
         kwargs = dict(
             model=self.model, max_tokens=16000,
             system=[{"type": "text", "text": system, "cache_control": {"type": "ephemeral"}}],
@@ -100,9 +109,11 @@ class ClaudeBrain:
         try:
             resp = self.client.with_options(timeout=timeout, max_retries=1).messages.parse(**kwargs)
         except Exception as err:  # every SDK failure is a fallback, never a crash
-            self.records.append(self._record(role, None, time.perf_counter() - t0, repr(err)))
+            with self._lock:
+                self.records.append(self._record(role, None, time.perf_counter() - t0, repr(err)))
             raise BrainError(f"{type(err).__name__}: {err}") from err
-        self.records.append(self._record(role, resp, time.perf_counter() - t0, None))
+        with self._lock:
+            self.records.append(self._record(role, resp, time.perf_counter() - t0, None))
         if resp.stop_reason == "refusal":
             cat = getattr(getattr(resp, "stop_details", None), "category", None)
             raise BrainError(f"refused ({cat})")

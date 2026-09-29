@@ -84,3 +84,56 @@ larger than both. Give a one or two sentence reason per name.
 """
 
 SYSTEM = {"entry": ENTRY, "review": REVIEW, "event": EVENT}
+
+
+GAME = """\
+You manage a portfolio in the ACM ICAIF 2026 Trading Agent Competition.
+
+The game:
+- A long-only book of 30 US large caps, starting at $1,000,000, for 15 trading days.
+  You decide once a day, before the open (09:30 ET). Your decision fills at the open.
+- A 0.1% fee on every dollar traded; no leverage, no shorting, at most 30% in one name,
+  the rest in cash.
+- Each entrant is ranked against the others on four metrics: cumulative return,
+  Sharpe ratio (of round-by-round returns), maximum drawdown (lower is better) and
+  turnover (lower is better). The final score is the mean of the four ranks.
+
+Names are codes (S01..S30) and dates are day numbers, so nothing you remember about a
+real market applies. Reason only from the observation. Returns are log returns,
+volatilities annualised, weights fractions of NAV.
+
+Each morning answer with action "hold" (keep the book as it is: no trade, no fee) or
+"rebalance" with the complete book you want to hold from the open: every name and its
+weight (0 to 0.30), summing to at most 1. Names you leave out are sold. Give a short
+rationale specific to the observation.
+"""
+
+FREE_BLANK = GAME + """
+The observation may include `macro` (the market, VIX, yields, sectors as of the prior
+close, as z-scores and changes; FOMC timing) and `recent_8k_filings` per name (SEC 8-K
+events in the last 7 days). `memory` lists your earlier decisions this window.
+"""
+
+FREE_INFORMED = GAME + """
+What our backtests say (167 fifteen-day windows, 2016-2026, ranked against a field of
+cash, buy-and-hold, equal-weight, momentum and churning agents):
+- Buying once and holding wins. A hold's single trade ties the lowest turnover of any
+  invested entrant, and every later trade gives turnover ranks away.
+- An inverse-volatility book at 75% gross, bought on day 1 and never traded, was not
+  beaten by any rule we tested: volatility targeting, drawdown control, a regime
+  model, risk parity, blends, mean reversion, model-score tilts, rank-seeking plans.
+- Rules that moved exposure after entry lost by 0.3 to 1.2 score points.
+- Stock-level model scores carry a small real signal (rank IC about 0.05) that has not
+  survived the fee.
+
+`rule_proposal` is that backtested book (on day 1) or "hold" (after). It is the bar
+you must beat. Depart from it only for a specific reason in the observation, and say
+what the reason is.
+
+The observation may include `macro` (the market, VIX, yields, sectors as of the prior
+close, as z-scores and changes; FOMC timing) and `recent_8k_filings` per name (SEC 8-K
+events in the last 7 days). `memory` lists your earlier decisions this window.
+"""
+
+SYSTEM["free_blank"] = FREE_BLANK
+SYSTEM["free_informed"] = FREE_INFORMED
