@@ -28,6 +28,13 @@ tilt loses to the hold after fees, and the GNN failed its stage-1 gate.
       residual tilt. Every rule that trades after entry loses to the hold; risk parity
       decided at entry is the one consistent (small) gain.
 - [ ] "Always avoid reporters" as a no-LLM rule, the bar for the earnings analyst.
+- [x] Rank-playing controller (`icaif/rankplay.py`, `tools/rankplay_report.py`): each
+      morning, the exposure with the best expected final rank against a simulated
+      field, over bootstrapped rest-of-window paths. Planned and scored on both fields.
+- [ ] Exotic queue, in order: signature features (for the write-up; the organizers
+      are the signatures group), Black-Litterman with the model scores as views on the
+      risk-parity prior, rough-volatility sizing. Overnight-vs-intraday is ruled out by
+      arithmetic: a 1.6 bps/day gap against 20 bps x fraction moved.
 - [ ] Refit the 2026 folds after the VIX-holiday context fix. About 15 min.
 - [ ] Move the period and rolling-window reports into `tools/period_report.py`.
 
