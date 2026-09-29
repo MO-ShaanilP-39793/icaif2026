@@ -161,3 +161,61 @@ FIELD = {
     "random_churn": RandomChurn,
     "concentrated_hold": ConcentratedHold,
 }
+
+
+class NoisyTiltDaily:
+    """A stand-in for an LLM agent that re-thinks its book every morning: inverse-vol
+    weights times lognormal noise, 95% invested, rebalanced at every round 1. It churns
+    less than `RandomChurn` but far more than any hold."""
+
+    def __init__(self, seed: int = 0, noise: float = 0.3, gross: float = 0.95):
+        self.rng = np.random.default_rng(seed)
+        self.noise, self.gross = noise, gross
+
+    def __call__(self, ctx):
+        if ctx.round != 1:
+            return None
+        closes = ctx.recent_closes(20 * ROUNDS_PER_DAY + 1)
+        vol = np.log(closes).diff().std()
+        if vol.isna().any() or len(closes) < 10 * ROUNDS_PER_DAY:
+            return None
+        w = (1.0 / vol) * np.exp(self.rng.normal(0, self.noise, len(vol)))
+        w = np.minimum(w / w.sum() * self.gross, W.CAP)
+        return W.safe(dict(zip(vol.index, w)), ctx.market.tickers)
+
+
+class MomentumWeekly:
+    """Top 10 by trailing ~20-day return, equal weight, fully invested, every 5 sessions."""
+
+    def __init__(self, k: int = 10, every: int = 5):
+        self.k, self.every, self.session, self.day = k, every, -1, None
+
+    def __call__(self, ctx):
+        if ctx.round != 1:
+            return None
+        self.session += 1
+        if self.session % self.every:
+            return None
+        closes = ctx.recent_closes(20 * ROUNDS_PER_DAY + 1)
+        if len(closes) < 10 * ROUNDS_PER_DAY:
+            return None
+        top = (closes.iloc[-1] / closes.iloc[0] - 1).sort_values(ascending=False).head(self.k)
+        return W.safe({t: 1 / self.k for t in top.index}, ctx.market.tickers)
+
+
+# A field that looks like the one we expect: mostly LLM agents trading every day or
+# every hour, plus cash and one hold. Against FIELD (five of nine barely trade) any
+# trade after entry costs several turnover ranks; here a daily trader can still rank
+# near the top on turnover, so return and Sharpe are cheaper to buy.
+ACTIVE_FIELD = {
+    "cash": Cash,
+    "ew_hold": EqualWeightHold,
+    "ew_daily": EqualWeightDaily,
+    "kit_momentum_hourly": KitMomentum,
+    "momentum_daily": MomentumDaily,
+    "momentum_weekly": MomentumWeekly,
+    "random_churn": RandomChurn,
+    "random_churn_slow": lambda: RandomChurn(seed=1, step=0.05),
+    "noisy_tilt_daily": NoisyTiltDaily,
+    "noisy_tilt_daily_b": lambda: NoisyTiltDaily(seed=2, noise=0.5),
+}
