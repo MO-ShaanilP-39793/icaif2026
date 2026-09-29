@@ -9,8 +9,9 @@ seam anyway.
 "NVDA, 2024-05-20", it can recall what happened next, and a replay that scores well
 on memory is not evidence the agent can judge. So in replays each window gets its own
 random name codes (S01-S30, sorted by code, so even the alphabetical order of real
-tickers is gone), dates become "day k of 15", no price level appears, and headlines,
-which name companies, are dropped. Only windows after the model's training cutoff can
+tickers is gone), dates become "day k of 15", no price level appears, macro levels
+become z-scores and changes (`macro.readings`), and headlines, which name companies,
+are dropped. 8-K events stay: "director or officer change" names no one. Only windows after the model's training cutoff can
 be replayed with real names and still count.
 """
 
@@ -93,6 +94,8 @@ def observation(closes: pd.DataFrame, rd: Readings, book: BookState, anon: Anony
                 scores: Optional[pd.Series] = None,
                 earnings: Optional[dict] = None,
                 news: Optional[dict] = None,
+                macro: Optional[dict] = None,
+                filings: Optional[dict] = None,
                 calendar_date: Optional[str] = None) -> dict:
     tickers = list(closes.columns)
     rets = rd.returns
@@ -125,6 +128,8 @@ def observation(closes: pd.DataFrame, rd: Readings, book: BookState, anon: Anony
             row["model_score_pct"] = _r(pct.get(t, np.nan), 2)
         if earnings is not None:
             row["earnings_in_sessions"] = earnings.get(t)
+        if filings is not None:
+            row["recent_8k_filings"] = filings.get(t, [])
         if news is not None and not anon.enabled:
             row["headlines"] = news.get(t, [])[:5]
         names.append(row)
@@ -160,6 +165,8 @@ def observation(closes: pd.DataFrame, rd: Readings, book: BookState, anon: Anony
         },
         "names": names,
     }
+    if macro is not None:
+        obs["macro"] = macro
     if calendar_date and not anon.enabled:
         obs["clock"]["date"] = calendar_date
     return obs

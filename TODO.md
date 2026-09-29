@@ -65,9 +65,20 @@ tilt loses to the hold after fees, and the GNN failed its stage-1 gate.
 - [x] Rule brain: the desk reproduces `q_riskparity_entry_regime` in all 167 windows.
 - [x] Claude brain (allowed models only, no server-side model fallback), a response
       cache and offline replays, and anonymised observations for replays.
-- [ ] Start archiving news now. Take a daily point-in-time snapshot of Yahoo headlines
-      for the 30 names, the way the earnings calendar is archived. History can't be
-      refetched later, so every day not archived is a day we can never test on.
+- [x] News archiver (`tools/news_archive.py`, Yahoo RSS; yfinance's news endpoint
+      answers 500 here and returns []). First snapshot 2026-09-29: 551 headlines, 30 names.
+- [ ] **Schedule the news archiver** before every round's deadline on trading days and
+      daily otherwise. Until it is scheduled, every missed run is lost for good. The
+      archive lives only in `data/external/news/` on this machine (not in git): back it
+      up, and teammates copy it rather than refetch.
+- [x] Macro in the observation (`icaif/macro.py`): SPY, VIX, yields, curve, sectors as
+      of the prior close; levels become z-scores in replays. FOMC decisions 2021-27
+      from the Fed's page (`tools/macro_calendar.py`); next: **2026-10-28**, inside
+      the Official phase, statement at 14:00 ET.
+- [ ] Fetch 8-K events (`tools/filings_events.py`): needs `SEC_USER_AGENT`. Then pass
+      `filings=` to the desk in `tools/agent_replay.py`.
+- [ ] CPI and jobs-report dates (BLS schedules), and FOMC before 2021 (the Fed's
+      per-year archive pages, a different layout).
 - [ ] First paid replay (owner approves the spend): entry-only (`--no-review`), 2025
       windows, anonymised. It shows whether the Strategist beats its rule at all.
 - [ ] Live adapter: the desk on a live round (portfolio and journal from disk),

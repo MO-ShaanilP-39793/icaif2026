@@ -81,10 +81,17 @@ class EarningsCalendar:
 class Desk:
     def __init__(self, brain, config: Optional[DeskConfig] = None,
                  scores: Optional[compiler.DailyPanel] = None,
-                 earnings: Optional[EarningsCalendar] = None):
+                 earnings: Optional[EarningsCalendar] = None,
+                 context: Optional[pd.DataFrame] = None,
+                 fomc=None, filings: Optional[pd.DataFrame] = None,
+                 news_dir=None):
+        """`context`: `macro.wide(...)` closes; `fomc`: a `macro.FomcCalendar`;
+        `filings`: `filings.fetch(...)` events; `news_dir`: the headline archive, read
+        only with real names (headlines name companies)."""
         self.brain = brain
         self.cfg = config or DeskConfig()
         self.scores, self.earnings = scores, earnings
+        self.context, self.fomc, self.filings, self.news_dir = context, fomc, filings, news_dir
         self.anon: Optional[observe.Anonymizer] = None
         self.book: Optional[observe.BookState] = None
         self.hmm = None
@@ -138,12 +145,29 @@ class Desk:
         value = shares * px
         return value, ctx.cash + float(value.sum())
 
+    def _macro(self, ctx) -> Optional[dict]:
+        if self.context is None and self.fomc is None:
+            return None
+        from icaif import macro
+
+        out = macro.readings(self.context, ctx.day, self.cfg.anonymize) if self.context is not None else {}
+        if self.fomc is not None:
+            out.update(self.fomc.block(ctx.day, ctx.market.days))
+        return out
+
     def _payload(self, closes, rd, ctx, **extra) -> dict:
+        from icaif import filings, news
+
         s = self.scores.for_day(ctx.day, ctx.deadline) if self.scores is not None else None
         obs = observe.observation(
             closes, rd, self.book, self.anon, day=self.day_no,
             window_days=self.cfg.window_days, round_no=ctx.round, scores=s,
             earnings=self.earnings.to_next(ctx.day) if self.earnings is not None else None,
+            macro=self._macro(ctx),
+            filings=(filings.recent(self.filings, ctx.deadline)
+                     if self.filings is not None else None),
+            news=(news.as_of(ctx.deadline, directory=self.news_dir)
+                  if self.news_dir is not None and not self.cfg.anonymize else None),
             calendar_date=str(ctx.day))
         obs["memory"] = self.journal[-8:]
         obs.update(extra)
