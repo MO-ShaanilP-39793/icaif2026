@@ -67,10 +67,11 @@ tilt loses to the hold after fees, and the GNN failed its stage-1 gate.
       cache and offline replays, and anonymised observations for replays.
 - [x] News archiver (`tools/news_archive.py`, Yahoo RSS; yfinance's news endpoint
       answers 500 here and returns []). First snapshot 2026-09-29: 551 headlines, 30 names.
-- [ ] **Schedule the news archiver** before every round's deadline on trading days and
-      daily otherwise. Until it is scheduled, every missed run is lost for good. The
-      archive lives only in `data/external/news/` on this machine (not in git): back it
-      up, and teammates copy it rather than refetch.
+- [x] News archiver scheduled on the owner's Mac (launchd, `tools/install_news_launchd.py`):
+      5 minutes before each round's deadline and at 08:00 ET, every day.
+- [ ] Rerun `tools/install_news_launchd.py` after 2026-11-01 (US clocks change; launchd
+      runs in local time). Keep the Mac awake and online through US market hours.
+- [ ] Back up `data/external/news/`: it is the only copy and not in git.
 - [x] Macro in the observation (`icaif/macro.py`): SPY, VIX, yields, curve, sectors as
       of the prior close; levels become z-scores in replays. FOMC decisions 2021-27
       from the Fed's page (`tools/macro_calendar.py`); next: **2026-10-28**, inside
