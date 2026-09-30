@@ -1,7 +1,7 @@
 """Write a decisions file naming every round of the holdout, filled with equal weights.
 
     .venv/bin/python tools/holdout_template.py [--out output/holdout/equal_weight_<rebalance>.json]
-        [--start 2026-01-02] [--end 2026-08-31] [--rebalance every|daily]
+        [--start 2026-01-02] [--end 2026-06-30] [--rebalance every|daily]
 
 It gives the agent side the exact round_ids to fill (half-days have only rounds 1-4),
 and scores as an equal-weight sanity baseline. `--rebalance daily` writes round 1 only,

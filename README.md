@@ -89,7 +89,7 @@ guess at the rivals; every conclusion here is conditional on it.
 
 ## Holdout harness (`tools/holdout_eval.py`)
 
-This scores any agent's decisions on Jan 2 – Aug 31 2026. The agent writes one JSON file:
+This scores any agent's decisions on Jan 2 – Jun 30 2026 (`holdout.HOLDOUT_START/END`). The agent writes one JSON file:
 
 ```json
 {"strategy": "my_agent",
@@ -97,10 +97,10 @@ This scores any agent's decisions on Jan 2 – Aug 31 2026. The agent writes one
                 "weights": {"AAPL": 0.03, "...": "all 30 symbols"}}]}
 ```
 
-`tools/holdout_template.py` writes an equal-weight file naming every round, 1,162 in
+`tools/holdout_template.py` writes an equal-weight file naming every round, 861 in
 all. Half-days have only rounds 1–4. The harness reports the four metrics for one
-continuous run from $1M. It also reports them for a fresh $1M in each of the 152
-rolling 15-day windows, which amount to about 11 independent samples.
+continuous run from $1M. It also reports them for a fresh $1M in each of the 109
+rolling 15-day windows, which amount to about 8 independent samples.
 
 - **These reject the file:** a round that doesn't exist, a duplicate round, a wrong
   symbol set, or a cash weight more than 1e-9 away from 1 − Σw.
@@ -122,8 +122,8 @@ rolling 15-day windows, which amount to about 11 independent samples.
   retries a failed import, and scoring is 30× slower.
 
 **Leaderboard.** The page also ranks prospective strategies against each other the way
-the contest does. Every entry is ranked in each of the 152 windows, and the board is
-ordered by mean Overall Rank Score, with the SE computed on ~11 independent windows.
+the contest does. Every entry is ranked in each of the 109 windows, and the board is
+ordered by mean Overall Rank Score, with the SE computed on ~8 independent windows.
 - **References.** Three strategies are always on the board: cash, ew_hold and
   inv_vol_hold_75. They are scored natively at build time, each run fresh in every window.
 - **Submitting.** Submit from the page ("Sign in with HuggingFace", then *Submit to
@@ -136,8 +136,9 @@ ordered by mean Overall Rank Score, with the SE computed on ~11 independent wind
   the office network lets the page read. Netskope blocks authenticated HF downloads.
   If the copy fails, run `tools/build_holdout_space.py --sync` off that network.
 
-Equal weight at every round, the sanity baseline, scores return 12.97%, Sharpe 1.58,
-MDD 8.68% and turnover 0.57% continuously. In windows, its median return is 0.63%.
+Equal weight at every round, the sanity baseline, scores return 6.50%, Sharpe 1.05,
+MDD 8.68% and turnover 0.59% continuously on Jan–Jun. In windows, its median return is
+−0.06%.
 
 ## Features and labels (`tools/feature_report.py`)
 

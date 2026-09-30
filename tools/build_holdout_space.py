@@ -72,6 +72,7 @@ def build(out: Path) -> dict:
     snapshot = sorted((data.ROOT / "data" / "public").glob("alpaca_30m_2*.parquet"))[-1].name
     days = [d for d in market.days if str(d) >= PRICES_FROM]
     meta = {"snapshot": snapshot, "first_day": str(days[0]), "last_day": str(days[-1]),
+            "holdout": [str(holdout.HOLDOUT_START), str(holdout.HOLDOUT_END)],
             "degraded_days": [d for d in market.issues.get("degraded_days", [])
                               if d >= PRICES_FROM]}
     (out / "data" / "market.json").write_text(json.dumps(meta, indent=1))

@@ -1,7 +1,7 @@
-"""Score an agent's decisions file on the Jan-Aug 2026 holdout.
+"""Score an agent's decisions file on the Jan-Jun 2026 holdout.
 
     .venv/bin/python tools/holdout_eval.py --decisions path/to/decisions.json
-        [--start 2026-01-02] [--end 2026-08-31] [--strict] [--sizing pre_fee|post_fee]
+        [--start 2026-01-02] [--end 2026-06-30] [--strict] [--sizing pre_fee|post_fee]
         [--out output/holdout/<strategy>/<ts>/]
         [--submit [--name NAME] [--author WHO] [--note TEXT]]
 

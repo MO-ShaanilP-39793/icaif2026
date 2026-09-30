@@ -13,7 +13,7 @@ hf_oauth_authorized_org: MO-AI-Inv
 
 # ICAIF 2026 holdout harness (private)
 
-This page scores an agent's `decisions.json` on Jan–Aug 2026 with the icaif2026 simulator
+This page scores an agent's `decisions.json` on Jan–Jun 2026 with the icaif2026 simulator
 and the organizers' own metric calculator. You get the four metrics for one continuous
 run from $1M, and for every rolling 15-day window.
 

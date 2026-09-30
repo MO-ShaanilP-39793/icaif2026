@@ -99,8 +99,8 @@
   <div class="panel">
     <form id="form">
       <label>decisions.json <input id="file" type="file" accept=".json,application/json" required></label>
-      <label>start <input id="start" value="2026-01-02" pattern="\d{4}-\d{2}-\d{2}"></label>
-      <label>end <input id="end" value="2026-08-31" pattern="\d{4}-\d{2}-\d{2}"></label>
+      <label>start <input id="start" value="" pattern="\d{4}-\d{2}-\d{2}"></label>
+      <label>end <input id="end" value="" pattern="\d{4}-\d{2}-\d{2}"></label>
       <label>sizing
         <select id="sizing" title="pre_fee: targets sized on NAV before the 0.1% fee, so a fully invested book leaves cash slightly negative. post_fee: targets shrunk so the fee fits in cash. The rules don't say which the backend does."><option>pre_fee</option><option>post_fee</option></select></label>
       <label class="check"><input id="strict" type="checkbox"> strict: a missing or invalid round rejects the file</label>
@@ -181,7 +181,7 @@
     for (const path of manifest.files) contents[path] = await (await get(path)).arrayBuffer();
     worker.postMessage({ init: { contents, meta: manifest.meta } }, Object.values(contents));
   }
-  const boardSources = { references: [] };
+  const boardSources = { references: [], span: [] };
 
   // Entries are re-read on every load, never cached: a rank depends on the whole field,
   // and a stale index would rank a board that no longer exists.
@@ -229,7 +229,7 @@
       (r) => r.kind === "reference" ? "" : esc(r.submitted_at.replace("T", " ").replace("Z", " UTC")),
     ];
     const head = ["#", "strategy", "author", "mean score", "mean pos.", "wins",
-      ...METRICS.map((k) => LABELS[k] + " (Jan–Aug)"), ...METRICS.map((k) => LABELS[k] + " (median window)"),
+      ...METRICS.map((k) => LABELS[k] + " (holdout)"), ...METRICS.map((k) => LABELS[k] + " (median window)"),
       "versions", "submitted"];
     $("board").innerHTML = "<thead><tr>" + head.map((h) => `<th>${h}</th>`).join("") + "<th>note</th></tr></thead><tbody>" +
       b.rows.map((r) => `<tr class="${r.kind}">` + cols.map((c) => `<td>${c(r)}</td>`).join("") +
@@ -357,6 +357,9 @@
       $("go").disabled = false;
       const m = data.meta;
       $("prices").textContent = `Prices: Alpaca :30 fills, ${m.first_day} to ${m.last_day} (${m.snapshot}).`;
+      // The holdout span comes from the build (icaif/holdout.py), never a copy in this page.
+      [$("start").value, $("end").value] = m.holdout;
+      boardSources.span = m.holdout;
       loadBoard().catch((err) => {
         $("boardnote").innerHTML = `<span style="color:var(--bad)">Could not load the leaderboard: ${esc(err.message)}</span>`;
       });
@@ -376,7 +379,7 @@
       lastEntry = out.entry || null;
       $("subname").value = out.report ? out.report.strategy : "";
       $("substatus").textContent = out.rejected ? "" : out.entry ? "" :
-        "Only the board's span (2026-01-02 to 2026-08-31) at pre_fee sizing can be submitted; this run used other settings.";
+        `Only the board's span (${boardSources.span.join(" to ")}) at pre_fee sizing can be submitted; this run used other settings.`;
       refreshSubmit();
     }
   };

@@ -45,7 +45,7 @@ from icaif import calendar, kit, sim
 from icaif.windows import WINDOW_DAYS
 
 HOLDOUT_START = date(2026, 1, 2)
-HOLDOUT_END = date(2026, 8, 31)
+HOLDOUT_END = date(2026, 6, 30)
 CASH_TOLERANCE = Decimal("1e-9")
 METRICS = ("cumulative_return", "sharpe_ratio", "maximum_drawdown", "turnover")
 
