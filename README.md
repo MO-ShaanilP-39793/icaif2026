@@ -124,7 +124,8 @@ rolling 15-day windows, which amount to about 8 independent samples.
 **Leaderboard:** public, and viewable with no login: https://huggingface.co/spaces/MO-AI-Inv/icaif2026-leaderboard.
 It ranks prospective strategies against each other the way the contest does. Every entry
 is ranked in each of the 109 windows, and the board is ordered by mean Overall Rank Score,
-with the SE computed on ~8 independent windows.
+with the SE computed on ~8 independent windows. Each row shows each metric's distribution
+across windows as a histogram. Bins are shared down a column, so shapes compare row to row.
 - **References.** Three strategies are always on the board: cash, ew_hold and
   inv_vol_hold_75. They are scored natively at build time, each run fresh in every window.
 - **Submitting needs no sign-in.** Score a file on the private scorer, then use *Submit to

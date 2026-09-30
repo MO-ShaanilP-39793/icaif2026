@@ -41,6 +41,34 @@ def independent_windows(windows_df: pd.DataFrame) -> int:
     return n
 
 
+HIST_BINS = 16
+
+
+def histogram_edges(field: dict) -> dict:
+    """Per metric, one set of bin edges shared by every ranked entry.
+
+    Shared, not per row: the histograms are read against each other down a column, and
+    per-row edges would draw a tight and a wide distribution as the same shape.
+    """
+    edges = {}
+    for k in METRICS:
+        vals = [w[k] for e in field.values() for w in e["windows"]]
+        lo, hi = min(vals), max(vals)
+        if hi == lo:   # cash: every window 0. One bin centred on the value, not a crash.
+            lo, hi = lo - 0.5e-3, hi + 0.5e-3
+        step = (hi - lo) / HIST_BINS
+        edges[k] = [lo + i * step for i in range(HIST_BINS)] + [hi]
+    return edges
+
+
+def histogram(entry: dict, metric: str, edges: list[float]) -> list[int]:
+    counts = [0] * (len(edges) - 1)
+    for w in entry["windows"]:
+        i = sum(w[metric] >= e for e in edges[1:-1])   # right-open bins, last one closed
+        counts[i] += 1
+    return counts
+
+
 class EntryError(ValueError):
     pass
 
@@ -149,6 +177,9 @@ def standings(entries: list[dict]) -> dict:
             **{f"median_window_{k}": float(pd.Series([w[k] for w in e["windows"]]).median())
                for k in METRICS},
         })
+    edges = histogram_edges(field)
+    for r in rows:
+        r["hist"] = {k: histogram(field[r["strategy"]], k, edges[k]) for k in METRICS}
     rows.sort(key=lambda r: (r["mean_overall_score"], -r["continuous_cumulative_return"]))
     for i, r in enumerate(rows, start=1):
         r["rank"] = i
@@ -159,5 +190,6 @@ def standings(entries: list[dict]) -> dict:
          for e in entries if e.get("kind") == SUBMITTED),
         key=lambda h: h["submitted_at"], reverse=True)
     return {"span": board_span, "sizing": BOARD_SIZING, "windows": len(board_windows),
+            "bins": edges,
             "independent_windows": n_independent,
             "entrants": len(rows), "rows": rows, "excluded": excluded, "history": history}

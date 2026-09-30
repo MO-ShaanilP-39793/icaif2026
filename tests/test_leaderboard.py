@@ -84,3 +84,19 @@ def test_float_dust_does_not_split_a_tie_the_kits_decimals_would_call():
 def test_a_board_without_references_refuses_rather_than_ranking_submissions_alone():
     with pytest.raises(lb.EntryError, match="reference"):
         lb.standings([_entry("a", [(0, 0, 0, 0)] * 3)])
+
+
+def test_every_rows_histogram_uses_the_same_bins_and_counts_every_window():
+    """Per-row bins would draw a tight and a wide distribution as the same shape, so a
+    column of histograms would compare nothing. A dropped window would understate a tail."""
+    a = _entry("a", [(0.02, 2.0, 0.01, 0.05), (-0.01, -1.0, 0.03, 0.05), (0.03, 3.0, 0.01, 0.05)])
+    b = lb.standings([CASH, EW, a])
+    for k in lb.METRICS:
+        edges = b["bins"][k]
+        assert len(edges) == lb.HIST_BINS + 1 and edges == sorted(edges)
+        for r in b["rows"]:
+            assert sum(r["hist"][k]) == 3
+    # The max lands in the last bin (closed on the right), the min in the first.
+    ra = next(r for r in b["rows"] if r["strategy"] == "a")
+    assert ra["hist"]["cumulative_return"][-1] == 1
+    assert next(r for r in b["rows"] if r["strategy"] == "cash")["hist"]["turnover"][0] == 3

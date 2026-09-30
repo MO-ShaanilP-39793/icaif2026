@@ -6,117 +6,171 @@
 <title>ICAIF Holdout Leaderboard</title>
 <style>
   :root {
-    --bg: #f7f7f5; --panel: #ffffff; --ink: #1c1d1f; --muted: #6b6f76;
-    --line: #e2e2de; --accent: #2f5f9e; --bad: #b3261e; --warn: #8a5a00;
-    --warn-bg: #fff4dc; --bad-bg: #fdecea;
+    color-scheme: light;
+    --bg: #f6f6f3; --panel: #ffffff; --ink: #151618; --ink-2: #4a4c50; --muted: #74777d;
+    --line: #e4e3de; --line-2: #eeede9; --accent: #2a78d6; --bad: #b3261e;
+    --warn: #8a5a00; --warn-bg: #fff4dc;
+    --hist: #2a78d6; --hist-muted: #bdbbb3; --chip: #f0efeb;
   }
   @media (prefers-color-scheme: dark) {
     :root:not([data-theme="light"]) {
-      --bg: #141517; --panel: #1d1f22; --ink: #e8e8e6; --muted: #9aa0a8;
-      --line: #2e3136; --accent: #7aa7e6; --bad: #f28b82; --warn: #f0c46c;
-      --warn-bg: #3a2f14; --bad-bg: #3b1f1d;
+      color-scheme: dark;
+      --bg: #121314; --panel: #1b1c1e; --ink: #ededeb; --ink-2: #c3c2b7; --muted: #92959b;
+      --line: #2c2e32; --line-2: #25272a; --accent: #3987e5; --bad: #f28b82;
+      --warn: #f0c46c; --warn-bg: #3a2f14;
+      --hist: #3987e5; --hist-muted: #5b5c58; --chip: #26282b;
     }
   }
   :root[data-theme="dark"] {
-    --bg: #141517; --panel: #1d1f22; --ink: #e8e8e6; --muted: #9aa0a8;
-    --line: #2e3136; --accent: #7aa7e6; --bad: #f28b82; --warn: #f0c46c;
-    --warn-bg: #3a2f14; --bad-bg: #3b1f1d;
+    color-scheme: dark;
+    --bg: #121314; --panel: #1b1c1e; --ink: #ededeb; --ink-2: #c3c2b7; --muted: #92959b;
+    --line: #2c2e32; --line-2: #25272a; --accent: #3987e5; --bad: #f28b82;
+    --warn: #f0c46c; --warn-bg: #3a2f14;
+    --hist: #3987e5; --hist-muted: #5b5c58; --chip: #26282b;
   }
   * { box-sizing: border-box; }
   body { margin: 0; background: var(--bg); color: var(--ink);
-         font: 15px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
-  main { max-width: 1000px; margin: 0 auto; padding: 24px 16px 64px; }
-  h1 { font-size: 22px; margin: 0 0 4px; }
-  h2 { font-size: 16px; margin: 28px 0 8px; }
-  p.sub { color: var(--muted); margin: 0 0 20px; }
-  code { font: 13px ui-monospace, SFMono-Regular, Menlo, monospace; }
-  .panel { background: var(--panel); border: 1px solid var(--line); border-radius: 8px;
-           padding: 16px; }
-  form { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
-         gap: 12px 16px; align-items: end; }
-  label { display: flex; flex-direction: column; gap: 4px; font-size: 13px; color: var(--muted); }
-  label.check { flex-direction: row; align-items: center; gap: 8px; color: var(--ink); }
-  input, select, button { font: inherit; color: var(--ink); background: var(--bg);
-                          border: 1px solid var(--line); border-radius: 6px; padding: 7px 9px; }
-  input[type=file] { padding: 5px; }
-  button { background: var(--accent); color: #fff; border-color: var(--accent);
-           cursor: pointer; font-weight: 600; }
-  button:disabled { opacity: .5; cursor: default; }
-  #status { color: var(--muted); margin: 12px 0 0; min-height: 1.5em; }
-  .note { padding: 10px 12px; border-radius: 6px; margin: 12px 0 0; }
-  .warn { background: var(--warn-bg); color: var(--warn); }
-  .bad { background: var(--bad-bg); color: var(--bad); }
-  .bad pre { white-space: pre-wrap; margin: 6px 0 0; font: 13px ui-monospace, Menlo, monospace; }
-  .tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px; }
-  .tile .k { font-size: 12px; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; }
-  .tile .v { font-size: 24px; font-weight: 600; font-variant-numeric: tabular-nums; }
+         font: 14px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Inter, sans-serif; }
+  main { max-width: 1320px; margin: 0 auto; padding: 32px 16px 72px; }
+  header { display: flex; flex-wrap: wrap; gap: 8px 24px; align-items: baseline; justify-content: space-between; }
+  h1 { font-size: 24px; letter-spacing: -0.01em; margin: 0; }
+  h2 { font-size: 15px; margin: 32px 0 10px; }
+  .sub { color: var(--ink-2); margin: 6px 0 0; max-width: 760px; }
+  .muted { color: var(--muted); font-size: 12.5px; }
+  code { font: 12.5px ui-monospace, SFMono-Regular, Menlo, monospace; }
+  .panel { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; }
+
+  .facts { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px; margin: 22px 0 18px; }
+  .fact { padding: 12px 14px; }
+  .fact .k { font-size: 12px; color: var(--muted); }
+  .fact .v { font-size: 20px; font-weight: 600; margin-top: 2px; }
+  .fact .d { font-size: 12px; color: var(--muted); }
+
   .scroll { overflow-x: auto; }
-  .tall { max-height: 420px; overflow-y: auto; }
-  table { border-collapse: collapse; width: 100%; font-variant-numeric: tabular-nums; font-size: 13px; }
-  th, td { padding: 6px 10px; border-bottom: 1px solid var(--line); text-align: right; white-space: nowrap; }
-  th:first-child, td:first-child { text-align: left; }
-  thead th { position: sticky; top: 0; background: var(--panel); color: var(--muted); font-weight: 600; }
-  .downloads a { margin-right: 14px; color: var(--accent); }
-  .muted { color: var(--muted); font-size: 13px; }
-  .authbar { display: flex; gap: 12px; align-items: center; justify-content: flex-end; margin: -8px 0 4px; }
-  button.secondary { background: var(--panel); color: var(--accent); border-color: var(--line); }
-  #submitform { grid-template-columns: 1fr 2fr auto; }
-  @media (max-width: 640px) { #submitform { grid-template-columns: 1fr; } #submitform label { grid-column: auto !important; } }
-  .ref { font-size: 11px; color: var(--muted); border: 1px solid var(--line); border-radius: 4px;
-         padding: 0 5px; margin-left: 6px; }
-  tr.reference td { color: var(--muted); }
-  #board th:nth-child(2), #board td:nth-child(2), #board th:nth-child(3), #board td:nth-child(3),
-  #history th:nth-child(2), #history td:nth-child(2), #history th:nth-child(3), #history td:nth-child(3) { text-align: left; }
-  td.note { max-width: 320px; }
-  td.note { white-space: normal; min-width: 200px; text-align: left; color: var(--muted); }
+  table { border-collapse: collapse; width: 100%; }
+  th, td { padding: 11px 10px; border-bottom: 1px solid var(--line-2); vertical-align: middle; text-align: left; }
+  tbody tr:last-child td { border-bottom: 0; }
+  thead th { font-size: 12px; font-weight: 600; color: var(--muted); background: var(--panel);
+             position: sticky; top: 0; z-index: 1; border-bottom: 1px solid var(--line); white-space: nowrap; }
+  thead th .range { display: block; font-weight: 400; font-variant-numeric: tabular-nums; }
+  td.rank { width: 36px; color: var(--muted); font-variant-numeric: tabular-nums; }
+  tr.top td.rank { color: var(--ink); font-weight: 700; }
+  td.name { min-width: 190px; max-width: 250px; }
+  .sname { font-weight: 600; }
+  .chip { display: inline-block; font-size: 11px; color: var(--muted); background: var(--chip);
+          border-radius: 4px; padding: 0 6px; margin-left: 6px; vertical-align: 1px; }
+  .by { color: var(--muted); font-size: 12px; }
+  .note { color: var(--ink-2); font-size: 12.5px; margin-top: 3px; }
+  .held { color: var(--warn); font-size: 12px; }
+  td.score { white-space: nowrap; font-variant-numeric: tabular-nums; }
+  .big { font-size: 18px; font-weight: 600; }
+  .pm { color: var(--muted); font-size: 12px; }
+  td.metric { white-space: nowrap; }
+  .cap { font-size: 12px; color: var(--ink-2); font-variant-numeric: tabular-nums; margin-top: 2px; }
+  .cap span { color: var(--muted); }
+  tr.reference .sname { color: var(--ink-2); }
+
+  svg.hist { display: block; overflow: visible; }
+  .hist-base { stroke: var(--line); stroke-width: 1; }
+  .hist-zero { stroke: var(--line); stroke-width: 1; }
+  .hist-median { stroke: var(--ink); stroke-width: 1.5; }
+  .hist-tip { position: fixed; pointer-events: none; z-index: 10; background: var(--ink); color: var(--panel);
+              font-size: 12px; padding: 4px 8px; border-radius: 6px; white-space: nowrap; }
+  .legend { display: flex; flex-wrap: wrap; gap: 6px 18px; align-items: center; margin: 10px 2px 0; }
+  .legend i { display: inline-block; vertical-align: middle; margin-right: 6px; }
+  .key-bar { width: 10px; height: 10px; border-radius: 2px 2px 0 0; background: var(--hist); }
+  .key-ref { width: 10px; height: 10px; border-radius: 2px 2px 0 0; background: var(--hist-muted); }
+  .key-med { width: 2px; height: 12px; background: var(--ink); }
+
+  .note-box { padding: 10px 12px; border-radius: 8px; margin: 12px 0 0; background: var(--warn-bg); color: var(--warn); }
+  #status { padding: 28px 14px; color: var(--muted); }
+  details summary { cursor: pointer; color: var(--ink-2); }
+  #history td, #history th { padding: 7px 12px; font-size: 12.5px; font-variant-numeric: tabular-nums; }
+  .how { padding: 16px 18px; color: var(--ink-2); }
+  .how p { margin: 0 0 8px; } .how p:last-child { margin: 0; }
   [hidden] { display: none !important; }
 </style>
 </head>
 <body>
 <main>
-  <h1>ICAIF 2026 holdout leaderboard</h1>
-  <p class="sub">Prospective strategies for the ICAIF 2026 trading-agent competition, ranked on
-    held-out 2026 data the way the contest ranks them. Read-only; entries are submitted from
-    the team's scorer.</p>
+  <header>
+    <div>
+      <h1>ICAIF 2026 holdout leaderboard</h1>
+      <p class="sub">Prospective strategies for the ICAIF 2026 trading-agent competition, ranked on
+        held-out 2026 data the way the contest ranks them: every entrant against every other,
+        in every 15-day window.</p>
+    </div>
+    <span class="muted">Read-only · submitted from the team's scorer</span>
+  </header>
 
-  <p class="muted" id="boardnote">Loading…</p>
-  <div class="panel scroll"><table id="board"></table></div>
+  <div class="facts" id="facts"></div>
+
+  <div class="panel scroll">
+    <div id="status">Loading…</div>
+    <table id="board" hidden></table>
+  </div>
+  <div class="legend muted" id="legend" hidden>
+    <span><i class="key-bar"></i>windows, submitted entry</span>
+    <span><i class="key-ref"></i>windows, reference</span>
+    <span><i class="key-med"></i>median window</span>
+    <span>Bins are shared down each column; each histogram is scaled to its own tallest bar. Hover a bar for its range and count.</span>
+  </div>
   <div id="excluded"></div>
-  <details class="muted" style="margin-top:10px"><summary>Every submission, newest first</summary>
-    <div class="panel scroll tall" style="margin-top:8px"><table id="history"></table></div></details>
+
+  <h2>Every submission</h2>
+  <details class="panel" style="padding: 10px 14px"><summary>Newest first, including superseded versions</summary>
+    <div class="scroll" style="margin-top: 8px"><table id="history"></table></div></details>
 
   <h2>How it ranks</h2>
-  <div class="panel"><p class="muted" style="margin:0">In every rolling 15-day window of the
-    holdout, each entrant is ranked on cumulative return and Sharpe (higher is better) and on
-    maximum drawdown and turnover (lower is better), with ties sharing the average rank. The
-    Overall Rank Score is the mean of the four ranks, and the board orders entrants by its mean
-    across windows. The references are three fixed strategies: cash, equal-weight buy-and-hold
-    and inverse-volatility at 75% gross. Only each strategy's newest version is ranked; every
-    version is listed below the board.</p></div>
+  <div class="panel how">
+    <p>In each rolling 15-day window of the holdout, entrants are ranked on cumulative return and
+      Sharpe (higher is better) and on maximum drawdown and turnover (lower is better), with ties
+      sharing the average rank. A window's Overall Rank Score is the mean of the four ranks; the
+      board orders entrants by its mean across windows, lower first.</p>
+    <p>Neighbouring windows share 14 of 15 days, so the ± is a standard error on the number of
+      windows that share no day. Two entrants within about two of it are not ordered. Ranks are
+      relative to the board: a new entrant can reorder the rest, as a real field would.</p>
+    <p>The references are fixed strategies run fresh in every window: cash, equal-weight
+      buy-and-hold, and inverse-volatility at 75% gross. Only each strategy's newest version is
+      ranked; every version is listed above.</p>
+  </div>
 </main>
 
+<!--HIST-->
 <script>
   const METRICS = ["cumulative_return", "sharpe_ratio", "maximum_drawdown", "turnover"];
   const LABELS = { cumulative_return: "Return", sharpe_ratio: "Sharpe",
                    maximum_drawdown: "Max drawdown", turnover: "Turnover" };
-  const pct = (v) => (v * 100).toFixed(2) + "%";
-  const fmt = (k, v) => (v === null || v === undefined) ? "" :
-    (k === "sharpe_ratio" ? v.toFixed(3) : pct(v));
+  const HIGHER = { cumulative_return: "higher is better", sharpe_ratio: "higher is better",
+                   maximum_drawdown: "lower is better", turnover: "lower is better" };
   const $ = (id) => document.getElementById(id);
   const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
-  const boardSources = { references: [] };
+  const fmtFull = (k, v) => k === "sharpe_ratio" ? v.toFixed(2) : (v * 100).toFixed(2) + "%";
+  const when = (iso) => iso ? new Date(iso).toLocaleDateString(undefined, { day: "numeric", month: "short", year: "numeric" }) : "";
+  // "2 Jan – 30 Jun 2026": the year once, so the tile stays one line.
+  const span = ([a, z]) => {
+    const f = (iso, y) => new Date(iso + "T12:00:00Z").toLocaleDateString(undefined,
+      { day: "numeric", month: "short", ...(y ? { year: "numeric" } : {}) });
+    return a.slice(0, 4) === z.slice(0, 4) ? `${f(a, false)} – ${f(z, true)}` : `${f(a, true)} – ${f(z, true)}`;
+  };
+  const fail = (msg) => { $("status").innerHTML = `<span style="color:var(--bad)">${esc(msg)}</span>`; };
   // Entries are re-read on every load, never cached: a rank depends on the whole field.
   const get = (path) => fetch(path, { cache: "no-store" });
+  let references = [];
 
   const worker = new Worker("worker.js");
-  worker.onerror = (e) => {
-    $("boardnote").innerHTML = `<span style="color:var(--bad)">Could not start Python: ${esc(e.message || "the worker failed to load")}.
-      The page needs cdn.jsdelivr.net for Pyodide.</span>`;
+  worker.onerror = (e) => fail(`Could not start Python: ${e.message || "the worker failed to load"}. The page needs cdn.jsdelivr.net for Pyodide.`);
+  worker.onmessage = ({ data }) => {
+    if (data.status) $("status").textContent = data.status;
+    if (data.fatal) fail(`Could not start: ${data.fatal}`);
+    if (data.ready) loadBoard().catch((err) => fail(`Could not load the leaderboard: ${err.message}`));
+    if (data.board) render(JSON.parse(data.board));
+    if (data.boardError) fail(`Could not rank: ${data.boardError}`);
   };
 
   async function start() {
     const manifest = await (await get("manifest.json")).json();
-    boardSources.references = manifest.references;
+    references = manifest.references;
     const contents = {};
     for (const path of manifest.files) {
       const r = await get(path);
@@ -128,7 +182,7 @@
 
   async function loadBoard() {
     const texts = [];
-    for (const p of boardSources.references) {
+    for (const p of references) {
       const r = await get(p);
       if (!r.ok) throw new Error(`HTTP ${r.status} fetching ${p}`);
       texts.push(await r.text());
@@ -142,61 +196,58 @@
       if (!r.ok) throw new Error(`HTTP ${r.status} fetching ${p}`);
       texts.push(await r.text());
     }
-    $("boardnote").textContent = `Ranking ${entries.length} submission(s) and ${boardSources.references.length} references…`;
+    $("status").textContent = `Ranking ${entries.length} submission(s) and ${references.length} references…`;
     worker.postMessage({ board: texts });
   }
 
-  function renderBoard(b) {
-    boardSources.referenceNames = b.rows.filter((r) => r.kind === "reference").map((r) => r.strategy);
-    if (b.error) { $("boardnote").innerHTML = `<span style="color:var(--bad)">${esc(b.error)}</span>`; return; }
-    $("boardnote").textContent = `${b.span[0]} to ${b.span[1]}, ${b.sizing} sizing. ${b.entrants} entrants ranked
-      against each other in each of ${b.windows} rolling 15-day windows (about ${b.independent_windows} independent),
-      the contest's rules per window. Lower mean score is better. SE is on the independent count, so two
-      entries within ~2 SE are not ordered. Ranks are relative to this board: a new entry can reorder the rest.`;
-    const cols = [
-      (r) => r.rank,
-      (r) => esc(r.strategy) + (r.kind === "reference" ? '<span class="ref">reference</span>' : ""),
-      (r) => esc(r.author),
-      (r) => `${r.mean_overall_score.toFixed(2)} ± ${r.se_overall_score.toFixed(2)}`,
-      (r) => r.mean_position.toFixed(2),
-      (r) => r.wins,
-      ...METRICS.map((k) => (r) => fmt(k, r["continuous_" + k])),
-      ...METRICS.map((k) => (r) => fmt(k, r["median_window_" + k])),
-      (r) => r.kind === "reference" ? "" : r.versions,
-      (r) => r.kind === "reference" ? "" : esc(r.submitted_at.replace("T", " ").replace("Z", " UTC")),
-    ];
-    const head = ["#", "strategy", "author", "mean score", "mean pos.", "wins",
-      ...METRICS.map((k) => LABELS[k] + " (holdout)"), ...METRICS.map((k) => LABELS[k] + " (median window)"),
-      "versions", "submitted"];
-    $("board").innerHTML = "<thead><tr>" + head.map((h) => `<th>${h}</th>`).join("") + "<th>note</th></tr></thead><tbody>" +
-      b.rows.map((r) => `<tr class="${r.kind}">` + cols.map((c) => `<td>${c(r)}</td>`).join("") +
-        `<td class="note">${esc(r.note)}${r.missing_rounds || r.invalid_rounds ? ` · held ${r.missing_rounds} missing, ${r.invalid_rounds} invalid` : ""}</td></tr>`).join("") +
-      "</tbody>";
-    $("excluded").innerHTML = b.excluded.length ? `<div class="note warn"><strong>Not ranked:</strong> ` +
+  function render(b) {
+    if (b.error) return fail(b.error);
+    const submitted = b.rows.filter((r) => r.kind !== "reference");
+    const latest = b.history.length ? b.history[0].submitted_at : "";
+    $("facts").innerHTML = [
+      ["Entrants", b.entrants, `${submitted.length} submitted · ${b.entrants - submitted.length} references`],
+      ["Holdout", span(b.span), `${b.sizing} sizing`],
+      ["Windows", b.windows, `about ${b.independent_windows} share no day`],
+      ["Last submission", latest ? when(latest) : "none yet", `${b.history.length} submission(s) in all`],
+    ].map(([k, v, d]) => `<div class="panel fact"><div class="k">${k}</div><div class="v">${esc(v)}</div><div class="d">${esc(d)}</div></div>`).join("");
+
+    const head = `<thead><tr><th>#</th><th>Strategy</th><th>Score<span class="range">mean rank, lower is better</span></th>` +
+      METRICS.map((k) => `<th>${LABELS[k]} by window<span class="range">${HIST.fmt(k, b.bins[k][0])} to ${HIST.fmt(k, b.bins[k][b.bins[k].length - 1])} · ${HIGHER[k]}</span></th>`).join("") +
+      `</tr></thead>`;
+    const body = b.rows.map((r, i) => {
+      const ref = r.kind === "reference";
+      const by = ref ? "reference strategy" :
+        `${esc(r.author)} · ${when(r.submitted_at)}${r.versions > 1 ? ` · v${r.versions}` : ""}`;
+      const held = r.missing_rounds || r.invalid_rounds ? `<div class="held">held ${r.missing_rounds} missing, ${r.invalid_rounds} invalid round(s)</div>` : "";
+      const metrics = METRICS.map((k) => {
+        const zero = k === "cumulative_return" || k === "sharpe_ratio" ? 0 : null;
+        return `<td class="metric">${HIST.svg({ counts: r.hist[k], edges: b.bins[k], metric: k,
+          median: r["median_window_" + k], zero, muted: ref, w: 116, h: 36 })}` +
+          `<div class="cap">${fmtFull(k, r["median_window_" + k])} <span>median · ${fmtFull(k, r["continuous_" + k])} full span</span></div></td>`;
+      }).join("");
+      return `<tr class="${r.kind}${i === 0 ? " top" : ""}"><td class="rank">${r.rank}</td>` +
+        `<td class="name"><span class="sname">${esc(r.strategy)}</span>${ref ? '<span class="chip">reference</span>' : ""}` +
+        `<div class="by">${by}</div>${r.note ? `<div class="note">${esc(r.note)}</div>` : ""}${held}</td>` +
+        `<td class="score"><span class="big">${r.mean_overall_score.toFixed(2)}</span> <span class="pm">± ${r.se_overall_score.toFixed(2)}</span>` +
+        `<div class="cap"><span>${r.wins} window wins · mean place ${r.mean_position.toFixed(1)}</span></div></td>${metrics}</tr>`;
+    }).join("");
+    $("board").innerHTML = head + "<tbody>" + body + "</tbody>";
+    $("board").hidden = false; $("status").hidden = true; $("legend").hidden = false;
+
+    $("excluded").innerHTML = b.excluded.length ? `<div class="note-box"><strong>Not ranked:</strong> ` +
       b.excluded.map((e) => `${esc(e.strategy)} (${esc(e.reason)})`).join("; ") + "</div>" : "";
-    table($("history"), [(h) => h.submitted_at.replace("T", " ").replace("Z", ""), (h) => h.strategy, (h) => h.author,
-      ...METRICS.map((k) => (h) => fmt(k, h["continuous_" + k])), (h) => h.ranked ? "ranked" : ""],
-      b.history, ["submitted (UTC)", "strategy", "author", ...METRICS.map((k) => LABELS[k]), ""]);
+
+    $("history").innerHTML = "<thead><tr><th>Submitted (UTC)</th><th>Strategy</th><th>Author</th>" +
+      METRICS.map((k) => `<th>${LABELS[k]}, full span</th>`).join("") + "<th></th></tr></thead><tbody>" +
+      (b.history.length ? b.history.map((h) => `<tr><td>${esc(h.submitted_at.replace("T", " ").replace("Z", ""))}</td>` +
+        `<td>${esc(h.strategy)}</td><td>${esc(h.author)}</td>` +
+        METRICS.map((k) => `<td>${fmtFull(k, h["continuous_" + k])}</td>`).join("") +
+        `<td class="muted">${h.ranked ? "ranked" : "superseded"}</td></tr>`).join("")
+        : `<tr><td colspan="7" class="muted">Nothing submitted yet.</td></tr>`) + "</tbody>";
   }
 
-  function table(el, cols, rows, head) {
-    el.innerHTML = "<thead><tr>" + head.map((h) => `<th>${esc(h)}</th>`).join("") + "</tr></thead><tbody>" +
-      rows.map((r) => "<tr>" + cols.map((c) => `<td>${esc(c(r))}</td>`).join("") + "</tr>").join("") + "</tbody>";
-  }
-
-
-  worker.onmessage = ({ data }) => {
-    if (data.status) $("boardnote").textContent = data.status;
-    if (data.fatal) $("boardnote").innerHTML = `<span style="color:var(--bad)">Could not start: ${esc(data.fatal)}</span>`;
-    if (data.ready) loadBoard().catch((err) => {
-      $("boardnote").innerHTML = `<span style="color:var(--bad)">Could not load the leaderboard: ${esc(err.message)}</span>`;
-    });
-    if (data.board) renderBoard(JSON.parse(data.board));
-    if (data.boardError) $("boardnote").innerHTML = `<span style="color:var(--bad)">Could not rank: ${esc(data.boardError)}</span>`;
-  };
-  start().catch((err) => {
-    $("boardnote").innerHTML = `<span style="color:var(--bad)">Could not load the board: ${esc(err.message)}</span>`;
-  });
+  HIST.installTooltips();
+  start().catch((err) => fail(`Could not load the board: ${err.message}`));
 </script>
 </body>
 </html>

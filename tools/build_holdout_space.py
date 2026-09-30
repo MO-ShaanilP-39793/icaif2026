@@ -77,6 +77,7 @@ def build(out: Path) -> dict:
         shutil.copy2(data.ROOT / "starter-kit" / f, out / "starter-kit" / f)
     for f in SPACE_FILES:
         shutil.copy2(data.ROOT / "space" / f, out / f)
+    inline_hist(out / "index.html")
 
     market = markets.research_market("alpaca")
     since = market.exec_prices.index >= PRICES_FROM
@@ -98,12 +99,27 @@ def build(out: Path) -> dict:
     return meta, market, snapshot
 
 
+def inline_hist(page: Path) -> None:
+    """Put space/hist.js into the page itself, at its <!--HIST--> marker.
+
+    Inlined rather than served: on the private Space a separately fetched script
+    depends on HF's auth reaching that request too, and one fewer file is one fewer
+    thing the board's allowlist must name.
+    """
+    html = page.read_text()
+    if html.count("<!--HIST-->") != 1:
+        sys.exit(f"{page} must have exactly one <!--HIST--> marker")
+    js = (data.ROOT / "space" / "hist.js").read_text()
+    page.write_text(html.replace("<!--HIST-->", f"<script>\n{js}</script>"))
+
+
 def build_board(out: Path, market, snapshot: str) -> None:
     if out.exists():
         shutil.rmtree(out)
     (out / "icaif").mkdir(parents=True)
     for dst, src in BOARD_FILES.items():
         shutil.copy2(data.ROOT / src, out / dst)
+    inline_hist(out / "index.html")
     refs = write_references(out, market, snapshot)
     (out / "manifest.json").write_text(json.dumps(
         {"files": BOARD_PY, "module": "boardapp", "references": refs,
