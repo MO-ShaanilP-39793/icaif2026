@@ -15,8 +15,9 @@ Space is static: HF hosts Gradio Spaces only on a paid plan. The build scores th
 template natively through the page's own entry point (space/webapp.py) and requires
 the CLI's numbers, so the only step not checked here is Pyodide itself.
 
---push refuses a Space that exists and is public. The upload mirrors the folder, so
-files dropped from the allowlist are deleted remotely too.
+The build also scores the leaderboard's reference strategies natively, since they need
+information bars the page doesn't ship. --push deploys through `space_hub.publish`. It
+refuses a public Space and mirrors the folder, but never touches submitted entries.
 """
 
 import argparse
@@ -31,12 +32,13 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "space"))
 
 import webapp  # noqa: E402
-from icaif import calendar, data, holdout, markets  # noqa: E402
+from icaif import baselines, calendar, data, holdout, leaderboard, markets, sim, space_hub  # noqa: E402
 
-REPO_ID = "MO-AI-Inv/icaif2026-holdout"
+REPO_ID = space_hub.REPO_ID
 # Static because a Gradio Space needs a paid plan: Team/Enterprise for the org, PRO for
 # a personal account. Both refused with HF 402 on 2026-09-30.
-ICAIF_MODULES = ["__init__", "calendar", "data", "holdout", "kit", "ranking", "sim", "windows"]
+ICAIF_MODULES = ["__init__", "calendar", "data", "holdout", "kit", "leaderboard", "ranking",
+                 "sim", "windows"]
 KIT_FILES = ["kit/__init__.py", "kit/config.py", "kit/contracts.py", "kit/evaluation.py",
              "universe.json"]
 SPACE_FILES = ["index.html", "worker.js", "webapp.py", "README.md"]
@@ -76,8 +78,39 @@ def build(out: Path) -> dict:
     missing = [f for f in PY_FILES if not (out / f).exists()]
     if missing:
         sys.exit(f"manifest names files the build did not write: {missing}")
-    (out / "manifest.json").write_text(json.dumps({"files": PY_FILES, "meta": meta}, indent=1))
+    refs = write_references(out, market, snapshot)
+    (out / "manifest.json").write_text(json.dumps(
+        {"files": PY_FILES, "references": refs, "meta": meta}, indent=1))
     return meta
+
+
+# The leaderboard's anchors. Each runs as itself, fresh in every window, not replayed
+# from a file. inv_vol_hold_75 is the best baseline found so far (README: Baselines vs
+# the field); cash and ew_hold are the do-nothing corners.
+REFERENCES = {
+    "cash": (baselines.Cash, "Never trades."),
+    "ew_hold": (baselines.EqualWeightHold, "Buys 1/30 of each stock at the first round, then holds."),
+    "inv_vol_hold_75": (baselines.scaled(baselines.InverseVolHold, 0.75),
+                        "Inverse-vol weights at 75% gross, bought once and held."),
+}
+
+
+def write_references(out: Path, market, snapshot: str) -> list[str]:
+    (out / "references").mkdir()
+    start, end = holdout.HOLDOUT_START, holdout.HOLDOUT_END
+    days = holdout.span_days(market, start, end)
+    paths = []
+    for name, (factory, note) in REFERENCES.items():
+        res = sim.run(factory(), market, days[0], len(days))
+        wins, _ = holdout.rolling_runs(factory, market, start, end)
+        entry = leaderboard.make_entry(
+            name, leaderboard.REFERENCE, {**res.metrics(), "invalid_rounds": len(res.invalid_rounds)},
+            wins, span=(start, end), sizing=leaderboard.BOARD_SIZING,
+            market_snapshot=snapshot, author="baseline", note=note, submitted_at="")
+        path = f"references/{name}.json"
+        (out / path).write_text(json.dumps(entry))
+        paths.append(path)
+    return paths
 
 
 def check(out: Path) -> None:
@@ -92,7 +125,7 @@ sys.path = [p for p in sys.path if p not in ("", {str(data.ROOT)!r}, {str(data.R
 sys.path.insert(0, {str(out)!r})
 import json, pandas as pd
 import webapp
-from icaif import holdout
+from icaif import holdout, leaderboard
 loaded = sorted(m for m in sys.modules if m.startswith("icaif"))
 outside = [m for m, mod in sys.modules.items() if m.startswith(("icaif", "kit"))
            and getattr(mod, "__file__", None) and not mod.__file__.startswith({str(out)!r})]
@@ -152,32 +185,19 @@ def parity(out: Path) -> None:
     print(f"page entry point matches the CLI: continuous run and {len(b_roll)} windows (to 1e-12)")
 
 
-def push(out: Path, repo_id: str) -> None:
-    import truststore
-    truststore.inject_into_ssl()
-    from huggingface_hub import HfApi
-    from huggingface_hub.utils import RepositoryNotFoundError
-
-    api = HfApi()
-    try:
-        info = api.repo_info(repo_id, repo_type="space")
-        if not info.private:
-            sys.exit(f"{repo_id} exists and is PUBLIC; refusing to upload prices to it")
-    except RepositoryNotFoundError:
-        api.create_repo(repo_id, repo_type="space", space_sdk="static", private=True)
-    api.upload_folder(folder_path=str(out), repo_id=repo_id, repo_type="space",
-                      delete_patterns="*", commit_message="Rebuild from icaif2026")
-    if not api.repo_info(repo_id, repo_type="space").private:
-        sys.exit(f"{repo_id} is public after upload; make it private now")
-    print(f"uploaded to https://huggingface.co/spaces/{repo_id} (private)")
-
-
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--out", type=Path, default=data.ROOT / "output" / "space")
     ap.add_argument("--push", action="store_true")
     ap.add_argument("--repo-id", default=REPO_ID)
+    ap.add_argument("--sync", action="store_true",
+                    help="only copy dataset entries missing from the Space (needs downloads, "
+                         "so not on the office network), then stop")
     args = ap.parse_args()
+    if args.sync:
+        copied = space_hub.sync(args.repo_id)
+        print(f"copied {len(copied)} entries to the Space: {copied}")
+        return
 
     meta = build(args.out)
     print(f"built {args.out}: prices {meta['first_day']}..{meta['last_day']} "
@@ -185,7 +205,7 @@ def main() -> None:
     check(args.out)
     parity(args.out)
     if args.push:
-        push(args.out, args.repo_id)
+        space_hub.publish(args.out, args.repo_id)
 
 
 if __name__ == "__main__":

@@ -39,6 +39,15 @@ const ready = boot().catch((err) => {
 onmessage = async (event) => {
   if (event.data.init) return files(event.data.init);
   const py = await ready;
+  if (event.data.board) {
+    try {
+      py.globals.set("_board_texts", py.toPy(event.data.board));
+      postMessage({ board: py.runPython("webapp.board(list(_board_texts))") });
+    } catch (err) {
+      postMessage({ boardError: String(err) });
+    }
+    return;
+  }
   const { name, text, start, end, strict, sizing } = event.data;
   try {
     // Keep the uploaded file's own name: it becomes the strategy name when the file

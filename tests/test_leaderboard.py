@@ -1,0 +1,86 @@
+import pandas as pd
+import pytest
+
+from icaif import leaderboard as lb
+from icaif import ranking
+
+WINDOWS = [("2026-01-02", "2026-01-23"), ("2026-01-05", "2026-01-26"), ("2026-01-06", "2026-01-27")]
+SPAN = ("2026-01-02", "2026-08-31")
+
+
+def _entry(name, per_window, kind=lb.SUBMITTED, at="2026-09-30T10:00:00Z", **kw):
+    """`per_window`: one (return, sharpe, mdd, turnover) tuple per window."""
+    wins = pd.DataFrame([{"window_start": s, "window_end": e,
+                          **dict(zip(lb.METRICS, m))} for (s, e), m in zip(WINDOWS, per_window)])
+    cont = dict(zip(lb.METRICS, per_window[0]))
+    args = dict(span=SPAN, sizing="pre_fee", market_snapshot="snap", author="a",
+                submitted_at=at)
+    args.update(kw)
+    return lb.make_entry(name, kind, cont, wins, **args)
+
+
+CASH = _entry("cash", [(0, 0, 0, 0)] * 3, kind=lb.REFERENCE, submitted_at="")
+EW = _entry("ew_hold", [(0.01, 1.0, 0.02, 0.01)] * 3, kind=lb.REFERENCE, submitted_at="")
+
+
+def test_the_board_ranks_each_window_exactly_as_the_contest_rules_do():
+    """The board's score must be the rules' score. A private ranking formula would order
+    strategies by something the leaderboard never computes."""
+    a = _entry("a", [(0.02, 2.0, 0.01, 0.05), (-0.01, -1.0, 0.03, 0.05), (0.03, 3.0, 0.01, 0.05)])
+    got = {r["strategy"]: r for r in lb.standings([CASH, EW, a])["rows"]}
+
+    for name in ("cash", "ew_hold", "a"):
+        want = []
+        for i in range(3):
+            m = pd.DataFrame({e["strategy"]: e["windows"][i] for e in (CASH, EW, a)}).T
+            want.append(ranking.rank_window(m[lb.METRICS].astype(float))
+                        .loc[name, "overall_score"])
+        assert got[name]["mean_overall_score"] == pytest.approx(sum(want) / 3)
+
+
+def test_only_the_newest_version_ranks_and_every_version_is_counted():
+    """Ranking every version would let one strategy's near-copies crowd the ranks of
+    everything else. Dropping the old ones would hide how often the holdout was looked at."""
+    old = _entry("a", [(0.05, 5.0, 0.0, 0.0)] * 3, at="2026-09-29T10:00:00Z")
+    new = _entry("a", [(0.0, 0.0, 0.1, 0.5)] * 3, at="2026-09-30T10:00:00Z")
+    b = lb.standings([CASH, EW, new, old])
+    row = next(r for r in b["rows"] if r["strategy"] == "a")
+
+    assert [r["strategy"] for r in b["rows"]].count("a") == 1
+    assert row["versions"] == 2
+    assert row["continuous_cumulative_return"] == 0.0
+    assert [h["ranked"] for h in b["history"]] == [True, False]
+
+
+def test_an_entry_on_different_windows_is_left_off_and_named_not_ranked_on_a_subset():
+    """In a subset of windows an entrant faces a different field, so its mean score is not
+    comparable. Ranking it anyway would print a clean number for a different contest."""
+    short = _entry("short", [(0.01, 1.0, 0.01, 0.01)] * 2)
+    other_span = _entry("span", [(0.01, 1.0, 0.01, 0.01)] * 3, span=("2026-02-02", "2026-08-31"))
+    post = _entry("post", [(0.01, 1.0, 0.01, 0.01)] * 3, sizing="post_fee")
+    b = lb.standings([CASH, EW, short, other_span, post])
+
+    assert {r["strategy"] for r in b["rows"]} == {"cash", "ew_hold"}
+    assert {e["strategy"] for e in b["excluded"]} == {"short", "span", "post"}
+
+
+def test_a_submission_cannot_take_a_reference_strategys_name():
+    """A submission named `cash` would shadow the anchor every other entry is read against."""
+    fake = _entry("cash", [(0.05, 5.0, 0.0, 0.0)] * 3)
+    b = lb.standings([CASH, EW, fake])
+    assert [e["strategy"] for e in b["excluded"]] == ["cash"]
+    assert next(r for r in b["rows"] if r["strategy"] == "cash")["kind"] == lb.REFERENCE
+
+
+def test_float_dust_does_not_split_a_tie_the_kits_decimals_would_call():
+    """Two strategies equal to 1e-15 are one tie under the kit's 40-digit Decimals. An
+    unrounded float rank would split them and hand one a better score for nothing."""
+    a = _entry("a", [(0.01, 1.0, 0.02, 0.01)] * 3)
+    b_ = _entry("b", [(0.01 + 1e-15, 1.0, 0.02, 0.01)] * 3)
+    rows = {r["strategy"]: r for r in lb.standings([CASH, EW, a, b_])["rows"]}
+    assert rows["a"]["mean_overall_score"] == rows["b"]["mean_overall_score"]
+
+
+def test_a_board_without_references_refuses_rather_than_ranking_submissions_alone():
+    with pytest.raises(lb.EntryError, match="reference"):
+        lb.standings([_entry("a", [(0, 0, 0, 0)] * 3)])

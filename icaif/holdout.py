@@ -202,16 +202,27 @@ def rolling(decisions: Decisions, market: sim.Market, start: date = HOLDOUT_STAR
     the window's own NAV, so the ledger is right, but an agent whose choices depend on
     its own holdings would have chosen differently starting from cash.
     """
+    return rolling_runs(decisions.strategy_fn, market, start, end, n_days, sizing,
+                        missing=set(decisions.missing))
+
+
+def rolling_runs(factory, market: sim.Market, start: date = HOLDOUT_START,
+                 end: date = HOLDOUT_END, n_days: int = WINDOW_DAYS,
+                 sizing: str = "pre_fee", missing=frozenset()):
+    """`rolling` for any strategy factory, one fresh instance per window.
+
+    The leaderboard's reference strategies run here as themselves, so a stateful one
+    such as a buy-and-hold starts each window in cash, as it would in the contest.
+    """
     days = span_days(market, start, end)
     degraded = set(market.issues.get("degraded_days", []))
-    missing = set(decisions.missing)
     rows, skipped = [], []
     for i in range(len(days) - n_days + 1):
         span = days[i:i + n_days]
         if degraded & {str(d) for d in span}:
             skipped.append(str(span[0]))
             continue
-        res = sim.run(decisions.strategy_fn(), market, span[0], n_days, sizing=sizing)
+        res = sim.run(factory(), market, span[0], n_days, sizing=sizing)
         n_missing = sum(round_id(d, r["round"]) in missing
                         for d in span for r in calendar.rounds_for(d))
         rows.append({"window_start": str(span[0]), "window_end": str(span[-1]),

@@ -6,13 +6,14 @@ Everything scored goes through `icaif.holdout`; this file only loads prices and
 serialises results.
 """
 
+import hashlib
 import json
 from datetime import date
 from pathlib import Path
 
 import pandas as pd
 
-from icaif import calendar, holdout
+from icaif import calendar, holdout, leaderboard
 
 ROOT = Path(__file__).resolve().parent
 
@@ -66,7 +67,16 @@ def score(path: str, start: str, end: str, strict: bool, sizing: str) -> str:
               "invalid": dec.invalid, "windows": roll.attrs["windows"],
               "independent_windows": roll.attrs["independent_windows"],
               "skipped_window_starts": skipped}
+    # The entry the page would submit. Only the board's own span and sizing can rank,
+    # so any other run is scored but not offered for submission.
+    on_board = (start_d, end_d, sizing) == (holdout.HOLDOUT_START, holdout.HOLDOUT_END,
+                                            leaderboard.BOARD_SIZING)
+    entry = leaderboard.make_entry(
+        dec.strategy, leaderboard.SUBMITTED, summary, wins, span=(start_d, end_d),
+        sizing=sizing, market_snapshot=meta["snapshot"],
+        decisions_sha256=hashlib.sha256(Path(path).read_bytes()).hexdigest())
     return json.dumps({
+        "entry": entry if on_board else None,
         "report": report,
         "continuous": {k: summary[k] for k in holdout.METRICS},
         "rolling": roll.reset_index(names="metric").to_dict(orient="records"),
@@ -78,3 +88,15 @@ def score(path: str, start: str, end: str, strict: bool, sizing: str) -> str:
             "rolling_summary.csv": roll.to_csv(),
         },
     })
+
+
+def board(texts: list[str]) -> str:
+    """The leaderboard from entry JSON texts (references and submissions), as JSON.
+
+    Ranked here rather than stored ranked: a rank depends on the whole field, so a
+    stored one would go stale the moment another entry arrived.
+    """
+    try:
+        return json.dumps(leaderboard.standings([json.loads(t) for t in texts]))
+    except leaderboard.EntryError as err:
+        return json.dumps({"error": str(err)})

@@ -121,6 +121,21 @@ rolling 15-day windows, which amount to about 11 independent samples.
 - **Pyodide trap.** Pyodide must load `tzdata` as well. Without it, every `tz_localize`
   retries a failed import, and scoring is 30× slower.
 
+**Leaderboard.** The page also ranks prospective strategies against each other the way
+the contest does. Every entry is ranked in each of the 152 windows, and the board is
+ordered by mean Overall Rank Score, with the SE computed on ~11 independent windows.
+- **References.** Three strategies are always on the board: cash, ew_hold and
+  inv_vol_hold_75. They are scored natively at build time, each run fresh in every window.
+- **Submitting.** Submit from the page ("Sign in with HuggingFace", then *Submit to
+  leaderboard*) or with `tools/holdout_eval.py --decisions F --submit --note "..."`.
+  Only the board's span and `pre_fee` sizing are accepted.
+- **Versions.** Only the newest version of a name ranks. Older ones are listed, so the
+  number of looks at the holdout stays visible.
+- **Where entries live.** Each entry is recorded in the private dataset
+  `MO-AI-Inv/icaif2026-holdout-entries` and copied to the Space, which is the only place
+  the office network lets the page read. Netskope blocks authenticated HF downloads.
+  If the copy fails, run `tools/build_holdout_space.py --sync` off that network.
+
 Equal weight at every round, the sanity baseline, scores return 12.97%, Sharpe 1.58,
 MDD 8.68% and turnover 0.57% continuously. In windows, its median return is 0.63%.
 
