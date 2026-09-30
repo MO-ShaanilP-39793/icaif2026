@@ -87,6 +87,43 @@ flat (1.82–1.86) while return, MDD and turnover scale linearly. The field is o
 guess at the rivals; every conclusion here is conditional on it.
 `--fills yahoo` reproduces the earlier setup.
 
+## Holdout harness (`tools/holdout_eval.py`)
+
+This scores any agent's decisions on Jan 2 – Aug 31 2026. The agent writes one JSON file:
+
+```json
+{"strategy": "my_agent",
+ "decisions": [{"round_id": "holdout-2026-01-02-r1", "cash": 0.25,
+                "weights": {"AAPL": 0.03, "...": "all 30 symbols"}}]}
+```
+
+`tools/holdout_template.py` writes an equal-weight file naming every round, 1,162 in
+all. Half-days have only rounds 1–4. The harness reports the four metrics for one
+continuous run from $1M. It also reports them for a fresh $1M in each of the 152
+rolling 15-day windows, which amount to about 11 independent samples.
+
+- **These reject the file:** a round that doesn't exist, a duplicate round, a wrong
+  symbol set, or a cash weight more than 1e-9 away from 1 − Σw.
+- **These hold, as the backend would:** a missing round, or a weight that breaks a rule,
+  such as float dust over the 0.30 cap. Both are listed. `--strict` makes them fatal.
+- **Windows replay the continuous-run decisions from cash.** An agent that decides from
+  its own holdings is therefore only approximately scored per window.
+- **Held out only from here on.** The baseline field's 170 windows run to Sep 2026, so
+  choices made from that report (e.g. 75% gross) have already seen this span.
+
+**The same harness as a private web page:** https://huggingface.co/spaces/MO-AI-Inv/icaif2026-holdout.
+- **How it runs.** It's a static Space, because Gradio Spaces need a paid HF plan. It runs
+  in the browser on Pyodide 0.29.5 and takes about 3 s per file.
+- **What it ships.** `tools/build_holdout_space.py [--push]` rebuilds it from a fixed list
+  of files: the harness modules and 2026 fill prices only. It checks that the page's
+  entry point matches the CLI before uploading.
+- **Parity.** In-browser results agree with native to within 1e-13.
+- **Pyodide trap.** Pyodide must load `tzdata` as well. Without it, every `tz_localize`
+  retries a failed import, and scoring is 30× slower.
+
+Equal weight at every round, the sanity baseline, scores return 12.97%, Sharpe 1.58,
+MDD 8.68% and turnover 0.57% continuously. In windows, its median return is 0.63%.
+
 ## Features and labels (`tools/feature_report.py`)
 
 `features.build`: 21 per-ticker features (returns over 1/2/5/10/20 sessions, raw and
