@@ -5,6 +5,12 @@
 // The 314.x line moves to pandas 3.0, which the harness has never been tested on.
 importScripts("https://cdn.jsdelivr.net/pyodide/v0.29.5/full/pyodide.js");
 
+// The page, not the worker, fetches the harness and prices and posts them here. On a
+// private Space the worker's own requests reached HF without the viewer's login and got
+// a 401 "Invalid username or password." page, which then failed as a JSON SyntaxError.
+let files;
+const filesArrived = new Promise((resolve) => { files = resolve; });
+
 async function boot() {
   postMessage({ status: "Loading Python…" });
   const py = await loadPyodide();
@@ -14,19 +20,14 @@ async function boot() {
   // call walks sys.path again. That made scoring ~30x slower than native.
   await py.loadPackage(["numpy", "pandas", "tzdata"]);
   postMessage({ status: "Loading the harness and prices…" });
-  const manifest = await (await fetch("manifest.json")).json();
-  for (const path of manifest.files) {
-    const resp = await fetch(path);
-    // A missing file would otherwise be written as an HTML error page and fail later
-    // as a confusing SyntaxError or a malformed price table.
-    if (!resp.ok) throw new Error(`could not fetch ${path}: HTTP ${resp.status}`);
-    const dir = "/app/" + path.split("/").slice(0, -1).join("/");
-    py.FS.mkdirTree(dir);
-    py.FS.writeFile("/app/" + path, new Uint8Array(await resp.arrayBuffer()));
+  const { contents, meta } = await filesArrived;
+  for (const [path, bytes] of Object.entries(contents)) {
+    py.FS.mkdirTree("/app/" + path.split("/").slice(0, -1).join("/"));
+    py.FS.writeFile("/app/" + path, new Uint8Array(bytes));
   }
   // Parse the prices once, here, so the first score doesn't pay for it.
   py.runPython("import sys; sys.path.insert(0, '/app'); import webapp; webapp._MARKET = webapp.load_market()");
-  postMessage({ ready: true, meta: manifest.meta });
+  postMessage({ ready: true, meta });
   return py;
 }
 
@@ -36,6 +37,7 @@ const ready = boot().catch((err) => {
 });
 
 onmessage = async (event) => {
+  if (event.data.init) return files(event.data.init);
   const py = await ready;
   const { name, text, start, end, strict, sizing } = event.data;
   try {

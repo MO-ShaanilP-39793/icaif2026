@@ -74,7 +74,7 @@
       <label>start <input id="start" value="2026-01-02" pattern="\d{4}-\d{2}-\d{2}"></label>
       <label>end <input id="end" value="2026-08-31" pattern="\d{4}-\d{2}-\d{2}"></label>
       <label>sizing
-        <select id="sizing"><option>pre_fee</option><option>post_fee</option></select></label>
+        <select id="sizing" title="pre_fee: targets sized on NAV before the 0.1% fee, so a fully invested book leaves cash slightly negative. post_fee: targets shrunk so the fee fits in cash. The rules don't say which the backend does."><option>pre_fee</option><option>post_fee</option></select></label>
       <label class="check"><input id="strict" type="checkbox"> strict: a missing or invalid round rejects the file</label>
       <button id="go" type="submit" disabled>Score</button>
     </form>
@@ -101,6 +101,12 @@
     <pre style="margin:0;overflow-x:auto"><code>{"strategy": "my_agent",
  "decisions": [{"round_id": "holdout-2026-01-02-r1", "cash": 0.25,
                 "weights": {"AAPL": 0.03, "...": "all 30 symbols"}}]}</code></pre>
+    <p class="muted"><strong>Sizing.</strong> <code>pre_fee</code> (default) sizes each target
+      on NAV before the 0.1% fee and takes the fee from cash, so a fully invested book ends
+      the round with slightly negative cash. <code>post_fee</code> shrinks the targets so the
+      fee fits. The rules state the fee but not which of the two the backend does; the
+      validation receipts (Oct 8–9) will show it. The difference matters only near 100%
+      invested.</p>
     <p class="muted">One entry per round, rounds 1–7 (09:30–15:30 ET). Half-days have rounds
       1–4 only. <code>cash</code> must equal 1 − Σweights to within 1e-9. The file is
       rejected for a round that doesn't exist, a duplicate round or a wrong symbol set.
@@ -120,7 +126,25 @@
   const $ = (id) => document.getElementById(id);
   const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
 
-  const worker = new Worker("worker.js");
+  const worker = new Worker("worker.js" + location.search);
+
+  // Fetched here and handed to the worker (see worker.js for why). The page's query
+  // string rides along: on a private Space it can carry HF's signed access token.
+  async function loadFiles() {
+    const get = async (path) => {
+      const resp = await fetch(path + location.search, { credentials: "include" });
+      if (!resp.ok) throw new Error(`HTTP ${resp.status} fetching ${path}` +
+        (resp.status === 401 ? " (HuggingFace did not see your login; reload the Space page)" : ""));
+      return resp;
+    };
+    const manifest = await (await get("manifest.json")).json();
+    const contents = {};
+    for (const path of manifest.files) contents[path] = await (await get(path)).arrayBuffer();
+    worker.postMessage({ init: { contents, meta: manifest.meta } }, Object.values(contents));
+  }
+  loadFiles().catch((err) => {
+    $("status").innerHTML = `<span style="color:var(--bad)">Could not load the harness: ${esc(err.message)}</span>`;
+  });
   let started = 0;
 
   // A worker that fails to load its scripts never posts a message; without this the page
