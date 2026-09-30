@@ -111,7 +111,7 @@ rolling 15-day windows, which amount to about 8 independent samples.
 - **Held out only from here on.** The baseline field's 170 windows run to Sep 2026, so
   choices made from that report (e.g. 75% gross) have already seen this span.
 
-**The same harness as a private web page:** https://huggingface.co/spaces/MO-AI-Inv/icaif2026-holdout.
+**The same harness as a private web page (the scorer):** https://huggingface.co/spaces/MO-AI-Inv/icaif2026-holdout.
 - **How it runs.** It's a static Space, because Gradio Spaces need a paid HF plan. It runs
   in the browser on Pyodide 0.29.5 and takes about 3 s per file.
 - **What it ships.** `tools/build_holdout_space.py [--push]` rebuilds it from a fixed list
@@ -121,20 +121,27 @@ rolling 15-day windows, which amount to about 8 independent samples.
 - **Pyodide trap.** Pyodide must load `tzdata` as well. Without it, every `tz_localize`
   retries a failed import, and scoring is 30× slower.
 
-**Leaderboard.** The page also ranks prospective strategies against each other the way
-the contest does. Every entry is ranked in each of the 109 windows, and the board is
-ordered by mean Overall Rank Score, with the SE computed on ~8 independent windows.
+**Leaderboard:** public, and viewable with no login: https://huggingface.co/spaces/MO-AI-Inv/icaif2026-leaderboard.
+It ranks prospective strategies against each other the way the contest does. Every entry
+is ranked in each of the 109 windows, and the board is ordered by mean Overall Rank Score,
+with the SE computed on ~8 independent windows.
 - **References.** Three strategies are always on the board: cash, ew_hold and
   inv_vol_hold_75. They are scored natively at build time, each run fresh in every window.
-- **Submitting.** Submit from the page ("Sign in with HuggingFace", then *Submit to
-  leaderboard*) or with `tools/holdout_eval.py --decisions F --submit --note "..."`.
-  Only the board's span and `pre_fee` sizing are accepted.
+- **Submitting needs no sign-in.** Score a file on the private scorer, then use *Submit to
+  leaderboard* with a name and a note. The page writes with the scorer Space's
+  `SUBMIT_TOKEN` variable, a fine-grained token limited to the entry dataset and the
+  board. Or run `tools/holdout_eval.py --decisions F --submit --note "..."`. Only the
+  board's span and `pre_fee` sizing are accepted.
 - **Versions.** Only the newest version of a name ranks. Older ones are listed, so the
   number of looks at the holdout stays visible.
-- **Where entries live.** Each entry is recorded in the private dataset
-  `MO-AI-Inv/icaif2026-holdout-entries` and copied to the Space, which is the only place
-  the office network lets the page read. Netskope blocks authenticated HF downloads.
-  If the copy fails, run `tools/build_holdout_space.py --sync` off that network.
+- **Three repos, fixed visibility** (`icaif/space_hub.py`):
+  - the scorer Space is private, because it carries Alpaca prices and the kit;
+  - the entry dataset `MO-AI-Inv/icaif2026-holdout-entries` is private and is the record;
+  - the board Space is public and ships an exact allowlist: ranking code, references,
+    entries. A price or kit file in its build stops the deploy.
+- **Office network.** The board's copy of each entry is the only one a page can read
+  there: Netskope blocks authenticated HF downloads. If that copy fails, run
+  `tools/build_holdout_space.py --sync` off that network.
 
 Equal weight at every round, the sanity baseline, scores return 6.50%, Sharpe 1.05,
 MDD 8.68% and turnover 0.59% continuously on Jan–Jun. In windows, its median return is

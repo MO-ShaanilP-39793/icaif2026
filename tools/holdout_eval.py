@@ -11,7 +11,7 @@ Two views, both on Alpaca :30 fills (markets.research_market):
   rolling_summary.csv.
 
 --submit also posts the result (metrics and window table, never the decisions file) to
-the leaderboard on the private HF Space (icaif/space_hub.py). It only accepts the board's
+the public leaderboard, recorded first in the private entry dataset (icaif/space_hub.py). It only accepts the board's
 own span and sizing, since an entry scored on other windows cannot be ranked against it.
 
 The file format and which errors reject it are in icaif/holdout.py. Each window replays
@@ -101,7 +101,7 @@ def main() -> None:
             decisions_sha256=hashlib.sha256(args.decisions.read_bytes()).hexdigest())
         path = space_hub.submit(entry)
         print(f"submitted {entry['strategy']} as {path}; "
-              f"https://huggingface.co/spaces/{space_hub.REPO_ID}")
+              f"https://huggingface.co/spaces/{space_hub.BOARD_ID}")
 
 
 if __name__ == "__main__":

@@ -42,6 +42,7 @@ from pathlib import Path
 import pandas as pd
 
 from icaif import calendar, kit, sim
+from icaif.leaderboard import independent_windows  # noqa: F401  (re-exported)
 from icaif.windows import WINDOW_DAYS
 
 HOLDOUT_START = date(2026, 1, 2)
@@ -246,12 +247,3 @@ def summarise_rolling(windows_df: pd.DataFrame) -> pd.DataFrame:
     out.attrs["windows"] = len(windows_df)
     out.attrs["independent_windows"] = independent_windows(windows_df)
     return out
-
-
-def independent_windows(windows_df: pd.DataFrame) -> int:
-    """How many of the windows could be picked without any two sharing a day."""
-    n, last_end = 0, ""
-    for s, e in zip(windows_df["window_start"], windows_df["window_end"]):
-        if s > last_end:
-            n, last_end = n + 1, e
-    return n

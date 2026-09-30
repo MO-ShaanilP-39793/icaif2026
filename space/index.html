@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>ICAIF Holdout Leaderboard</title>
+<title>ICAIF Holdout Scorer</title>
 <style>
   :root {
     --bg: #f7f7f5; --panel: #ffffff; --ink: #1c1d1f; --muted: #6b6f76;
@@ -58,9 +58,9 @@
   thead th { position: sticky; top: 0; background: var(--panel); color: var(--muted); font-weight: 600; }
   .downloads a { margin-right: 14px; color: var(--accent); }
   .muted { color: var(--muted); font-size: 13px; }
-  .authbar { display: flex; gap: 12px; align-items: center; justify-content: flex-end; margin: -8px 0 4px; }
   button.secondary { background: var(--panel); color: var(--accent); border-color: var(--line); }
-  #submitform { grid-template-columns: 1fr 2fr auto; }
+  #submitform { grid-template-columns: 1fr 1fr 2fr auto; }
+  iframe.board { width: 100%; height: 560px; border: 1px solid var(--line); border-radius: 8px; background: var(--panel); }
   @media (max-width: 640px) { #submitform { grid-template-columns: 1fr; } #submitform label { grid-column: auto !important; } }
   .ref { font-size: 11px; color: var(--muted); border: 1px solid var(--line); border-radius: 4px;
          padding: 0 5px; margin-left: 6px; }
@@ -74,26 +74,16 @@
 </head>
 <body>
 <main>
-  <h1>ICAIF 2026 holdout leaderboard</h1>
-  <p class="sub">Prospective strategies ranked on held-out 2026 data the way the contest ranks
-    them, and a scorer for any agent's <code>decisions.json</code>. Both run the repo's
-    simulator and the organizers' metric calculator in your browser.
-    <span id="prices"></span></p>
-
-  <div class="authbar"><span id="who" class="muted">Not signed in.</span>
-    <button id="signin" type="button" class="secondary">Sign in with HuggingFace</button></div>
+  <h1>ICAIF 2026 holdout scorer</h1>
+  <p class="sub">Score any agent's <code>decisions.json</code> on held-out 2026 data, then put
+    it on the leaderboard. Scoring runs the repo's simulator and the organizers' metric
+    calculator in your browser. <span id="prices"></span></p>
 
   <h2>Leaderboard</h2>
-  <p class="muted" id="boardnote">Loading…</p>
-  <div class="panel scroll"><table id="board"></table></div>
-  <div id="excluded"></div>
-  <details class="muted" style="margin-top:10px"><summary>Every submission, newest first</summary>
-    <div class="panel scroll tall" style="margin-top:8px"><table id="history"></table></div></details>
-  <p class="muted">To submit, score a file below and use <em>Submit to leaderboard</em>, or from
-    a clone of icaif2026 run
-    <code>tools/holdout_eval.py --decisions FILE --submit --note "what changed"</code>.
-    Either way only the metrics and window table are uploaded, never the decisions file,
-    to the entry dataset and to this page.</p>
+  <p class="muted">The public board, <a id="boardlink" target="_blank" rel="noopener">open it on its own</a>.
+    Submitting uploads only the metrics, the window table, your name and the note, never
+    the decisions file. It goes to the private entry dataset (the record) and to the board.</p>
+  <iframe class="board" id="boardframe" title="Leaderboard"></iframe>
 
   <h2>Score a file</h2>
   <div class="panel">
@@ -124,7 +114,8 @@
     <div class="panel">
       <form id="submitform">
         <label>leaderboard name <input id="subname" required maxlength="80"></label>
-        <label style="grid-column: span 2">note: what this version changes
+        <label>your name <input id="subauthor" required maxlength="60" autocomplete="name"></label>
+        <label>note: what this version changes (public)
           <input id="subnote" maxlength="200" placeholder="e.g. vol target 12%, rebalance at r1 only"></label>
         <button id="subgo" type="submit" disabled>Submit</button>
       </form>
@@ -176,71 +167,16 @@
       return resp;
     };
     const manifest = await (await get("manifest.json")).json();
-    boardSources.references = manifest.references;
     const contents = {};
     for (const path of manifest.files) contents[path] = await (await get(path)).arrayBuffer();
-    worker.postMessage({ init: { contents, meta: manifest.meta } }, Object.values(contents));
+    worker.postMessage({ init: { contents, meta: manifest.meta, module: "webapp" } }, Object.values(contents));
   }
-  const boardSources = { references: [], span: [] };
+  const boardSources = { span: [], referenceNames: [] };
 
-  // Entries are re-read on every load, never cached: a rank depends on the whole field,
-  // and a stale index would rank a board that no longer exists.
-  async function loadBoard(extra = []) {
-    const get = (path) => fetch(path + location.search, { credentials: "include", cache: "no-store" });
-    const texts = [];
-    for (const p of boardSources.references) {
-      const r = await get(p);
-      if (!r.ok) throw new Error(`HTTP ${r.status} fetching ${p}`);
-      texts.push(await r.text());
-    }
-    const idx = await get("entries/index.json");
-    // 404 means nothing has been submitted yet, which is a board of references only.
-    const entries = idx.ok ? (await idx.json()).entries : [];
-    if (!idx.ok && idx.status !== 404) throw new Error(`HTTP ${idx.status} fetching entries/index.json`);
-    for (const p of entries) {
-      const r = await get(p);
-      if (!r.ok) throw new Error(`HTTP ${r.status} fetching ${p}`);
-      texts.push(await r.text());
-    }
-    // A just-submitted entry, until the Space's copy of the index catches up.
-    for (const e of extra) if (!entries.includes(e.path)) texts.push(e.text);
-    boardSources.referenceNames = [];
-    $("boardnote").textContent = `Ranking ${entries.length} submission(s) and ${boardSources.references.length} references…`;
-    worker.postMessage({ board: texts });
-  }
-
-  function renderBoard(b) {
-    boardSources.referenceNames = b.rows.filter((r) => r.kind === "reference").map((r) => r.strategy);
-    if (b.error) { $("boardnote").innerHTML = `<span style="color:var(--bad)">${esc(b.error)}</span>`; return; }
-    $("boardnote").textContent = `${b.span[0]} to ${b.span[1]}, ${b.sizing} sizing. ${b.entrants} entrants ranked
-      against each other in each of ${b.windows} rolling 15-day windows (about ${b.independent_windows} independent),
-      the contest's rules per window. Lower mean score is better. SE is on the independent count, so two
-      entries within ~2 SE are not ordered. Ranks are relative to this board: a new entry can reorder the rest.`;
-    const cols = [
-      (r) => r.rank,
-      (r) => esc(r.strategy) + (r.kind === "reference" ? '<span class="ref">reference</span>' : ""),
-      (r) => esc(r.author),
-      (r) => `${r.mean_overall_score.toFixed(2)} ± ${r.se_overall_score.toFixed(2)}`,
-      (r) => r.mean_position.toFixed(2),
-      (r) => r.wins,
-      ...METRICS.map((k) => (r) => fmt(k, r["continuous_" + k])),
-      ...METRICS.map((k) => (r) => fmt(k, r["median_window_" + k])),
-      (r) => r.kind === "reference" ? "" : r.versions,
-      (r) => r.kind === "reference" ? "" : esc(r.submitted_at.replace("T", " ").replace("Z", " UTC")),
-    ];
-    const head = ["#", "strategy", "author", "mean score", "mean pos.", "wins",
-      ...METRICS.map((k) => LABELS[k] + " (holdout)"), ...METRICS.map((k) => LABELS[k] + " (median window)"),
-      "versions", "submitted"];
-    $("board").innerHTML = "<thead><tr>" + head.map((h) => `<th>${h}</th>`).join("") + "<th>note</th></tr></thead><tbody>" +
-      b.rows.map((r) => `<tr class="${r.kind}">` + cols.map((c) => `<td>${c(r)}</td>`).join("") +
-        `<td class="note">${esc(r.note)}${r.missing_rounds || r.invalid_rounds ? ` · held ${r.missing_rounds} missing, ${r.invalid_rounds} invalid` : ""}</td></tr>`).join("") +
-      "</tbody>";
-    $("excluded").innerHTML = b.excluded.length ? `<div class="note warn"><strong>Not ranked:</strong> ` +
-      b.excluded.map((e) => `${esc(e.strategy)} (${esc(e.reason)})`).join("; ") + "</div>" : "";
-    table($("history"), [(h) => h.submitted_at.replace("T", " ").replace("Z", ""), (h) => h.strategy, (h) => h.author,
-      ...METRICS.map((k) => (h) => fmt(k, h["continuous_" + k])), (h) => h.ranked ? "ranked" : ""],
-      b.history, ["submitted (UTC)", "strategy", "author", ...METRICS.map((k) => LABELS[k]), ""]);
-  }
+  const BOARD_HOST = "https://mo-ai-inv-icaif2026-leaderboard.static.hf.space/";
+  const boardUrl = () => BOARD_HOST + "?t=" + Date.now();
+  $("boardframe").src = boardUrl();
+  $("boardlink").href = "https://huggingface.co/spaces/MO-AI-Inv/icaif2026-leaderboard";
 
   loadFiles().catch((err) => {
     $("status").innerHTML = `<span style="color:var(--bad)">Could not load the harness: ${esc(err.message)}</span>`;
@@ -248,16 +184,22 @@
   let started = 0;
   let lastEntry = null;
 
-  // ---- submitting, with the viewer's own HF sign-in (hf-auth module below) ----------
+  // ---- submitting, with no sign-in -------------------------------------------------
+  // The token is the Space variable SUBMIT_TOKEN, which HF injects into this page. It is
+  // a fine-grained token that can write only the entry dataset and the public board.
+  // This Space is private, so only people who can already open it can read the token.
   const DATASET = "MO-AI-Inv/icaif2026-holdout-entries";
-  const SPACE = "MO-AI-Inv/icaif2026-holdout";
+  const BOARD = "MO-AI-Inv/icaif2026-leaderboard";
+  const submitToken = () => (window.huggingface && window.huggingface.variables &&
+                             window.huggingface.variables.SUBMIT_TOKEN) || null;
   const slug = (n) => n.replace(/[^A-Za-z0-9_.-]+/g, "_").replace(/^[._]+|[._]+$/g, "");
 
   function refreshSubmit() {
-    const auth = window.hfAuth && window.hfAuth.current();
-    $("subgo").disabled = !(lastEntry && auth);
-    if (lastEntry && !auth) $("substatus").textContent = "Sign in with HuggingFace (top right) to submit. Signing in reloads the page, so sign in before scoring.";
+    $("subgo").disabled = !(lastEntry && submitToken());
+    if (lastEntry && !submitToken()) $("substatus").innerHTML = "Submitting isn't set up on this Space yet " +
+      "(it needs the <code>SUBMIT_TOKEN</code> variable). Meanwhile, submit with <code>tools/holdout_eval.py --submit</code>.";
   }
+  try { $("subauthor").value = localStorage.getItem("icaif-author") || ""; } catch {}
 
   function b64(text) {
     const bytes = new TextEncoder().encode(text);
@@ -269,14 +211,17 @@
   // One entry file plus a rebuilt entries/index.json, in one commit pinned to the head the
   // index was built from. The same protocol as icaif/space_hub.py: if someone else
   // committed in between, HF refuses the commit and we rebuild the index on the new head.
-  async function commitEntry(token, type, id, path, text, title) {
+  // `visibility` is what the repo must be: the dataset holds the record and stays private;
+  // the board is public by design and holds only what it shows.
+  async function commitEntry(token, type, id, visibility, path, text, title) {
     const api = (p, opts = {}) => fetch(`https://huggingface.co/api/${type}s/${id}/${p}`,
       { ...opts, headers: { Authorization: `Bearer ${token}`, ...(opts.headers || {}) } });
     for (let attempt = 0; attempt < 4; attempt++) {
       const info = await api("revision/main");
       if (!info.ok) throw new Error(`${type} ${id}: HTTP ${info.status} reading its head`);
       const { sha, private: priv } = await info.json();
-      if (!priv) throw new Error(`${type} ${id} is PUBLIC; refusing to write results to it`);
+      if ((visibility === "private") !== Boolean(priv))
+        throw new Error(`${type} ${id} is ${priv ? "private" : "PUBLIC"}, expected ${visibility}; not writing to it`);
       const files = [];
       let url = `tree/${sha}/entries?recursive=true`;
       while (url) {
@@ -302,39 +247,40 @@
     }
   }
 
-  window.addEventListener("hfauth", refreshSubmit);
-
   $("submitform").onsubmit = async (e) => {
     e.preventDefault();
-    const auth = window.hfAuth.current();
-    const name = $("subname").value.trim();
-    if (!lastEntry || !auth || !name) return;
+    const token = submitToken();
+    const name = $("subname").value.trim(), author = $("subauthor").value.trim();
+    if (!lastEntry || !token || !name || !author) return;
+    try { localStorage.setItem("icaif-author", author); } catch {}
     if (!slug(name)) { $("substatus").textContent = "That name has no usable characters."; return; }
     if ((boardSources.referenceNames || []).includes(name)) {
       $("substatus").textContent = `"${name}" is a reference strategy's name; pick another.`; return;
     }
     const at = new Date().toISOString().slice(0, 19) + "Z";
     const entry = { ...lastEntry, strategy: name, note: $("subnote").value.trim(),
-                    author: auth.username, submitted_at: at };
+                    author, submitted_at: at };
     const path = `entries/${slug(name)}/${at.replaceAll(":", "").replaceAll("-", "")}.json`;
     const text = JSON.stringify(entry, null, 1);
-    const title = `Submit ${name} (${auth.username})`;
+    const title = `Submit ${name} (${author})`;
     $("subgo").disabled = true;
     try {
       $("substatus").textContent = "Recording in the entry dataset…";
-      await commitEntry(auth.token, "dataset", DATASET, path, text, title);
+      await commitEntry(token, "dataset", DATASET, "private", path, text, title);
       $("substatus").textContent = "Copying to the leaderboard…";
       try {
-        await commitEntry(auth.token, "space", SPACE, path, text, title);
+        await commitEntry(token, "space", BOARD, "public", path, text, title);
       } catch (err) {
         $("substatus").innerHTML = `<span style="color:var(--bad)">Recorded in the dataset but NOT on the board: ${esc(err.message)}.
           Off the office network, run <code>tools/build_holdout_space.py --sync</code>.</span>`;
         return;
       }
-      $("substatus").textContent = `Submitted ${name} as ${path}.`;
+      $("substatus").textContent = `Submitted ${name}. The board picks it up once its Space refreshes (a few seconds).`;
       lastEntry = null;
-      await loadBoard([{ path, text }]);
-      $("board").scrollIntoView({ behavior: "smooth", block: "start" });
+      // The static board serves the new index after its Space rebuilds; reload twice so a
+      // slow rebuild still shows the entry without a manual refresh.
+      for (const ms of [4000, 15000]) setTimeout(() => { $("boardframe").src = boardUrl(); }, ms);
+      $("boardframe").scrollIntoView({ behavior: "smooth", block: "start" });
     } catch (err) {
       $("substatus").innerHTML = `<span style="color:var(--bad)">Not submitted: ${esc(err.message)}</span>`;
     } finally {
@@ -360,12 +306,8 @@
       // The holdout span comes from the build (icaif/holdout.py), never a copy in this page.
       [$("start").value, $("end").value] = m.holdout;
       boardSources.span = m.holdout;
-      loadBoard().catch((err) => {
-        $("boardnote").innerHTML = `<span style="color:var(--bad)">Could not load the leaderboard: ${esc(err.message)}</span>`;
-      });
+      boardSources.referenceNames = m.reference_names;
     }
-    if (data.board) renderBoard(JSON.parse(data.board));
-    if (data.boardError) $("boardnote").innerHTML = `<span style="color:var(--bad)">Could not rank the leaderboard: ${esc(data.boardError)}</span>`;
     if (data.error) {
       $("go").disabled = false;
       $("status").innerHTML = `<span style="color:var(--bad)">Error: ${esc(data.error)}</span>`;
@@ -444,51 +386,5 @@
   }
 </script>
 
-<script type="module">
-  // Sign in with HuggingFace (OAuth, PKCE), configured by `hf_oauth` in the Space's
-  // README. The token is the viewer's own, scoped to repos they can already write; it is
-  // kept in this tab's sessionStorage only and never typed or shown.
-  import { oauthLoginUrl, oauthHandleRedirectIfPresent } from "https://cdn.jsdelivr.net/npm/@huggingface/hub@2.17.5/+esm";
-  const KEY = "icaif-hf-auth";
-  let auth = null;
-  try {
-    const saved = JSON.parse(sessionStorage.getItem(KEY) || "null");
-    if (saved && new Date(saved.expiresAt) > new Date(Date.now() + 60_000)) auth = saved;
-  } catch {}
-  try {
-    const res = await oauthHandleRedirectIfPresent();
-    if (res) {
-      auth = { token: res.accessToken, expiresAt: res.accessTokenExpiresAt,
-               username: res.userInfo.preferred_username };
-      try { sessionStorage.setItem(KEY, JSON.stringify(auth)); } catch {}
-      // Drop the one-time code from the URL, keep HF's signed access parameter.
-      const u = new URL(location.href);
-      ["code", "state"].forEach((k) => u.searchParams.delete(k));
-      history.replaceState(null, "", u);
-    }
-  } catch (err) {
-    document.getElementById("who").textContent = `Sign-in failed: ${err.message}`;
-  }
-  const who = document.getElementById("who"), btn = document.getElementById("signin");
-  function show() {
-    if (auth) { who.textContent = `Signed in as ${auth.username}.`; btn.textContent = "Sign out"; }
-    else { btn.textContent = "Sign in with HuggingFace"; }
-  }
-  btn.onclick = async () => {
-    if (auth) {
-      auth = null;
-      try { sessionStorage.removeItem(KEY); } catch {}
-      who.textContent = "Not signed in.";
-      show(); window.dispatchEvent(new Event("hfauth"));
-      return;
-    }
-    const u = new URL(location.href);
-    ["code", "state"].forEach((k) => u.searchParams.delete(k));
-    location.href = await oauthLoginUrl({ redirectUrl: u.toString() });
-  };
-  window.hfAuth = { current: () => auth };
-  show();
-  window.dispatchEvent(new Event("hfauth"));
-</script>
 </body>
 </html>

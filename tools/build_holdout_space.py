@@ -1,7 +1,15 @@
-"""Build the holdout harness as a static page, and optionally upload it to a private HF Space.
+"""Build the holdout's two static pages, and optionally deploy them to HuggingFace.
 
-    .venv/bin/python tools/build_holdout_space.py                 # build output/space/
-    .venv/bin/python tools/build_holdout_space.py --push          # build, then upload
+    .venv/bin/python tools/build_holdout_space.py            # build output/space/, output/board/
+    .venv/bin/python tools/build_holdout_space.py --push     # build, then deploy both
+    .venv/bin/python tools/build_holdout_space.py --sync     # copy missing entries dataset -> board
+
+Two pages, because only one of them may be public (icaif/space_hub.py has the table):
+- the private scorer (output/space/), which carries the price file and the kit;
+- the public board (output/board/), which carries only the ranking code (ranking.py,
+  leaderboard.py), the references' results and the page. Its file list is exact and
+  checked. A price or kit file in the board build stops the deploy, because the board
+  is public and that data is not ours to redistribute.
 
 The Space is an allowlist, not a copy of the repo. It ships the harness, the ledger,
 the calendar and the organizers' validator and metric calculator, plus a 2026-only
@@ -16,8 +24,9 @@ template natively through the page's own entry point (space/webapp.py) and requi
 the CLI's numbers, so the only step not checked here is Pyodide itself.
 
 The build also scores the leaderboard's reference strategies natively, since they need
-information bars the page doesn't ship. --push deploys through `space_hub.publish`. It
-refuses a public Space and mirrors the folder, but never touches submitted entries.
+information bars neither page ships. --push deploys through `space_hub.publish`, which
+checks each Space's visibility and mirrors its folder, but never touches submitted
+entries.
 """
 
 import argparse
@@ -42,6 +51,11 @@ ICAIF_MODULES = ["__init__", "calendar", "data", "holdout", "kit", "leaderboard"
 KIT_FILES = ["kit/__init__.py", "kit/config.py", "kit/contracts.py", "kit/evaluation.py",
              "universe.json"]
 SPACE_FILES = ["index.html", "worker.js", "webapp.py", "README.md"]
+BOARD_FILES = {"index.html": "board/index.html", "README.md": "board/README.md",
+               "boardapp.py": "board/boardapp.py", "worker.js": "space/worker.js",
+               "icaif/__init__.py": "icaif/__init__.py", "icaif/ranking.py": "icaif/ranking.py",
+               "icaif/leaderboard.py": "icaif/leaderboard.py"}
+BOARD_PY = ["boardapp.py", "icaif/__init__.py", "icaif/ranking.py", "icaif/leaderboard.py"]
 # What the worker writes into Pyodide's filesystem; the page's own HTML/JS is not.
 PY_FILES = ["webapp.py", *(f"icaif/{m}.py" for m in ICAIF_MODULES),
             *(f"starter-kit/{f}" for f in KIT_FILES),
@@ -79,10 +93,27 @@ def build(out: Path) -> dict:
     missing = [f for f in PY_FILES if not (out / f).exists()]
     if missing:
         sys.exit(f"manifest names files the build did not write: {missing}")
+    meta["reference_names"] = list(REFERENCES)
+    (out / "manifest.json").write_text(json.dumps({"files": PY_FILES, "meta": meta}, indent=1))
+    return meta, market, snapshot
+
+
+def build_board(out: Path, market, snapshot: str) -> None:
+    if out.exists():
+        shutil.rmtree(out)
+    (out / "icaif").mkdir(parents=True)
+    for dst, src in BOARD_FILES.items():
+        shutil.copy2(data.ROOT / src, out / dst)
     refs = write_references(out, market, snapshot)
     (out / "manifest.json").write_text(json.dumps(
-        {"files": PY_FILES, "references": refs, "meta": meta}, indent=1))
-    return meta
+        {"files": BOARD_PY, "module": "boardapp", "references": refs,
+         "meta": {"holdout": [str(holdout.HOLDOUT_START), str(holdout.HOLDOUT_END)]}}, indent=1))
+    # Exact, not "at least": the board is public, so anything extra is published.
+    shipped = {p.relative_to(out).as_posix() for p in out.rglob("*") if p.is_file()}
+    expected = set(BOARD_FILES) | set(refs) | {"manifest.json"}
+    if shipped != expected:
+        sys.exit(f"the public board build differs from its allowlist: extra "
+                 f"{sorted(shipped - expected)}, missing {sorted(expected - shipped)}")
 
 
 # The leaderboard's anchors. Each runs as itself, fresh in every window, not replayed
@@ -112,6 +143,28 @@ def write_references(out: Path, market, snapshot: str) -> list[str]:
         (out / path).write_text(json.dumps(entry))
         paths.append(path)
     return paths
+
+
+def check_board(out: Path) -> None:
+    """The public board must import nothing but ranking and leaderboard, and must rank."""
+    probe = f"""
+import sys, json
+sys.path = [p for p in sys.path if p not in ("", {str(data.ROOT)!r}, {str(data.ROOT / "tools")!r})]
+sys.path.insert(0, {str(out)!r})
+import boardapp
+loaded = sorted(m for m in sys.modules if m.startswith(("icaif", "kit", "webapp")))
+assert loaded == ["icaif", "icaif.leaderboard", "icaif.ranking"], loaded
+refs = json.load(open({str(out / "manifest.json")!r}))["references"]
+b = json.loads(boardapp.board([open({str(out)!r} + "/" + p).read() for p in refs]))
+assert "error" not in b and b["entrants"] == len(refs), b
+print(loaded, b["entrants"], "references ranked on", b["windows"], "windows")
+"""
+    r = subprocess.run([sys.executable, "-c", probe], capture_output=True, text=True, cwd=out)
+    if r.returncode:
+        sys.exit(f"built board does not import or rank cleanly:\n{r.stderr}")
+    for cache in out.rglob("__pycache__"):
+        shutil.rmtree(cache)
+    print(f"board imports only: {r.stdout.strip()}")
 
 
 def check(out: Path) -> None:
@@ -189,24 +242,29 @@ def parity(out: Path) -> None:
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--out", type=Path, default=data.ROOT / "output" / "space")
+    ap.add_argument("--board-out", type=Path, default=data.ROOT / "output" / "board")
     ap.add_argument("--push", action="store_true")
     ap.add_argument("--repo-id", default=REPO_ID)
+    ap.add_argument("--board-id", default=space_hub.BOARD_ID)
     ap.add_argument("--sync", action="store_true",
-                    help="only copy dataset entries missing from the Space (needs downloads, "
+                    help="only copy dataset entries missing from the board (needs downloads, "
                          "so not on the office network), then stop")
     args = ap.parse_args()
     if args.sync:
-        copied = space_hub.sync(args.repo_id)
-        print(f"copied {len(copied)} entries to the Space: {copied}")
+        copied = space_hub.sync(args.board_id)
+        print(f"copied {len(copied)} entries to the board: {copied}")
         return
 
-    meta = build(args.out)
+    meta, market, snapshot = build(args.out)
     print(f"built {args.out}: prices {meta['first_day']}..{meta['last_day']} "
           f"from {meta['snapshot']}")
     check(args.out)
     parity(args.out)
+    build_board(args.board_out, market, snapshot)
+    check_board(args.board_out)
     if args.push:
-        space_hub.publish(args.out, args.repo_id)
+        space_hub.publish(args.out, args.repo_id, "private")
+        space_hub.publish(args.board_out, args.board_id, "public")
 
 
 if __name__ == "__main__":

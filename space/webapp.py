@@ -90,13 +90,8 @@ def score(path: str, start: str, end: str, strict: bool, sizing: str) -> str:
     })
 
 
-def board(texts: list[str]) -> str:
-    """The leaderboard from entry JSON texts (references and submissions), as JSON.
 
-    Ranked here rather than stored ranked: a rank depends on the whole field, so a
-    stored one would go stale the moment another entry arrived.
-    """
-    try:
-        return json.dumps(leaderboard.standings([json.loads(t) for t in texts]))
-    except leaderboard.EntryError as err:
-        return json.dumps({"error": str(err)})
+def boot() -> None:
+    """Parse the shipped prices once, when the page starts, not on the first score."""
+    global _MARKET
+    _MARKET = load_market()

@@ -1,0 +1,202 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ICAIF Holdout Leaderboard</title>
+<style>
+  :root {
+    --bg: #f7f7f5; --panel: #ffffff; --ink: #1c1d1f; --muted: #6b6f76;
+    --line: #e2e2de; --accent: #2f5f9e; --bad: #b3261e; --warn: #8a5a00;
+    --warn-bg: #fff4dc; --bad-bg: #fdecea;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #141517; --panel: #1d1f22; --ink: #e8e8e6; --muted: #9aa0a8;
+      --line: #2e3136; --accent: #7aa7e6; --bad: #f28b82; --warn: #f0c46c;
+      --warn-bg: #3a2f14; --bad-bg: #3b1f1d;
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #141517; --panel: #1d1f22; --ink: #e8e8e6; --muted: #9aa0a8;
+    --line: #2e3136; --accent: #7aa7e6; --bad: #f28b82; --warn: #f0c46c;
+    --warn-bg: #3a2f14; --bad-bg: #3b1f1d;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--ink);
+         font: 15px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+  main { max-width: 1000px; margin: 0 auto; padding: 24px 16px 64px; }
+  h1 { font-size: 22px; margin: 0 0 4px; }
+  h2 { font-size: 16px; margin: 28px 0 8px; }
+  p.sub { color: var(--muted); margin: 0 0 20px; }
+  code { font: 13px ui-monospace, SFMono-Regular, Menlo, monospace; }
+  .panel { background: var(--panel); border: 1px solid var(--line); border-radius: 8px;
+           padding: 16px; }
+  form { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+         gap: 12px 16px; align-items: end; }
+  label { display: flex; flex-direction: column; gap: 4px; font-size: 13px; color: var(--muted); }
+  label.check { flex-direction: row; align-items: center; gap: 8px; color: var(--ink); }
+  input, select, button { font: inherit; color: var(--ink); background: var(--bg);
+                          border: 1px solid var(--line); border-radius: 6px; padding: 7px 9px; }
+  input[type=file] { padding: 5px; }
+  button { background: var(--accent); color: #fff; border-color: var(--accent);
+           cursor: pointer; font-weight: 600; }
+  button:disabled { opacity: .5; cursor: default; }
+  #status { color: var(--muted); margin: 12px 0 0; min-height: 1.5em; }
+  .note { padding: 10px 12px; border-radius: 6px; margin: 12px 0 0; }
+  .warn { background: var(--warn-bg); color: var(--warn); }
+  .bad { background: var(--bad-bg); color: var(--bad); }
+  .bad pre { white-space: pre-wrap; margin: 6px 0 0; font: 13px ui-monospace, Menlo, monospace; }
+  .tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px; }
+  .tile .k { font-size: 12px; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; }
+  .tile .v { font-size: 24px; font-weight: 600; font-variant-numeric: tabular-nums; }
+  .scroll { overflow-x: auto; }
+  .tall { max-height: 420px; overflow-y: auto; }
+  table { border-collapse: collapse; width: 100%; font-variant-numeric: tabular-nums; font-size: 13px; }
+  th, td { padding: 6px 10px; border-bottom: 1px solid var(--line); text-align: right; white-space: nowrap; }
+  th:first-child, td:first-child { text-align: left; }
+  thead th { position: sticky; top: 0; background: var(--panel); color: var(--muted); font-weight: 600; }
+  .downloads a { margin-right: 14px; color: var(--accent); }
+  .muted { color: var(--muted); font-size: 13px; }
+  .authbar { display: flex; gap: 12px; align-items: center; justify-content: flex-end; margin: -8px 0 4px; }
+  button.secondary { background: var(--panel); color: var(--accent); border-color: var(--line); }
+  #submitform { grid-template-columns: 1fr 2fr auto; }
+  @media (max-width: 640px) { #submitform { grid-template-columns: 1fr; } #submitform label { grid-column: auto !important; } }
+  .ref { font-size: 11px; color: var(--muted); border: 1px solid var(--line); border-radius: 4px;
+         padding: 0 5px; margin-left: 6px; }
+  tr.reference td { color: var(--muted); }
+  #board th:nth-child(2), #board td:nth-child(2), #board th:nth-child(3), #board td:nth-child(3),
+  #history th:nth-child(2), #history td:nth-child(2), #history th:nth-child(3), #history td:nth-child(3) { text-align: left; }
+  td.note { max-width: 320px; }
+  td.note { white-space: normal; min-width: 200px; text-align: left; color: var(--muted); }
+  [hidden] { display: none !important; }
+</style>
+</head>
+<body>
+<main>
+  <h1>ICAIF 2026 holdout leaderboard</h1>
+  <p class="sub">Prospective strategies for the ICAIF 2026 trading-agent competition, ranked on
+    held-out 2026 data the way the contest ranks them. Read-only; entries are submitted from
+    the team's scorer.</p>
+
+  <p class="muted" id="boardnote">Loading…</p>
+  <div class="panel scroll"><table id="board"></table></div>
+  <div id="excluded"></div>
+  <details class="muted" style="margin-top:10px"><summary>Every submission, newest first</summary>
+    <div class="panel scroll tall" style="margin-top:8px"><table id="history"></table></div></details>
+
+  <h2>How it ranks</h2>
+  <div class="panel"><p class="muted" style="margin:0">In every rolling 15-day window of the
+    holdout, each entrant is ranked on cumulative return and Sharpe (higher is better) and on
+    maximum drawdown and turnover (lower is better), with ties sharing the average rank. The
+    Overall Rank Score is the mean of the four ranks, and the board orders entrants by its mean
+    across windows. The references are three fixed strategies: cash, equal-weight buy-and-hold
+    and inverse-volatility at 75% gross. Only each strategy's newest version is ranked; every
+    version is listed below the board.</p></div>
+</main>
+
+<script>
+  const METRICS = ["cumulative_return", "sharpe_ratio", "maximum_drawdown", "turnover"];
+  const LABELS = { cumulative_return: "Return", sharpe_ratio: "Sharpe",
+                   maximum_drawdown: "Max drawdown", turnover: "Turnover" };
+  const pct = (v) => (v * 100).toFixed(2) + "%";
+  const fmt = (k, v) => (v === null || v === undefined) ? "" :
+    (k === "sharpe_ratio" ? v.toFixed(3) : pct(v));
+  const $ = (id) => document.getElementById(id);
+  const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+  const boardSources = { references: [] };
+  // Entries are re-read on every load, never cached: a rank depends on the whole field.
+  const get = (path) => fetch(path, { cache: "no-store" });
+
+  const worker = new Worker("worker.js");
+  worker.onerror = (e) => {
+    $("boardnote").innerHTML = `<span style="color:var(--bad)">Could not start Python: ${esc(e.message || "the worker failed to load")}.
+      The page needs cdn.jsdelivr.net for Pyodide.</span>`;
+  };
+
+  async function start() {
+    const manifest = await (await get("manifest.json")).json();
+    boardSources.references = manifest.references;
+    const contents = {};
+    for (const path of manifest.files) {
+      const r = await get(path);
+      if (!r.ok) throw new Error(`HTTP ${r.status} fetching ${path}`);
+      contents[path] = await r.arrayBuffer();
+    }
+    worker.postMessage({ init: { contents, meta: manifest.meta, module: manifest.module } }, Object.values(contents));
+  }
+
+  async function loadBoard() {
+    const texts = [];
+    for (const p of boardSources.references) {
+      const r = await get(p);
+      if (!r.ok) throw new Error(`HTTP ${r.status} fetching ${p}`);
+      texts.push(await r.text());
+    }
+    const idx = await get("entries/index.json");
+    // 404 means nothing has been submitted yet: a board of references only.
+    if (!idx.ok && idx.status !== 404) throw new Error(`HTTP ${idx.status} fetching entries/index.json`);
+    const entries = idx.ok ? (await idx.json()).entries : [];
+    for (const p of entries) {
+      const r = await get(p);
+      if (!r.ok) throw new Error(`HTTP ${r.status} fetching ${p}`);
+      texts.push(await r.text());
+    }
+    $("boardnote").textContent = `Ranking ${entries.length} submission(s) and ${boardSources.references.length} references…`;
+    worker.postMessage({ board: texts });
+  }
+
+  function renderBoard(b) {
+    boardSources.referenceNames = b.rows.filter((r) => r.kind === "reference").map((r) => r.strategy);
+    if (b.error) { $("boardnote").innerHTML = `<span style="color:var(--bad)">${esc(b.error)}</span>`; return; }
+    $("boardnote").textContent = `${b.span[0]} to ${b.span[1]}, ${b.sizing} sizing. ${b.entrants} entrants ranked
+      against each other in each of ${b.windows} rolling 15-day windows (about ${b.independent_windows} independent),
+      the contest's rules per window. Lower mean score is better. SE is on the independent count, so two
+      entries within ~2 SE are not ordered. Ranks are relative to this board: a new entry can reorder the rest.`;
+    const cols = [
+      (r) => r.rank,
+      (r) => esc(r.strategy) + (r.kind === "reference" ? '<span class="ref">reference</span>' : ""),
+      (r) => esc(r.author),
+      (r) => `${r.mean_overall_score.toFixed(2)} ± ${r.se_overall_score.toFixed(2)}`,
+      (r) => r.mean_position.toFixed(2),
+      (r) => r.wins,
+      ...METRICS.map((k) => (r) => fmt(k, r["continuous_" + k])),
+      ...METRICS.map((k) => (r) => fmt(k, r["median_window_" + k])),
+      (r) => r.kind === "reference" ? "" : r.versions,
+      (r) => r.kind === "reference" ? "" : esc(r.submitted_at.replace("T", " ").replace("Z", " UTC")),
+    ];
+    const head = ["#", "strategy", "author", "mean score", "mean pos.", "wins",
+      ...METRICS.map((k) => LABELS[k] + " (holdout)"), ...METRICS.map((k) => LABELS[k] + " (median window)"),
+      "versions", "submitted"];
+    $("board").innerHTML = "<thead><tr>" + head.map((h) => `<th>${h}</th>`).join("") + "<th>note</th></tr></thead><tbody>" +
+      b.rows.map((r) => `<tr class="${r.kind}">` + cols.map((c) => `<td>${c(r)}</td>`).join("") +
+        `<td class="note">${esc(r.note)}${r.missing_rounds || r.invalid_rounds ? ` · held ${r.missing_rounds} missing, ${r.invalid_rounds} invalid` : ""}</td></tr>`).join("") +
+      "</tbody>";
+    $("excluded").innerHTML = b.excluded.length ? `<div class="note warn"><strong>Not ranked:</strong> ` +
+      b.excluded.map((e) => `${esc(e.strategy)} (${esc(e.reason)})`).join("; ") + "</div>" : "";
+    table($("history"), [(h) => h.submitted_at.replace("T", " ").replace("Z", ""), (h) => h.strategy, (h) => h.author,
+      ...METRICS.map((k) => (h) => fmt(k, h["continuous_" + k])), (h) => h.ranked ? "ranked" : ""],
+      b.history, ["submitted (UTC)", "strategy", "author", ...METRICS.map((k) => LABELS[k]), ""]);
+  }
+
+  function table(el, cols, rows, head) {
+    el.innerHTML = "<thead><tr>" + head.map((h) => `<th>${esc(h)}</th>`).join("") + "</tr></thead><tbody>" +
+      rows.map((r) => "<tr>" + cols.map((c) => `<td>${esc(c(r))}</td>`).join("") + "</tr>").join("") + "</tbody>";
+  }
+
+
+  worker.onmessage = ({ data }) => {
+    if (data.status) $("boardnote").textContent = data.status;
+    if (data.fatal) $("boardnote").innerHTML = `<span style="color:var(--bad)">Could not start: ${esc(data.fatal)}</span>`;
+    if (data.ready) loadBoard().catch((err) => {
+      $("boardnote").innerHTML = `<span style="color:var(--bad)">Could not load the leaderboard: ${esc(err.message)}</span>`;
+    });
+    if (data.board) renderBoard(JSON.parse(data.board));
+    if (data.boardError) $("boardnote").innerHTML = `<span style="color:var(--bad)">Could not rank: ${esc(data.boardError)}</span>`;
+  };
+  start().catch((err) => {
+    $("boardnote").innerHTML = `<span style="color:var(--bad)">Could not load the board: ${esc(err.message)}</span>`;
+  });
+</script>
+</body>
+</html>

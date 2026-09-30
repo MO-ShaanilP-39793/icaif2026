@@ -24,13 +24,21 @@ from datetime import datetime, timezone
 import pandas as pd
 
 from icaif import ranking
-from icaif.holdout import independent_windows
 
 SCHEMA = 1
 METRICS = list(ranking.METRICS)
 BOARD_SIZING = "pre_fee"
 REFERENCE = "reference"
 SUBMITTED = "submitted"
+
+
+def independent_windows(windows_df: pd.DataFrame) -> int:
+    """How many of the windows could be picked without any two sharing a day."""
+    n, last_end = 0, ""
+    for s, e in zip(windows_df["window_start"], windows_df["window_end"]):
+        if s > last_end:
+            n, last_end = n + 1, e
+    return n
 
 
 class EntryError(ValueError):
