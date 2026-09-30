@@ -5,7 +5,7 @@
 
 The Space is an allowlist, not a copy of the repo. It ships the harness, the ledger,
 the calendar and the organizers' validator and metric calculator, plus a 2026-only
-price file. Nothing else goes: no models, no features, no strategy code, no organizer
+price file (JSON: the office network blocks .csv downloads). Nothing else goes: no models, no features, no strategy code, no organizer
 panel. `icaif/` is mostly strategy code, and one stray import would carry it into the
 upload. So the build imports the harness from the built folder alone and refuses to
 finish if anything outside the allowlist loaded.
@@ -43,7 +43,7 @@ SPACE_FILES = ["index.html", "worker.js", "webapp.py", "README.md"]
 # What the worker writes into Pyodide's filesystem; the page's own HTML/JS is not.
 PY_FILES = ["webapp.py", *(f"icaif/{m}.py" for m in ICAIF_MODULES),
             *(f"starter-kit/{f}" for f in KIT_FILES),
-            "data/exec_prices.csv", "data/closes.csv", "data/market.json"]
+            "data/prices.json", "data/market.json"]
 # From just before the holdout, so a Space scoring a start in early January has fills;
 # the organizer panel (licensed to participants) is never an input here.
 PRICES_FROM = "2025-12-01"
@@ -64,9 +64,9 @@ def build(out: Path) -> dict:
 
     market = markets.research_market("alpaca")
     since = market.exec_prices.index >= PRICES_FROM
-    webapp.write_frame(market.exec_prices[since], out / "data" / "exec_prices.csv")
-    webapp.write_frame(market.closes[market.closes.index >= PRICES_FROM],
-                       out / "data" / "closes.csv")
+    (out / "data" / "prices.json").write_text(json.dumps({
+        "exec_prices": webapp.frame_doc(market.exec_prices[since]),
+        "closes": webapp.frame_doc(market.closes[market.closes.index >= PRICES_FROM])}))
     snapshot = sorted((data.ROOT / "data" / "public").glob("alpaca_30m_2*.parquet"))[-1].name
     days = [d for d in market.days if str(d) >= PRICES_FROM]
     meta = {"snapshot": snapshot, "first_day": str(days[0]), "last_day": str(days[-1]),
@@ -119,8 +119,9 @@ def parity(out: Path) -> None:
     full = markets.research_market("alpaca")
     webapp._MARKET = webapp.load_market(out)
     trimmed = webapp._MARKET[0]
-    if not trimmed.exec_prices.equals(full.exec_prices.loc[trimmed.exec_prices.index]):
-        sys.exit("shipped fill prices are not bit-identical to the full market's")
+    if not (trimmed.exec_prices.equals(full.exec_prices.loc[trimmed.exec_prices.index])
+            and trimmed.closes.equals(full.closes.loc[trimmed.closes.index])):
+        sys.exit("shipped prices are not bit-identical to the full market's")
     w = {t: 1 / 40 for t in full.tickers}
     cash = 1 - sum(w.values())
     days = holdout.span_days(full, holdout.HOLDOUT_START, holdout.HOLDOUT_END)

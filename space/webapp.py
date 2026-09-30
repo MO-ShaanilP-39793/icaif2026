@@ -17,26 +17,27 @@ from icaif import calendar, holdout
 ROOT = Path(__file__).resolve().parent
 
 
-def _frame(path: Path) -> pd.DataFrame:
+def _frame(doc: dict) -> pd.DataFrame:
     # Index as UTC nanoseconds, not a local-time string: a string with -05:00 and -04:00
     # offsets parses to object dtype, and no execution timestamp would match a row.
-    # round_trip keeps every float bit-exact, so the page fills at the build's prices.
-    df = pd.read_csv(path, index_col=0, float_precision="round_trip")
-    df.index = pd.to_datetime(df.index, unit="ns", utc=True).tz_convert(calendar.TZ)
-    return df
+    # json writes floats as repr and reads them back exactly, so the page fills at the
+    # build's prices bit for bit (the build checks this).
+    idx = pd.to_datetime(doc["index"], unit="ns", utc=True).tz_convert(calendar.TZ)
+    return pd.DataFrame(doc["data"], index=idx, columns=doc["columns"], dtype=float)
 
 
-def write_frame(df: pd.DataFrame, path: Path) -> None:
-    out = df.copy()
-    out.index = pd.DatetimeIndex(out.index).asi8
-    out.to_csv(path)
+def frame_doc(df: pd.DataFrame) -> dict:
+    return {"index": pd.DatetimeIndex(df.index).asi8.tolist(),
+            "columns": list(df.columns), "data": df.to_numpy(dtype=float).tolist()}
 
 
+# Prices ship as JSON, not CSV: the office network's download policy blocks .csv from
+# the Space, which left the page stuck at "HTTP 403 fetching data/exec_prices.csv".
 def load_market(root: Path = ROOT):
     meta = json.loads((root / "data" / "market.json").read_text())
-    market = holdout.market_from_frames(_frame(root / "data" / "exec_prices.csv"),
-                                        _frame(root / "data" / "closes.csv"),
-                                        meta["degraded_days"])
+    prices = json.loads((root / "data" / "prices.json").read_text())
+    market = holdout.market_from_frames(_frame(prices["exec_prices"]),
+                                        _frame(prices["closes"]), meta["degraded_days"])
     return market, meta
 
 
