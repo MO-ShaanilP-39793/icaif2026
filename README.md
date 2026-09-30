@@ -133,6 +133,11 @@ across windows as a histogram. Bins are shared down a column, so shapes compare 
   `SUBMIT_TOKEN` variable, a fine-grained token limited to the entry dataset and the
   board. Or run `tools/holdout_eval.py --decisions F --submit --note "..."`. Only the
   board's span and `pre_fee` sizing are accepted.
+- **In-repo strategies** are submitted with `tools/submit_strategy.py NAME [--dry]`, which
+  runs them fresh in every window as the references are. A decisions-file replay would
+  start each window in cash, and a book that decides from its own holdings would sit
+  there until its next rebalance. First entry: `model_tilt_0.5` ranks 3rd of 4
+  (2.74 ± 0.14), behind cash and inv_vol_hold_75, despite the best full-span Sharpe (1.67).
 - **Versions.** Only the newest version of a name ranks. Older ones are listed, so the
   number of looks at the holdout stays visible.
 - **Three repos, fixed visibility** (`icaif/space_hub.py`):
