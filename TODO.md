@@ -53,9 +53,10 @@ tilt loses to the hold after fees, and the GNN failed its stage-1 gate.
       the Strategist's `views` lever (Roadmap step 2), but not yet scored as a rule.
       Overnight-vs-intraday is ruled out by arithmetic: a 1.6 bps/day gap against
       20 bps x fraction moved.
-- [ ] Score a rule desk that always takes `views: light` (and `strong`) against the
-      plain one on the 2023-26 windows, no LLM: whether the tilt pays before the
-      Strategist is asked to choose it. About 5 min per level with the field.
+- [x] Score a rule desk that always takes `views: light` (and `strong`) against the
+      plain one on the 61 windows with scores (`tools/views_report.py`): neither pays.
+      light -0.020 (SE 0.059) on the default field, -0.016 (0.049) without the clone;
+      strong +0.008 (0.113) and -0.008 (0.088).
 - [ ] Refit the 2026 folds after the VIX-holiday context fix. About 15 min.
 - [ ] Move the period and rolling-window reports into `tools/period_report.py`.
 

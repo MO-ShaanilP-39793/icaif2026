@@ -348,6 +348,18 @@ The levers built on them, all checked by code rather than asked for in the promp
   rebuilt on today's inputs. It is shown the book, its turnover and fee first.
   Rebalances are capped at 2 a window, and one under 2% turnover is a hold.
 
+**The views do not pay as a rule** (`tools/views_report.py`, 49 s). A rule desk that
+always takes them, over the 61 windows with scores (2023-01 to 2026-08), against the
+plain book (difference in score, negative better):
+
+| Views | Default field | No-clone field | Better / worse (default) |
+| --- | --- | --- | --- |
+| `light` | -0.020 (SE 0.059) | -0.016 (SE 0.049) | 25% / 25% |
+| `strong` | +0.008 (SE 0.113) | -0.008 (SE 0.088) | 34% / 46% |
+
+`strong` buys a better return rank (-0.30) with a worse drawdown rank (+0.43), and they
+cancel. So a Strategist choosing views needs a reason the rule does not have.
+
 The rule desk reading every input equals `q_riskparity_entry_regime` trade for trade
 in all 167 windows (`tools/agent_replay.py --ledgers-only`, 99 s). Each input has a
 test that rewrites the future and requires the entry's observation unchanged
