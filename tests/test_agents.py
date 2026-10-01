@@ -149,6 +149,26 @@ def test_a_sharp_move_wakes_the_analyst_for_that_name_and_an_exit_sells_only_it(
     assert (others > 0).all()
 
 
+def test_a_held_name_with_no_price_makes_the_desk_hold_rather_than_value_the_book_without_it():
+    """pandas' sum skips NaN, so the book was valued as if the unpriced name were worth
+    nothing: every weight overstated, and an exit target built from them could carry the
+    NaN into weights.safe."""
+    m = _mkt()
+    d = Desk(Scripted())
+    sim.run(d, m, START, 1)
+    held = {t: 100.0 for t in TICKERS}
+    ctx = sim.RoundContext(DAYS[63], 1, calendar.at(DAYS[63], calendar.ROUNDS[1][0]),
+                           calendar.at(DAYS[63], calendar.ROUNDS[1][1]), held, 1000.0, m)
+    last = ctx.recent_closes(1).index[-1]
+    m._close_panel.loc[last, TICKERS[0]] = np.nan
+    value, nav = d._value(ctx, TICKERS)
+    assert np.isnan(nav)
+    unheld = dict(held, **{TICKERS[0]: 0.0})
+    ctx.shares = unheld
+    _, nav = d._value(ctx, TICKERS)
+    assert np.isfinite(nav)  # a name not held needs no price
+
+
 def test_a_cached_replay_asks_the_model_nothing_and_repeats_every_decision(tmp_path):
     """A replay that re-asked the model would score a different sample each run."""
     class Counting(Scripted):

@@ -20,6 +20,13 @@ def test_weights_over_one_in_total_are_scaled_not_rejected():
     assert sum(w.values()) == pytest.approx(1.0, abs=1e-4)
 
 
+def test_a_nan_target_raises_instead_of_buying_the_name_to_the_cap():
+    """Clamped, NaN does not become zero: min(0.30, nan) is 0.30 in Python, so a name a
+    strategy could not price would be bought to the 30% cap in a valid-looking file."""
+    with pytest.raises(ValueError, match="AAPL"):
+        weights.safe({"AAPL": float("nan"), "MSFT": 0.2}, TICKERS)
+
+
 def test_equal_metric_values_share_the_average_of_their_ranks():
     """Two all-cash books tie on every metric: each takes rank 1.5, and they share a
     position rather than one being ordered above the other by name."""

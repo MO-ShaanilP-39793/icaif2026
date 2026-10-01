@@ -147,8 +147,11 @@ class Desk:
         shares = pd.Series(ctx.shares, dtype=float).reindex(tickers).fillna(0.0)
         last = ctx.recent_closes(1)
         px = last.iloc[-1].reindex(tickers) if len(last) else pd.Series(np.nan, index=tickers)
-        value = shares * px
-        return value, ctx.cash + float(value.sum())
+        # Only held names need a price, and a held name without one makes the book
+        # unvaluable (NaN NAV, so the round holds). pandas' default sum skips the NaN
+        # and values the book without that name: every weight wrong, nothing looking it.
+        value = shares * px.where(shares != 0, 0.0)
+        return value, ctx.cash + float(value.sum(skipna=False))
 
     def _macro(self, ctx) -> Optional[dict]:
         if self.context is None and self.fomc is None:

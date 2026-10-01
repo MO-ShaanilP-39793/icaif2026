@@ -13,7 +13,15 @@ GRID = 1e-6
 
 
 def safe(weights: dict, tickers: list[str]) -> dict:
-    """All `tickers` present, each floored to the grid, capped, total <= 1."""
+    """All `tickers` present, each floored to the grid, capped, total <= 1.
+
+    A NaN target raises. Clamped, it would not become zero: `min(0.30, nan)` is 0.30 in
+    Python, so a name a strategy could not price would be bought to the cap.
+    """
+    bad = sorted(t for t in tickers if not math.isfinite(float(weights.get(t, 0.0))))
+    if bad:
+        raise ValueError(f"non-finite target weight for {bad}: a strategy that cannot "
+                         f"price a name must not trade it")
     w = {t: max(0.0, min(CAP, float(weights.get(t, 0.0)))) for t in tickers}
     total = sum(w.values())
     if total > 1.0:
