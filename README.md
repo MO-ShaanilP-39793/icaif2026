@@ -365,6 +365,54 @@ in all 167 windows (`tools/agent_replay.py --ledgers-only`, 99 s). Each input ha
 test that rewrites the future and requires the entry's observation unchanged
 (`tests/test_signals.py`).
 
+## Day-1 HAR sizing (Roadmap step 3; `tools/har_sizing_report.py`)
+
+**The HAR forecast does not improve the entry, so the desk is unchanged.** Each variant
+is bought once and held, so it pays no turnover its reference doesn't
+(`icaif/har_sizing.py`). With HAR off, each equals its reference trade for trade.
+Settings were chosen on the 146 non-overlapping windows from 2016-10 to 2025, by mean
+score on the no-clone field. The choice was committed (`reports/har_sizing_choice.json`,
+832878c) and then scored once on the 109 rolling Jan–Jun 2026 windows (8 independent).
+Paired score difference on the no-clone field, with its SE (negative is better):
+
+| Variant, chosen settings | 2016–25 vs hold | vs rule | Jan–Jun 2026 vs hold | vs rule |
+| --- | --- | --- | --- | --- |
+| 1. Weights on HAR 15-session vol | −0.029 (0.021) | −0.038 (0.034) | +0.018 (0.080) | −0.083 (0.241) |
+| 2. Exposure 0.75 × typical / forecast: h15, median of 250 sessions, clip [0.6, 0.9] | +0.027 (0.011) | +0.019 (0.032) | 0.000 (0.034) | −0.101 (0.225) |
+| 3. Both | −0.022 (0.022) | −0.031 (0.033) | +0.023 (0.078) | −0.078 (0.237) |
+| 4a. Rule desk, HAR vols in risk parity | −0.007 (0.030) | −0.015 (0.021) | +0.085 (0.214) | −0.016 (0.057) |
+| 4b. Rule desk, HAR exposure instead of the HMM | +0.002 (0.030) | −0.007 (0.013) | +0.110 (0.230) | +0.009 (0.036) |
+| 4c. Both inside the rule desk | +0.005 (0.030) | −0.003 (0.024) | +0.092 (0.210) | −0.009 (0.051) |
+
+The references score 2.719 (hold) and 2.728 (rule) on 2016–25, and 2.842 and 2.943 on
+the holdout. Their top-3 shares are 92% and 89%, then 94% and 80%. The variants' top-3
+shares run 89–94% and 79–95%.
+
+- **The win rule was fixed before scoring** (96f9e40): negative against both references
+  on both fields in both splits, and more than 2 SE below zero on the no-clone 2016–25
+  windows. Nothing reached 2 SE in selection, so nothing could win.
+- **HAR exposure at entry loses.** All 18 settings did worse than a fixed 75%, in both
+  eras and on both fields. The more a setting may lean, the more it loses: +0.03 to
+  +0.04 at [0.6, 0.9], and +0.09 to +0.10 at [0.5, 0.95] or [0.25, 0.95]. The chosen
+  setting loses return rank (+0.06), Sharpe rank (+0.02) and drawdown rank (+0.03). A
+  clip up to 0.95 also costs +0.23 of turnover rank. On the holdout the chosen setting changed 10 windows' scores,
+  5 for the better and 5 for the worse.
+- **HAR weights are the one consistent sign in selection**: −0.018 in 2016–22 and
+  −0.051 in 2023–25, but only 1.4 SE overall. On the holdout they are +0.018: 17
+  windows better, 18 worse and 74 the same. A few percent of reweighting rarely changes
+  a rank. The 15- and 3-session horizons tied exactly, and the tie-break by name took
+  h15.
+- **The default field flatters every reweighted variant** by about −0.13 against the
+  hold, because none of them is a copy of `inv_vol_hold` any more. That is the
+  near-clone artefact, not HAR, which is why the choice reads the no-clone field.
+- **`--holdout` refuses to run until the choice file is committed.** It records every
+  look in `reports/har_sizing_holdout.json` (1 so far). Selection takes 134 s and the
+  holdout 80 s.
+- **Fallbacks are logged, not hidden.** The 2022-01-31 window lacks forecasts for 6
+  names, so variants 1, 3, 4a and 4c bought the reference's shape there. A typical level
+  needs 150 forecasts, so the 10 windows before 2017-06 took the reference's exposure.
+  No holdout window fell back.
+
 ## Credentials
 
 Registration returns `TEAM_ID` and a **one-time team token that is never reset**.

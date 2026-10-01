@@ -1,0 +1,416 @@
+{
+ "looks": [
+  {
+   "at": "2026-10-01T13:11:22.743776+00:00",
+   "choice_commit": "832878c77b71464c1c5ac01d09a6661bb5ecafd0",
+   "windows": 109,
+   "n_eff": 8
+  }
+ ],
+ "variants": {
+  "1_weights": {
+   "label": "1_weights h15",
+   "holdout": {
+    "inv_vol_hold_75": {
+     "default": {
+      "diff": -0.09174311926605505,
+      "se": 0.12187087508375379,
+      "score": 3.11697247706422,
+      "se_score": 0.18655968200747594,
+      "top3": 0.908256880733945
+     },
+     "no_clone": {
+      "diff": 0.01834862385321101,
+      "se": 0.07951897304677584,
+      "score": 2.860091743119266,
+      "se_score": 0.17448302966724885,
+      "top3": 0.9541284403669725
+     }
+    },
+    "q_riskparity_entry_regime": {
+     "default": {
+      "diff": -0.0963302752293578,
+      "se": 0.3412489521590406,
+      "score": 3.11697247706422,
+      "se_score": 0.18655968200747594,
+      "top3": 0.908256880733945
+     },
+     "no_clone": {
+      "diff": -0.08256880733944955,
+      "se": 0.2414795270009125,
+      "score": 2.860091743119266,
+      "se_score": 0.17448302966724885,
+      "top3": 0.9541284403669725
+     }
+    }
+   },
+   "wins": false,
+   "checks": {
+    "selection default vs inv_vol_hold_75 < 0": true,
+    "holdout default vs inv_vol_hold_75 < 0": true,
+    "selection no_clone vs inv_vol_hold_75 < 0": true,
+    "holdout no_clone vs inv_vol_hold_75 < 0": false,
+    "selection no_clone vs inv_vol_hold_75 more than 2 SE below 0": false,
+    "selection default vs q_riskparity_entry_regime < 0": true,
+    "holdout default vs q_riskparity_entry_regime < 0": true,
+    "selection no_clone vs q_riskparity_entry_regime < 0": true,
+    "holdout no_clone vs q_riskparity_entry_regime < 0": true,
+    "selection no_clone vs q_riskparity_entry_regime more than 2 SE below 0": false
+   },
+   "entry_exposure_mean": 0.75,
+   "entry_exposure_min": 0.75,
+   "entry_exposure_max": 0.75,
+   "windows_with_fallback": 0,
+   "fallbacks": []
+  },
+  "2_exposure": {
+   "label": "2_exposure e:h15_t250_0.6-0.9",
+   "holdout": {
+    "inv_vol_hold_75": {
+     "default": {
+      "diff": 0.0,
+      "se": 0.034020690871988585,
+      "score": 3.208715596330275,
+      "se_score": 0.20217057161511695,
+      "top3": 0.926605504587156
+     },
+     "no_clone": {
+      "diff": 0.0,
+      "se": 0.034020690871988585,
+      "score": 2.841743119266055,
+      "se_score": 0.1964162978103695,
+      "top3": 0.944954128440367
+     }
+    },
+    "q_riskparity_entry_regime": {
+     "default": {
+      "diff": -0.0045871559633027525,
+      "se": 0.308066150044535,
+      "score": 3.208715596330275,
+      "se_score": 0.20217057161511695,
+      "top3": 0.926605504587156
+     },
+     "no_clone": {
+      "diff": -0.10091743119266056,
+      "se": 0.22474241494451697,
+      "score": 2.841743119266055,
+      "se_score": 0.1964162978103695,
+      "top3": 0.944954128440367
+     }
+    }
+   },
+   "wins": false,
+   "checks": {
+    "selection default vs inv_vol_hold_75 < 0": false,
+    "holdout default vs inv_vol_hold_75 < 0": false,
+    "selection no_clone vs inv_vol_hold_75 < 0": false,
+    "holdout no_clone vs inv_vol_hold_75 < 0": false,
+    "selection no_clone vs inv_vol_hold_75 more than 2 SE below 0": false,
+    "selection default vs q_riskparity_entry_regime < 0": false,
+    "holdout default vs q_riskparity_entry_regime < 0": true,
+    "selection no_clone vs q_riskparity_entry_regime < 0": false,
+    "holdout no_clone vs q_riskparity_entry_regime < 0": true,
+    "selection no_clone vs q_riskparity_entry_regime more than 2 SE below 0": false
+   },
+   "entry_exposure_mean": 0.7552928276405034,
+   "entry_exposure_min": 0.6,
+   "entry_exposure_max": 0.9,
+   "windows_with_fallback": 0,
+   "fallbacks": []
+  },
+  "3_both": {
+   "label": "3_both h15 e:h15_t250_0.6-0.9",
+   "holdout": {
+    "inv_vol_hold_75": {
+     "default": {
+      "diff": -0.07110091743119266,
+      "se": 0.13344816188174355,
+      "score": 3.1376146788990824,
+      "se_score": 0.18575041690457722,
+      "top3": 0.8990825688073395
+     },
+     "no_clone": {
+      "diff": 0.022935779816513763,
+      "se": 0.07752434317846969,
+      "score": 2.864678899082569,
+      "se_score": 0.17740253506120868,
+      "top3": 0.9541284403669725
+     }
+    },
+    "q_riskparity_entry_regime": {
+     "default": {
+      "diff": -0.07568807339449542,
+      "se": 0.329514712962022,
+      "score": 3.1376146788990824,
+      "se_score": 0.18575041690457722,
+      "top3": 0.8990825688073395
+     },
+     "no_clone": {
+      "diff": -0.0779816513761468,
+      "se": 0.23744433061817144,
+      "score": 2.864678899082569,
+      "se_score": 0.17740253506120868,
+      "top3": 0.9541284403669725
+     }
+    }
+   },
+   "wins": false,
+   "checks": {
+    "selection default vs inv_vol_hold_75 < 0": true,
+    "holdout default vs inv_vol_hold_75 < 0": true,
+    "selection no_clone vs inv_vol_hold_75 < 0": true,
+    "holdout no_clone vs inv_vol_hold_75 < 0": false,
+    "selection no_clone vs inv_vol_hold_75 more than 2 SE below 0": false,
+    "selection default vs q_riskparity_entry_regime < 0": true,
+    "holdout default vs q_riskparity_entry_regime < 0": true,
+    "selection no_clone vs q_riskparity_entry_regime < 0": true,
+    "holdout no_clone vs q_riskparity_entry_regime < 0": true,
+    "selection no_clone vs q_riskparity_entry_regime more than 2 SE below 0": false
+   },
+   "entry_exposure_mean": 0.7552928276405034,
+   "entry_exposure_min": 0.6,
+   "entry_exposure_max": 0.9,
+   "windows_with_fallback": 0,
+   "fallbacks": []
+  },
+  "4a_rp_sizing": {
+   "label": "4a_rp_sizing h15",
+   "holdout": {
+    "inv_vol_hold_75": {
+     "default": {
+      "diff": -0.013761467889908258,
+      "se": 0.29727613308745776,
+      "score": 3.194954128440367,
+      "se_score": 0.3353579568539865,
+      "top3": 0.7431192660550459
+     },
+     "no_clone": {
+      "diff": 0.08486238532110092,
+      "se": 0.21355273802134173,
+      "score": 2.926605504587156,
+      "se_score": 0.2597359860509919,
+      "top3": 0.8073394495412844
+     }
+    },
+    "q_riskparity_entry_regime": {
+     "default": {
+      "diff": -0.01834862385321101,
+      "se": 0.07674137929849896,
+      "score": 3.194954128440367,
+      "se_score": 0.3353579568539865,
+      "top3": 0.7431192660550459
+     },
+     "no_clone": {
+      "diff": -0.016055045871559634,
+      "se": 0.05676873640087312,
+      "score": 2.926605504587156,
+      "se_score": 0.2597359860509919,
+      "top3": 0.8073394495412844
+     }
+    }
+   },
+   "wins": false,
+   "checks": {
+    "selection default vs inv_vol_hold_75 < 0": true,
+    "holdout default vs inv_vol_hold_75 < 0": true,
+    "selection no_clone vs inv_vol_hold_75 < 0": true,
+    "holdout no_clone vs inv_vol_hold_75 < 0": false,
+    "selection no_clone vs inv_vol_hold_75 more than 2 SE below 0": false,
+    "selection default vs q_riskparity_entry_regime < 0": true,
+    "holdout default vs q_riskparity_entry_regime < 0": true,
+    "selection no_clone vs q_riskparity_entry_regime < 0": true,
+    "holdout no_clone vs q_riskparity_entry_regime < 0": true,
+    "selection no_clone vs q_riskparity_entry_regime more than 2 SE below 0": false
+   },
+   "entry_exposure_mean": 0.8298755454598629,
+   "entry_exposure_min": 0.43571737660970367,
+   "entry_exposure_max": 0.8446081321503255,
+   "windows_with_fallback": 0,
+   "fallbacks": []
+  },
+  "4b_rp_exposure": {
+   "label": "4b_rp_exposure har e:h15_t250_0.6-0.9",
+   "holdout": {
+    "inv_vol_hold_75": {
+     "default": {
+      "diff": 0.01834862385321101,
+      "se": 0.3126634808537752,
+      "score": 3.227064220183486,
+      "se_score": 0.34830552213281957,
+      "top3": 0.7247706422018348
+     },
+     "no_clone": {
+      "diff": 0.11009174311926606,
+      "se": 0.229617987610846,
+      "score": 2.9518348623853212,
+      "se_score": 0.2722922947530011,
+      "top3": 0.7889908256880734
+     }
+    },
+    "q_riskparity_entry_regime": {
+     "default": {
+      "diff": 0.013761467889908258,
+      "se": 0.04137897622950865,
+      "score": 3.227064220183486,
+      "se_score": 0.34830552213281957,
+      "top3": 0.7247706422018348
+     },
+     "no_clone": {
+      "diff": 0.009174311926605505,
+      "se": 0.03593695753331957,
+      "score": 2.9518348623853212,
+      "se_score": 0.2722922947530011,
+      "top3": 0.7889908256880734
+     }
+    }
+   },
+   "wins": false,
+   "checks": {
+    "selection default vs inv_vol_hold_75 < 0": true,
+    "holdout default vs inv_vol_hold_75 < 0": false,
+    "selection no_clone vs inv_vol_hold_75 < 0": false,
+    "holdout no_clone vs inv_vol_hold_75 < 0": false,
+    "selection no_clone vs inv_vol_hold_75 more than 2 SE below 0": false,
+    "selection default vs q_riskparity_entry_regime < 0": true,
+    "holdout default vs q_riskparity_entry_regime < 0": false,
+    "selection no_clone vs q_riskparity_entry_regime < 0": true,
+    "holdout no_clone vs q_riskparity_entry_regime < 0": false,
+    "selection no_clone vs q_riskparity_entry_regime more than 2 SE below 0": false
+   },
+   "entry_exposure_mean": 0.7552928276405034,
+   "entry_exposure_min": 0.6,
+   "entry_exposure_max": 0.9,
+   "windows_with_fallback": 0,
+   "fallbacks": []
+  },
+  "4c_rp_both": {
+   "label": "4c_rp_both h15 har e:h15_t250_0.6-0.9",
+   "holdout": {
+    "inv_vol_hold_75": {
+     "default": {
+      "diff": -0.0045871559633027525,
+      "se": 0.29388581655743845,
+      "score": 3.2041284403669725,
+      "se_score": 0.334668579499145,
+      "top3": 0.7431192660550459
+     },
+     "no_clone": {
+      "diff": 0.09174311926605505,
+      "se": 0.20994534343661198,
+      "score": 2.93348623853211,
+      "se_score": 0.2584347364363814,
+      "top3": 0.7889908256880734
+     }
+    },
+    "q_riskparity_entry_regime": {
+     "default": {
+      "diff": -0.009174311926605505,
+      "se": 0.07309166055493294,
+      "score": 3.2041284403669725,
+      "se_score": 0.334668579499145,
+      "top3": 0.7431192660550459
+     },
+     "no_clone": {
+      "diff": -0.009174311926605505,
+      "se": 0.05092689122737561,
+      "score": 2.93348623853211,
+      "se_score": 0.2584347364363814,
+      "top3": 0.7889908256880734
+     }
+    }
+   },
+   "wins": false,
+   "checks": {
+    "selection default vs inv_vol_hold_75 < 0": true,
+    "holdout default vs inv_vol_hold_75 < 0": true,
+    "selection no_clone vs inv_vol_hold_75 < 0": false,
+    "holdout no_clone vs inv_vol_hold_75 < 0": false,
+    "selection no_clone vs inv_vol_hold_75 more than 2 SE below 0": false,
+    "selection default vs q_riskparity_entry_regime < 0": true,
+    "holdout default vs q_riskparity_entry_regime < 0": true,
+    "selection no_clone vs q_riskparity_entry_regime < 0": true,
+    "holdout no_clone vs q_riskparity_entry_regime < 0": true,
+    "selection no_clone vs q_riskparity_entry_regime more than 2 SE below 0": false
+   },
+   "entry_exposure_mean": 0.7552928276405034,
+   "entry_exposure_min": 0.6,
+   "entry_exposure_max": 0.9,
+   "windows_with_fallback": 0,
+   "fallbacks": []
+  }
+ },
+ "references": {
+  "inv_vol_hold_75": {
+   "holdout": {
+    "inv_vol_hold_75": {
+     "default": {
+      "diff": 0.0,
+      "se": 0.0,
+      "score": 3.208715596330275,
+      "se_score": 0.195253930650808,
+      "top3": 0.9357798165137615
+     },
+     "no_clone": {
+      "diff": 0.0,
+      "se": 0.0,
+      "score": 2.841743119266055,
+      "se_score": 0.18967128243059117,
+      "top3": 0.944954128440367
+     }
+    },
+    "q_riskparity_entry_regime": {
+     "default": {
+      "diff": -0.0045871559633027525,
+      "se": 0.3106383556298982,
+      "score": 3.208715596330275,
+      "se_score": 0.195253930650808,
+      "top3": 0.9357798165137615
+     },
+     "no_clone": {
+      "diff": -0.10091743119266056,
+      "se": 0.22570596104859794,
+      "score": 2.841743119266055,
+      "se_score": 0.18967128243059117,
+      "top3": 0.944954128440367
+     }
+    }
+   }
+  },
+  "q_riskparity_entry_regime": {
+   "holdout": {
+    "inv_vol_hold_75": {
+     "default": {
+      "diff": 0.0045871559633027525,
+      "se": 0.3106383556298982,
+      "score": 3.213302752293578,
+      "se_score": 0.3462818560843334,
+      "top3": 0.7247706422018348
+     },
+     "no_clone": {
+      "diff": 0.10091743119266056,
+      "se": 0.22570596104859794,
+      "score": 2.9426605504587156,
+      "se_score": 0.27046797672850276,
+      "top3": 0.7981651376146789
+     }
+    },
+    "q_riskparity_entry_regime": {
+     "default": {
+      "diff": 0.0,
+      "se": 0.0,
+      "score": 3.213302752293578,
+      "se_score": 0.3462818560843334,
+      "top3": 0.7247706422018348
+     },
+     "no_clone": {
+      "diff": 0.0,
+      "se": 0.0,
+      "score": 2.9426605504587156,
+      "se_score": 0.27046797672850276,
+      "top3": 0.7981651376146789
+     }
+    }
+   }
+  }
+ }
+}

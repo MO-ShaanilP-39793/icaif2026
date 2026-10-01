@@ -122,6 +122,11 @@ tilt loses to the hold after fees, and the GNN failed its stage-1 gate.
       input equals its candidate in all 167 windows (`agent_replay.py --ledgers-only`).
 - [ ] What the LLM does with the signals is step 6's paid replay: count views,
       exclusions by signal, and rebalances by reason in its log.
+- [x] Day-1 HAR sizing (Roadmap step 3, `tools/har_sizing_report.py`): HAR weights,
+      HAR entry exposure, both, and each inside the rule desk. Chosen on 2016-25 and
+      committed before one look at Jan-Jun 2026. Nothing wins. HAR exposure lost to a
+      fixed 75% at every setting, and HAR weights went from -0.029 (1.4 SE) to +0.018
+      on the holdout. The desk is unchanged (README "Day-1 HAR sizing").
 
 ## Final materials (Nov 3)
 
