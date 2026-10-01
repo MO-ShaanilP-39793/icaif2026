@@ -212,12 +212,17 @@ class PaperBook:
                 issues.append(f"order {o['round_id']} waits: no {ex:%H:%M} open for "
                               f"{missing[:5]}{'...' if len(missing) > 5 else ''}")
                 break
+            prices = {t: float(p) for t, p, tt in zip(tickers, px, touched) if tt}
             px = np.where(touched, px, 1.0)
             new, cash, notional = sim.rebalance(sh, self.cash, w, px)
             self.shares = {t: float(s) for t, s in zip(tickers, new)}
             self.cash = float(cash)
             self.traded_notional += notional
-            self.fills.append({**o, "notional": notional, "cash_after": self.cash})
+            # What the fill left and paid, so a journal's record of it can be checked
+            # against this book (`journal.verify`) rather than against itself.
+            self.fills.append({**o, "notional": notional, "cash_after": self.cash,
+                               "shares_after": {t: s for t, s in self.shares.items() if abs(s) > SHARE_EPS},
+                               "prices": prices})
             self.pending.pop(0)
         return issues
 

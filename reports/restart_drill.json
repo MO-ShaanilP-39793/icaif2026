@@ -1,0 +1,109 @@
+{
+ "phase": "drill-2026-09-25-4d",
+ "days": [
+  "2026-09-25",
+  "2026-09-28",
+  "2026-09-29",
+  "2026-09-30"
+ ],
+ "rounds": 28,
+ "unbroken": {
+  "workers": 28,
+  "sigkilled": [],
+  "stops": 0,
+  "retried": [],
+  "seconds": 72,
+  "outcomes": {
+   "hold: the desk returned no trade": 27,
+   "trade (rule) -> upload dry-run": 1
+  },
+  "rounds_indexed": 28
+ },
+ "broken": {
+  "workers": 31,
+  "sigkilled": [
+   {
+    "round": "drill-2026-09-25-4d-2026-09-25-r1",
+    "write": "decision.json:1",
+    "returncode": -9
+   },
+   {
+    "round": "drill-2026-09-25-4d-2026-09-25-r2",
+    "write": "state.json:1",
+    "returncode": -9
+   },
+   {
+    "round": "drill-2026-09-25-4d-2026-09-28-r2",
+    "write": "agent.json:1",
+    "returncode": -9
+   },
+   {
+    "round": "drill-2026-09-25-4d-2026-09-29-r1",
+    "write": "state.json:1",
+    "returncode": -9
+   },
+   {
+    "round": "drill-2026-09-25-4d-2026-09-29-r7",
+    "write": "rounds.jsonl:1",
+    "returncode": -9
+   }
+  ],
+  "stops": 2,
+  "retried": [
+   "drill-2026-09-25-4d-2026-09-25-r1",
+   "drill-2026-09-25-4d-2026-09-25-r2",
+   "drill-2026-09-25-4d-2026-09-29-r1"
+  ],
+  "stopped_at": [
+   5,
+   17
+  ],
+  "seconds": 75,
+  "outcomes": {
+   "hold: the desk returned no trade": 27,
+   "trade (rule) -> upload dry-run": 1
+  },
+  "rounds_indexed": 28
+ },
+ "same_state": true,
+ "differs_in": [],
+ "journals": {
+  "unbroken/rule": {
+   "rounds": 28,
+   "fills": 1,
+   "names_held": 30,
+   "issues": 0,
+   "disagreements": [],
+   "copy_on_disk_is_committed": true,
+   "return_since_start": -0.0087
+  },
+  "unbroken/agent": {
+   "rounds": 28,
+   "fills": 1,
+   "names_held": 30,
+   "issues": 0,
+   "disagreements": [],
+   "copy_on_disk_is_committed": true,
+   "return_since_start": -0.0087
+  },
+  "broken/rule": {
+   "rounds": 28,
+   "fills": 1,
+   "names_held": 30,
+   "issues": 0,
+   "disagreements": [],
+   "copy_on_disk_is_committed": true,
+   "return_since_start": -0.0087
+  },
+  "broken/agent": {
+   "rounds": 28,
+   "fills": 1,
+   "names_held": 30,
+   "issues": 0,
+   "disagreements": [],
+   "copy_on_disk_is_committed": true,
+   "return_since_start": -0.0087
+  }
+ },
+ "seconds": 151
+}

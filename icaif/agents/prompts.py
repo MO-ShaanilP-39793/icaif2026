@@ -59,6 +59,17 @@ What you may be shown besides prices (each only when the desk has it):
   an impairment...), with hours since filing.
 - `headlines` per name (live only): recent Yahoo Finance headlines. A name's feed
   carries related stories too, so judge relevance; a headline is not a price move.
+- `memory`: the book's own journal. `book` is the book as it stands, checked against
+  the server's portfolio live: cash, names held, its return since the window started
+  and its best, and any order not yet seen filled. `rounds` gives the latest rounds in
+  full: which role decided (or the rule, when an answer failed), the levers, the stated
+  reason, what it traded and how the book has done since. `earlier_days` sums up older
+  days, `closed` lists names sold out and what they made, and `issues` lists rounds
+  where the book differed from what the journal expected (the book is right). Read the
+  earlier reasons before you contradict them, and say why if you do.
+- per held name, `entry_day`, `gain_since_entry` and `peak_gain_since_entry`: the
+  name's return since its fill and its best since (live, also `entry_date` and
+  `entry_price`). The gap between them is what the name has given back.
 
 A rule (the desk's fallback, and the benchmark you must beat) proposes a decision in
 `rule_proposal`. Adopt it unless the observation gives you a specific reason it is
@@ -148,7 +159,8 @@ rationale specific to the observation.
 FREE_BLANK = GAME + """
 The observation may include `macro` (the market, VIX, yields, sectors as of the prior
 close, as z-scores and changes; FOMC timing) and `recent_8k_filings` per name (SEC 8-K
-events in the last 7 days). `memory` lists your earlier decisions this window.
+events in the last 7 days). `memory` is your journal: earlier decisions this window,
+what they traded and how the book has done since.
 """
 
 FREE_INFORMED = GAME + """
@@ -169,7 +181,8 @@ what the reason is.
 
 The observation may include `macro` (the market, VIX, yields, sectors as of the prior
 close, as z-scores and changes; FOMC timing) and `recent_8k_filings` per name (SEC 8-K
-events in the last 7 days). `memory` lists your earlier decisions this window.
+events in the last 7 days). `memory` is your journal: earlier decisions this window,
+what they traded and how the book has done since.
 """
 
 SYSTEM["free_blank"] = FREE_BLANK

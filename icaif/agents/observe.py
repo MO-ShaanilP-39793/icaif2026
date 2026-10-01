@@ -115,12 +115,14 @@ def observation(closes: pd.DataFrame, rd: Readings, book: BookState, anon: Anony
                 news: Optional[dict] = None,
                 macro: Optional[dict] = None,
                 filings: Optional[dict] = None,
-                calendar_date: Optional[str] = None) -> dict:
+                calendar_date: Optional[str] = None,
+                positions: Optional[dict] = None) -> dict:
     """`signals`: today's {"names": {ticker: {field: value}}, "market": {...}} from
     `Desk._signals`; `at_entry`: the same fields as they stood on the entry day, shown
     with an `_at_entry` suffix so a change since entry is a comparison the agent reads,
     not one it must remember; `previews`: {key: weights} shown as `weight_if_<key>`,
-    the exact books a decision would buy."""
+    the exact books a decision would buy; `positions`: the journal's fields for each
+    held name (`Journal.name_fields`: entry day, gain since entry and its peak)."""
     tickers = list(closes.columns)
     rets = rd.returns
     tail = rets.tail(qs.SHAPE_DAYS)
@@ -161,6 +163,8 @@ def observation(closes: pd.DataFrame, rd: Readings, book: BookState, anon: Anony
             row["recent_8k_filings"] = filings.get(t, [])
         if news is not None and not anon.enabled:
             row["headlines"] = news.get(t, [])[:5]
+        if positions and t in positions:
+            row.update(positions[t])
         names.append(row)
     names.sort(key=lambda x: x["name"])
 

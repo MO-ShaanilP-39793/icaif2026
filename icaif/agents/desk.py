@@ -15,6 +15,12 @@ the scores (Black-Litterman, at a level whose book it is shown) and name exclusi
 with their cause; the Risk review can rebalance to the entry's recipe on today's
 inputs, with a stated reason, at most `max_rebalances` times. The rule uses none of
 them, so they change what an LLM can do and never what the fallback does.
+
+Every round also passes through the desk's `journal` (Roadmap step 4): the book is
+reconciled against it before anything is decided, each role reads it back as `memory`
+and per-name entry fields, and the round's decisions go into it after. It changes what
+a role is shown, never what the rule decides, so the rule desk still equals its
+candidate trade for trade.
 """
 
 import time
@@ -30,6 +36,7 @@ from icaif import calendar, compiler, quant, quant_strategies as qs, sim
 from icaif import weights as W
 from icaif.agents import observe, prompts, signals
 from icaif.agents.brains import BrainError, rule_event
+from icaif.agents.journal import Journal
 from icaif.agents.schemas import EntryDecision, EventDecision, ReviewDecision
 from icaif.vol import MARKET
 
@@ -52,6 +59,10 @@ class DeskConfig:
     round_budget_s: float = 360.0
     timeouts: dict = field(default_factory=lambda: {"entry": 240.0, "review": 120.0,
                                                     "event": 120.0})
+    # A journal error raises (replays, tests) or is recorded and the round goes on
+    # without memory (live): the memory informs a role, and a bug in it must not cost
+    # the submitted book its entry.
+    journal_strict: bool = True
 
 
 def rule_exposure(p_turbulent: float) -> float:
@@ -117,7 +128,12 @@ class Desk:
         self.day_no = 0
         self._day = None
         self._fired: set = set()
-        self.journal: list[dict] = []
+        self.journal = Journal()
+        self.journal_errors: list[str] = []
+        self._journal_error: Optional[str] = None
+        self._journal_backup: Optional[dict] = None
+        self._current: Optional[pd.Series] = None
+        self._note: Optional[str] = None
         self.log: list[dict] = []
         self._t_round = 0.0
 
@@ -155,11 +171,6 @@ class Desk:
                  else [c.action for c in decision.calls] == [c.action for c in rule.calls],
                  "latency_s": round(time.perf_counter() - t0, 3)}
         self.log.append(entry)
-        summary = {k: v for k, v in decision.model_dump().items() if k != "rationale"}
-        why = getattr(decision, "rationale", None) or "; ".join(
-            f"{c.name}: {c.reason}" for c in getattr(decision, "calls", []))
-        self.journal.append({"day": self.day_no, "role": role, "source": source,
-                             "decision": summary, "why": (why or "")[:240]})
         return decision, source
 
     def _value(self, ctx, tickers):
@@ -218,10 +229,51 @@ class Desk:
                      if self.filings is not None else None),
             news=(news.as_of(ctx.deadline, directory=self.news_dir)
                   if self.news_dir is not None and not self.cfg.anonymize else None),
-            calendar_date=str(ctx.day))
-        obs["memory"] = self.journal[-8:]
+            calendar_date=str(ctx.day), positions=self._name_fields())
+        obs["memory"] = self._memory()
         obs.update(extra)
         return obs
+
+    # ------------------------------------------------------------------ the journal
+
+    def _memory(self) -> dict:
+        if self._journal_error is not None:
+            why = "" if self.anon.enabled else f" ({self._journal_error[:120]})"
+            return {"unavailable": f"the journal failed this round{why}; the book shown is the "
+                                   f"one the round started from"}
+        return self.journal.memory(self.anon.code, real=not self.anon.enabled)
+
+    def _name_fields(self) -> Optional[dict]:
+        if self._journal_error is not None:
+            return None
+        return self.journal.name_fields(real=not self.anon.enabled)
+
+    def _journal_failed(self, err: Exception) -> None:
+        """Back to the journal as it stood before this round: half a reconcile on disk
+        would read next round as a book that changed without an order."""
+        self._journal_error = f"{type(err).__name__}: {err}"
+        self.journal_errors.append(self._journal_error)
+        self.journal = Journal.from_json(self._journal_backup)
+
+    def _journal_open(self, ctx) -> None:
+        self._journal_error, self._current, self._note = None, None, None
+        self._journal_backup = None if self.cfg.journal_strict else self.journal.to_json()
+        try:
+            self.journal.open_round(ctx, self.day_no)
+        except Exception as err:  # noqa: BLE001 - recorded; the round goes on without memory
+            if self.cfg.journal_strict:
+                raise
+            self._journal_failed(err)
+
+    def _journal_close(self, w: Optional[dict], n0: int) -> None:
+        if self._journal_error is not None:
+            return   # restored to the last good journal; this round is not on record
+        try:
+            self.journal.close_round(self.log[n0:], w, self._current, note=self._note)
+        except Exception as err:  # noqa: BLE001
+            if self.cfg.journal_strict:
+                raise
+            self._journal_failed(err)
 
     def _submit(self, target: pd.Series, current: pd.Series, nav: float, tickers):
         self.book.traded_notional += float((target - current).abs().sum()) * nav
@@ -248,19 +300,20 @@ class Desk:
                 "fired": sorted(self._fired), "hmm": hmm, "book": book,
                 "anon": None if self.anon is None else dict(self.anon.to_code),
                 "recipe": self.recipe, "at_entry": self.at_entry, "rebalances": self.rebalances,
-                "journal": self.journal, "log": self.log}
+                "journal": self.journal.to_json(), "log": self.log}
 
     def restore(self, state: Optional[dict], tickers: list[str]) -> None:
         """Continue from `state()`; an empty state is a desk that has seen no round.
 
         The book's weights are not restored: every round recomputes them from the
-        shares and cash it is handed, which is the book that actually exists.
+        shares and cash it is handed, which is the book that actually exists. Nor is
+        the journal trusted over it: the next round reconciles the two.
         """
         state = state or {}
+        self.journal = Journal.from_json(state.get("journal"))
         self.day_no = int(state.get("day_no", 0))
         self._day = date.fromisoformat(state["day"]) if state.get("day") else None
         self._fired = set(state.get("fired", []))
-        self.journal = list(state.get("journal", []))
         self.log = list(state.get("log", []))
         self.recipe, self.at_entry = state.get("recipe"), state.get("at_entry")
         self.rebalances = int(state.get("rebalances", 0))
@@ -293,11 +346,23 @@ class Desk:
         if ctx.day != self._day:
             self._day, self._fired = ctx.day, set()
             self.day_no += 1
+        n0 = len(self.log)
+        self._journal_open(ctx)
+        w = None
+        try:
+            w = self._decide(ctx, tickers)
+        finally:
+            self._journal_close(w, n0)
+        return w
+
+    def _decide(self, ctx, tickers):
         value, nav = self._value(ctx, tickers)
         if not np.isfinite(nav) or nav <= 0:
+            self._note = "the book cannot be valued (a held name has no price); held"
             return None  # cannot value the book; holding beats guessing
         current = value / nav
         self.book.weights = current
+        self._current = current
         if ctx.round == 1:
             self.book.nav.append(nav)
         if not self.book.entered:
@@ -354,6 +419,7 @@ class Desk:
         tail = self._tail(closes)
         shapes = {n: qs.SHAPES[n](tail) for n in ("inverse_vol", "risk_parity")}
         if any(s is None for s in shapes.values()):
+            self._note = "not enough history for a shape; cash until there is"
             return None  # not enough history for a shape: cash until there is
         self.hmm = observe.fit_regime(closes)
         rd = observe.readings(closes, self.hmm)

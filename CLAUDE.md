@@ -23,7 +23,7 @@ nothing from alphaBT, and alphaBT never tracks it (`icaif2026/` is in alphaBT's
 ## Environment
 
 ```bash
-.venv/bin/python -m pytest -q          # whole suite, ~40 s
+.venv/bin/python -m pytest -q          # whole suite, ~85 s
 .venv/bin/python tools/<name>.py       # every experiment is a tool script
 ```
 

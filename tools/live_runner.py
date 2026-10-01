@@ -5,6 +5,7 @@
     .venv/bin/python tools/live_runner.py run --phase validation        # dry, on the kit's bundled schedule
     .venv/bin/python tools/live_runner.py run --phase validation --live # the server's schedule and book
     .venv/bin/python tools/live_runner.py status --phase validation
+    .venv/bin/python tools/live_runner.py journal --phase validation    # each desk's memory, as its roles read it
     .venv/bin/python tools/live_runner.py portfolio --phase validation  # read-only: does the book parse?
     .venv/bin/python tools/live_runner.py arm --phase validation        # the owner's approval to upload
     .venv/bin/python tools/live_runner.py disarm
@@ -19,7 +20,9 @@ the kit refuses before any upload.
 Each round runs in its own process under the watchdog (`run`), so a hang in one round
 (the LightGBM/torch deadlock, a stuck fetch) is killed and the next round still runs.
 Everything a round saw and decided lands in output/live/<phase>/<round_id>/, one line
-per round in rounds.jsonl, and the scheduler's log in runner.log.
+per round in rounds.jsonl, each desk's journal in journal/<desk>.json, and the
+scheduler's log in runner.log. A runner killed between rounds or mid-write resumes
+where the last commit left it: start the same command again.
 
 Keep the machine awake and online from 08:45 ET to 15:30 ET (18:15-01:00 IST in
 October). On macOS the runner holds a caffeinate assertion while it runs; a closed lid
@@ -40,6 +43,7 @@ import pandas as pd  # noqa: E402
 
 from icaif import calendar, live, runner  # noqa: E402
 from icaif import portfolio as P  # noqa: E402
+from icaif.agents.journal import Journal  # noqa: E402
 
 
 def _cfg(args, phase=None) -> runner.Config:
@@ -180,11 +184,10 @@ def cmd_disarm(args) -> int:
 
 
 def _report(out: Path) -> None:
-    path = out / "rounds.jsonl"
-    if not path.exists():
+    rows = runner.read_lines(out / "rounds.jsonl")
+    if not rows:
         print("no rounds yet")
         return
-    rows = [json.loads(x) for x in path.read_text().splitlines() if x.strip()]
     n = max(len(x["round_id"]) for x in rows) + 2
     print(f"\n{'round':<{n}}{'ready s':>8}{'rule':>7}{'upload':>11}{'shadow':>9}  outcome")
     for x in rows:
@@ -205,7 +208,30 @@ def cmd_status(args) -> int:
     ok, why = runner.arm_status(args.phase, args.submit, pd.Timestamp.now(tz=calendar.TZ))
     print(f"{args.phase}: entry {st.data.get('entry')}; shadow spend ${st.data.get('spent_usd', 0):.2f}; "
           f"{'ARMED' if ok else 'not armed'}: {why}")
+    for name, d in st.data.get("desks", {}).items():
+        j = Journal.from_json(d.get("journal"))
+        b = j.memory(lambda t: t, real=True)["book"]
+        print(f"journal {name}: {len(j.rounds)} rounds, {b['names_held']} names held, return "
+              f"{b['return_since_start']}, peak {b['peak_return_since_start']}, "
+              f"{len(j.orders)} orders pending, {len(j.issues)} issues")
     _report(out)
+    return 0
+
+
+def cmd_journal(args) -> int:
+    """Each desk's journal as its roles read it, then (`--full`) every round on record."""
+    st = runner.State(Path(args.out) if args.out else runner.LIVE_OUT / args.phase)
+    for name, d in st.data.get("desks", {}).items():
+        if args.desk and name != args.desk:
+            continue
+        j = Journal.from_json(d.get("journal"))
+        print(f"== {name}: {len(j.rounds)} rounds on record")
+        print(json.dumps({"memory": j.memory(lambda t: t, real=True),
+                          "names": j.name_fields(real=True)}, indent=1))
+        if args.full:
+            print(json.dumps(j.to_json(), indent=1))
+        for i in j.issues:
+            print(f"ISSUE {i['key']} {i['kind']}: {i['text']}")
     return 0
 
 
@@ -256,6 +282,13 @@ def main() -> int:
     p.add_argument("--phase", required=True)
     p.add_argument("--submit", choices=["rule", "agent"], default="rule")
     p.set_defaults(fn=cmd_status)
+
+    p = sub.add_parser("journal", help="each desk's journal, as its roles read it")
+    p.add_argument("--phase", required=True)
+    p.add_argument("--desk", choices=["rule", "agent"], default=None)
+    p.add_argument("--out", default=None, help="phase directory (default output/live/<phase>)")
+    p.add_argument("--full", action="store_true", help="also every round on record, in full")
+    p.set_defaults(fn=cmd_journal)
 
     args = ap.parse_args()
     return args.fn(args)

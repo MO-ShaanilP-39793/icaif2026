@@ -80,6 +80,22 @@ class Market:
         k = np.searchsorted(self._panel_ends, pd.Timestamp(as_of).value, side="right")
         return self._close_panel.iloc[max(0, k - n):k]
 
+    def fill_prices(self, execution: pd.Timestamp, as_of: pd.Timestamp) -> Optional[pd.Series]:
+        """The prices a round executed at, for a round that executed before `as_of`.
+
+        A desk's journal reads its own fills here, so the door is cut like `history`:
+        `exec_prices` holds every round of the market, the current one and later ones
+        included, and a fill read before it happened would mark a book at a price it had
+        not traded at yet. None when the market has no row for that time (a live market
+        knows only the opens it has fetched).
+        """
+        execution = pd.Timestamp(execution)
+        if execution >= pd.Timestamp(as_of):
+            raise ValueError(f"fill prices of {execution} asked for as of {as_of}, before it executed")
+        if execution not in self.exec_prices.index:
+            return None
+        return self.exec_prices.loc[execution]
+
 
 def market_from_public_60m(bars_60m: pd.DataFrame, info_bars: pd.DataFrame) -> Market:
     """Execution prices from public 60m bars, which sit on the live :30 grid.
@@ -136,7 +152,11 @@ def market_from_public_60m(bars_60m: pd.DataFrame, info_bars: pd.DataFrame) -> M
 
 @dataclass
 class RoundContext:
-    """What a strategy is handed at a round: the clock, its own book, and prices."""
+    """What a strategy is handed at a round: the clock, its own book, and prices.
+
+    `round_id` and `book_source` say which live round this is and whose book `shares`
+    and `cash` are ("server", "paper"); a backtest leaves them at their defaults.
+    """
 
     day: date
     round: int
@@ -145,6 +165,8 @@ class RoundContext:
     shares: dict
     cash: float
     market: Market
+    round_id: Optional[str] = None
+    book_source: str = "backtest"
 
     def history(self) -> pd.DataFrame:
         return self.market.history(self.deadline)

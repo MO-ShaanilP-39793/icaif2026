@@ -54,23 +54,16 @@ class FreeDesk(Desk):
                             for t in tickers if w[t] > 0],
                 "rationale": "rule: inverse-vol at 75%, bought once"}
 
-    def __call__(self, ctx):
-        import time as _t
-
-        self._t_round = _t.perf_counter()
+    def _decide(self, ctx, tickers):
+        """Once a day, at round 1; `Desk.__call__` keeps the clock and the journal."""
         if ctx.round != 1:
             return None
-        tickers = ctx.market.tickers
-        if self.anon is None:
-            seed = (self.cfg.seed * 1_000_003 + ctx.day.toordinal()) if self.cfg.anonymize else None
-            self.anon = observe.Anonymizer(tickers, seed)
-            self.book = observe.BookState(pd.Series(0.0, index=tickers), [])
-        self.day_no += 1
         value, nav = self._value(ctx, tickers)
         if not np.isfinite(nav) or nav <= 0:
             return None
         current = value / nav
         self.book.weights = current
+        self._current = current
         self.book.nav.append(nav)
         closes = qs.daily_closes(ctx, qs.HISTORY_DAYS + 1)
         if self.hmm is None:
@@ -90,9 +83,6 @@ class FreeDesk(Desk):
                 raise ValueError(f"book sums to {sum(x.weight for x in d.weights):.4f} > 1")
 
         d, _ = self._ask(self.role, payload, FreeDecision, check, rule=rule)
-        # Keep memory short: the full book on every past day would swamp the prompt.
-        self.journal[-1]["decision"] = {"action": d.action, "names": len(d.weights),
-                                        "gross": round(sum(x.weight for x in d.weights), 4)}
         if d.action == "hold":
             if not self.book.entered and current.sum() <= compiler.HELD:
                 return None  # holding cash before entry: still not entered

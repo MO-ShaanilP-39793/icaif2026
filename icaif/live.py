@@ -44,6 +44,7 @@ Replayed on the 2026-09-27 snapshots for 2026-08-20, the live feature frame equa
 training frame reproduces output/preds/daily_d5_pct.parquet exactly.
 """
 
+import functools
 import json
 import math
 import os
@@ -504,19 +505,23 @@ def fills(bars_30m: pd.DataFrame) -> pd.DataFrame:
     return bars_30m.pivot_table(index="start", columns="ticker", values="open", aggfunc="first")
 
 
-def market(daily: pd.DataFrame, intraday: Optional[pd.DataFrame], days: list) -> sim.Market:
+def market(daily: pd.DataFrame, intraday: Optional[pd.DataFrame], days: list,
+           fill_opens: Optional[pd.DataFrame] = None) -> sim.Market:
     """A `sim.Market` the desk can read live: completed sessions as daily bars, then
     `intraday` (today's 60m bars, ended by the fetch).
 
-    `days` is the market's calendar, history and the sessions ahead. Its execution and
-    close frames are NaN: nothing executes against this market, they only give it its
-    tickers and days.
+    `days` is the market's calendar, history and the sessions ahead. Nothing executes
+    against this market. Its close frame is NaN and its execution frame holds only
+    `fill_opens` (`fills`: the 30m opens fetched, each a round's fill once its bar exists),
+    which the desk's journal reads through `Market.fill_prices` to price its own fills.
+    These are the prices the paper books fill at, so a paper book and its journal
+    agree to the cent; without them every fill reads as not yet priced.
     """
     tickers = sorted(data.load_universe())
     d = daily[daily["ticker"].isin(tickers)].copy()
     day = d["date"].dt.date
-    opens = {x: calendar.at(x, calendar.SESSION_OPEN) for x in day.unique()}
-    closes = {x: calendar.at(x, calendar.session_close(x)) for x in day.unique()}
+    opens = {x: _bounds(x)[0] for x in day.unique()}
+    closes = {x: _bounds(x)[1] for x in day.unique()}
     bars = pd.DataFrame({
         "ticker": d["ticker"].to_numpy(), "start": day.map(opens).to_numpy(),
         "end": day.map(closes).to_numpy(), "open": d["open"].to_numpy(),
@@ -527,11 +532,27 @@ def market(daily: pd.DataFrame, intraday: Optional[pd.DataFrame], days: list) ->
     if intraday is not None and len(intraday):
         late = intraday[intraday["start"].dt.date > max(closes)]
         bars = pd.concat([bars, late[data.COLUMNS]], ignore_index=True)
+    execution, close_ts = _grid(tuple(days))
+    exec_px = (pd.DataFrame(np.nan, index=execution, columns=tickers) if fill_opens is None
+               else fill_opens.reindex(index=execution, columns=tickers).astype(float))
+    return sim.Market(exec_px, pd.DataFrame(np.nan, index=close_ts, columns=tickers), bars,
+                      issues={"live": True})
+
+
+@functools.lru_cache(maxsize=None)
+def _bounds(day) -> tuple:
+    """A session's open and close timestamps; see `_grid`."""
+    return calendar.at(day, calendar.SESSION_OPEN), calendar.at(day, calendar.session_close(day))
+
+
+@functools.lru_cache(maxsize=4)
+def _grid(days: tuple) -> tuple:
+    """Every round's execution time and every session's close over `days`, made once per
+    span. A market spans ~860 sessions, and building their ~6,000 timestamps one at a
+    time was most of a round's time in a fast rehearsal, which builds one per round."""
     execution = pd.DatetimeIndex([r["execution"] for s in days for r in calendar.rounds_for(s)])
     close_ts = pd.DatetimeIndex([calendar.at(s, calendar.session_close(s)) for s in days])
-    return sim.Market(pd.DataFrame(np.nan, index=execution, columns=tickers),
-                      pd.DataFrame(np.nan, index=close_ts, columns=tickers), bars,
-                      issues={"live": True})
+    return execution, close_ts
 
 
 def market_days(daily: pd.DataFrame, latest: pd.Timestamp) -> list:

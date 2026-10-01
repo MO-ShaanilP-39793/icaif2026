@@ -266,6 +266,7 @@ Roadmap's step-6 gate.
 .venv/bin/python tools/live_runner.py arm --phase validation              # owner only, at a terminal
 .venv/bin/python tools/live_runner.py run --phase validation --live
 .venv/bin/python tools/live_runner.py status --phase validation
+.venv/bin/python tools/live_runner.py journal --phase validation          # what each desk's roles are shown
 ```
 
 - **Nothing uploads unless armed.** An upload needs `--live` and
@@ -307,6 +308,11 @@ Roadmap's step-6 gate.
   as well.
 - **Timing.** A dry round 1 takes 2.7 s without scoring and 21 s with it (the scorer
   child takes 14 s). A fast rehearsal of 2026-09-30 ran 7 worker processes in 36 s.
+- **Restarts.** A round commits once, at its end: one atomic write of state.json holds
+  the entry, both paper books and both desks' journals. Every file is written whole
+  (temp, fsync, rename), so a worker killed mid-write leaves the last good file and its
+  round runs again from the last commit. After a crash, start the same command again
+  ("Portfolio memory" has the drill).
 
 The runner's environment needs `CODABENCH_TOKEN` and `ICAIF_PROFILE` (in
 `starter-kit/.env`). It also needs `SEC_USER_AGENT` for fresh EDGAR events in the
@@ -361,9 +367,9 @@ plain book (difference in score, negative better):
 cancel. So a Strategist choosing views needs a reason the rule does not have.
 
 The rule desk reading every input equals `q_riskparity_entry_regime` trade for trade
-in all 167 windows (`tools/agent_replay.py --ledgers-only`, 99 s). Each input has a
-test that rewrites the future and requires the entry's observation unchanged
-(`tests/test_signals.py`).
+in all 167 windows (`tools/agent_replay.py --ledgers-only`, 142 s with step 4's journal
+check). Each input has a test that rewrites the future and requires the entry's
+observation unchanged (`tests/test_signals.py`).
 
 ## Day-1 HAR sizing (Roadmap step 3; `tools/har_sizing_report.py`)
 
@@ -412,6 +418,79 @@ shares run 89–94% and 79–95%.
   names, so variants 1, 3, 4a and 4c bought the reference's shape there. A typical level
   needs 150 forecasts, so the 10 windows before 2017-06 took the reference's exposure.
   No holdout window fell back.
+
+## Portfolio memory (Roadmap step 4; `icaif/agents/journal.py`)
+
+**Each desk keeps a journal of its own book, and every role reads it back.** A round's
+entry holds its decisions as the desk logged them (role, brain or rule fallback,
+levers, stated reason), what was submitted, its fill once a later round sees it, and
+the return since. Each held name has its entry day and price, its weight, its gain since
+entry and the best that gain has been. Step 5's trim reads those last two.
+
+- **One journal per desk, so one per book.** In Validation the rule desk's journal is
+  the submitted book's, and the shadow agent's is its paper book's. Both live in
+  state.json, committed with the paper books they describe. A copy of each sits in
+  `journal/<desk>.json` for reading, with each round's P&L since in dollars, and
+  `live_runner.py journal --phase P` prints what each desk's roles are shown.
+- **The book is the source of truth.** Each round the journal checks the book the round
+  starts from (the server's portfolio live) against what it expects: last round's book
+  plus each open order's fill, sized by `sim.rebalance` at the 30m opens the paper books
+  fill at. A match records the fill. A gap of more than 5 bps of NAV, in one name or in
+  cash, is an issue naming the names, and the journal then adopts the book. The desks
+  trade from the server's numbers either way. Vendor noise, Yahoo's opens against
+  Alpaca's (p99 21 bps of a 3% name, about 0.6 bps of NAV), sits far below that line.
+- **What was submitted is on record.** The runner tells each journal what became of its
+  decision: dry-run, uploaded, on paper, held by the guard, not armed. So a guard hold
+  never reads as a fill that failed, and an upload never reads as a decision nobody made.
+- **Point in time.** Fills come through `Market.fill_prices`, which raises for an
+  execution at or after the deadline, and marks through `recent_closes`. A round's own
+  order has no fill until a later round sees it in the book. A test rewrites every
+  later bar and fill and requires the journal and the memory unchanged.
+- **Anonymised in replays.** Codes, day numbers and returns only: no ticker, date,
+  price level or NAV.
+- **Bounded.** `memory` shows the latest 7 rounds in full, with quiet holds folded,
+  earlier days a line each, names sold and issues. It is held under 6,000 characters,
+  and that is a hard bound: the oldest detail goes first, and a note says what went.
+
+**Measured** (`tools/journal_report.py`, 234 s; `reports/journal_budget.json`). The
+memory a role would read at every one of the 105 rounds, in each of the 167 windows:
+
+| Desk | Max chars | Median | p95 | Journal vs ledger |
+| --- | --- | --- | --- | --- |
+| Rule desk (what Validation submits) | 3,776 | 1,604 | 2,667 | 167 of 167 agree |
+| Busy scripted desk (a lever at every chance, 1,000-character reasons) | 5,859 | 4,371 | 5,757 | 167 of 167 agree |
+| Worst case (every round the longest answer the schemas allow, and a trade; 12 windows) | 5,873 | 5,568 | 5,859 | no desk to check |
+
+A whole observation runs about 16,600 characters at the median for the rule desk
+(18,100 for the busy one, 20,100 at most). The memory is 9.5% of it at the median (20% at
+most), or 22% for the busy desk (33% at most). The per-name journal fields add about
+2,300 characters when all 30 names are held. The busy desk's memory was trimmed to fit
+in 243 of the 3,588 rounds a role was asked. "Agree" means every fill to the cent, every
+held name's entry, cost and peak rebuilt from the ledger alone, every stated lever (an
+avoided name not bought, an exit sold out, an exposure bought at its level), and no
+issue on record. The busy desk's 3,530 fills and 3,359 names sold raised
+none.
+
+**Restarts.** The journals are committed with everything else in one atomic write of
+state.json, so a round commits all of it or none of it. Every runner file is now
+written whole: a temp file, fsync, then a rename. Before, a worker killed while writing
+decision.json left a truncated file. Its retry re-uses an existing decision.json by
+design, so the kit can match an upload by its bytes, and the kit refuses a truncated
+one: the entry would have gone unsubmitted and the book sat a day in cash. A fast
+rehearsal now retries a dead worker once, as the live scheduler does.
+`tools/restart_drill.py` replays Sep 25-30 (28 rounds) twice through the real
+scheduler, each round in its own worker process, on one Yahoo snapshot. One run is
+unbroken. In the other, five workers are SIGKILLed halfway through a write (the entry's
+decision.json, two state.json commits, a journal copy, rounds.jsonl) and the scheduler
+is stopped twice between rounds. Both end in the same state, every round is indexed,
+and each of the four journals agrees with its paper ledger, with no issue
+(151 s; `reports/restart_drill.json`).
+
+The rule desk reading its journal still equals `q_riskparity_entry_regime` trade for
+trade in all 167 windows, and its journal agrees with its ledger in all 167
+(`agent_replay.py --ledgers-only`, 142 s). What these checks cannot show is whether an
+LLM's own reasons stay consistent with its memory. `journal.verify` checks the levers
+a reason came with, not its prose, so that is step 6's paid replay.
 
 ## Credentials
 

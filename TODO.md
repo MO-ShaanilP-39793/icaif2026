@@ -84,6 +84,11 @@ tilt loses to the hold after fees, and the GNN failed its stage-1 gate.
 - [ ] Snapshot the earnings calendar and 8-K filings daily on the runner's machine:
       the shadow reads the latest snapshot (the calendar's is 2026-09-28).
 - [ ] A standby host (the Deployment tab's hh:23 check) is not built.
+- [x] Restarts (Roadmap step 4): every runner file is written whole (temp, fsync,
+      rename), a round commits once (state.json, with both books and both journals),
+      and a dead worker is retried in a fast rehearsal too. `tools/restart_drill.py`
+      replays Sep 25-30 with 5 workers SIGKILLed mid-write and the scheduler stopped
+      twice: the same end state as an unbroken run, every journal agreeing with its book.
 
 ## Agent (`icaif/agents/`, `tools/agent_replay.py`)
 
@@ -122,6 +127,15 @@ tilt loses to the hold after fees, and the GNN failed its stage-1 gate.
       input equals its candidate in all 167 windows (`agent_replay.py --ledgers-only`).
 - [ ] What the LLM does with the signals is step 6's paid replay: count views,
       exclusions by signal, and rebalances by reason in its log.
+- [x] Portfolio memory (Roadmap step 4, `icaif/agents/journal.py`): a journal per desk,
+      so per book (the submitted one and the shadow's paper one), reconciled against the
+      book every round, server first. Every role reads it as `memory` (the latest 7
+      rounds in full, earlier days a line each, under 6,000 characters) and per held name
+      `entry_day`, `gain_since_entry`, `peak_gain_since_entry`, which step 5's trim reads.
+      The rule desk with it still equals its candidate in all 167 windows, and its
+      journal agrees with its ledger in all 167 (README "Portfolio memory").
+- [ ] Whether the LLM's stated reasons stay consistent with its memory is step 6's paid
+      replay: the journal makes it checkable (`journal.verify` checks levers, not prose).
 - [x] Day-1 HAR sizing (Roadmap step 3, `tools/har_sizing_report.py`): HAR weights,
       HAR entry exposure, both, and each inside the rule desk. Chosen on 2016-25 and
       committed before one look at Jan-Jun 2026. Nothing wins. HAR exposure lost to a

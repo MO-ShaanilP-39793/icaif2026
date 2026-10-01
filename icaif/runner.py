@@ -20,7 +20,14 @@ A round, in order (`run_round`):
 6. **Shadow.** With `submit="rule"`, the agent desk runs after the upload, on its own
    paper book and inside the time left before the deadline. Its decision is logged
    beside the submitted one, and its order fills in its paper book.
-7. **Record.** A line per round in rounds.jsonl; the files in <round_id>/.
+7. **Record.** Each desk's journal is told what became of its decision (uploaded, on
+   paper, held), then one atomic commit of state.json, then a line per round in
+   rounds.jsonl, the files in <round_id>/, and each desk's journal in journal/<desk>.json.
+
+**Every file is written whole or not at all** (`write_atomic`: a temp file, fsync, then
+a rename). A worker killed mid-write leaves the last good file, and the round, which
+never committed, runs again from the state before it: a torn state.json would read as
+"no entry yet", and a torn decision.json would be re-used and uploaded as it lay.
 
 Every stage fails toward silence. A missed round holds the book (`docs/rules.md`), which
 costs at most a day of a book we had chosen to keep. An upload cannot be taken back: the
@@ -50,6 +57,7 @@ from icaif import calendar, compiler, data, live, sim, watchdog
 from icaif import portfolio as P
 from icaif.agents import brains
 from icaif.agents.desk import Desk, DeskConfig
+from icaif.agents.journal import Journal
 
 KIT = data.ROOT / "starter-kit"
 KIT_STATE = KIT / ".icaif"
@@ -125,11 +133,36 @@ class Round:
 
 # ----------------------------------------------------------------------------- state
 
-class State:
-    """The phase's memory between rounds: the entry, the desks, the paper books, spend.
+def write_atomic(path: Path, text: str, mode: int = 0o644) -> None:
+    """`path` holds `text` whole, or what it held before: never a part.
 
-    Written atomically: a crash mid-write must leave the last good state, not half
-    of one, or the next round would read "no entry yet" off a truncated file.
+    A temp file beside it, flushed to disk, then renamed over it (rename is atomic on
+    POSIX), then the directory synced so the rename itself survives a power cut. The
+    temp's name is fixed per target, so a crash's leftover is overwritten next time and
+    never read: readers open only the final name. `mode` applies from creation, so a
+    private file (a decision carries the team token) is never briefly world-readable.
+    """
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(f".{path.name}.tmp")
+    with os.fdopen(os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, mode), "w") as f:
+        os.fchmod(f.fileno(), mode)   # a leftover temp keeps its old mode otherwise
+        f.write(text)
+        f.flush()
+        os.fsync(f.fileno())
+    os.replace(tmp, path)
+    dfd = os.open(path.parent, os.O_RDONLY)
+    try:
+        os.fsync(dfd)
+    finally:
+        os.close(dfd)
+
+
+class State:
+    """The phase's memory between rounds: the entry, the desks and their journals, the
+    paper books, spend. One file, so a round commits all of it or none of it: a journal
+    saved apart from the paper book it describes could survive a crash the book did not,
+    and the next round would reconcile a fill that never happened.
     """
 
     def __init__(self, out: Path):
@@ -138,10 +171,7 @@ class State:
                      {"entry": None, "rounds": {}, "desks": {}, "paper": {}, "spent_usd": 0.0})
 
     def save(self) -> None:
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        tmp = self.path.with_suffix(".tmp")
-        tmp.write_text(json.dumps(live._clean(self.data), indent=1))
-        os.replace(tmp, self.path)
+        write_atomic(self.path, json.dumps(live._clean(self.data), indent=1))
 
 
 @contextlib.contextmanager
@@ -160,11 +190,41 @@ def phase_lock(out: Path):
 
 
 def write_private(path: Path, text: str) -> None:
-    """Mode 0600 from creation: a live decision.json carries the team token."""
-    path.parent.mkdir(parents=True, exist_ok=True)
-    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-    with os.fdopen(fd, "w") as f:
-        f.write(text)
+    """Mode 0600 from creation, and whole: a live decision.json carries the team token,
+    and a retry re-uploads the file a dead worker left, so half of one must never exist."""
+    write_atomic(path, text, mode=0o600)
+
+
+def index_round(out: Path, st: "State", rec: dict) -> None:
+    """rounds.jsonl one line longer, rewritten whole.
+
+    A torn last line (an append cut short before writes were atomic) is dropped: it was
+    never a whole record. A committed round with no line, because its worker died
+    between the commit and this write, gets one back from its round.json, so the index
+    a report reads never skips a round the state has.
+    """
+    path = out / "rounds.jsonl"
+    rows = read_lines(path)
+    listed = {x.get("round_id") for x in rows}
+    for rid in st.data["rounds"]:
+        f = out / rid / "round.json"
+        if rid not in listed and rid != rec["round_id"] and f.exists():
+            rows.append({k: v for k, v in json.loads(f.read_text()).items() if k != "traceback"})
+    rows.append({k: v for k, v in rec.items() if k != "traceback"})
+    write_atomic(path, "".join(json.dumps(x) + "\n" for x in rows))
+
+
+def read_lines(path: Path) -> list[dict]:
+    """The JSON lines of `path` that parse; a torn one is skipped, not fatal."""
+    if not path.exists():
+        return []
+    rows = []
+    for x in path.read_text().splitlines():
+        try:
+            rows.append(json.loads(x))
+        except ValueError:
+            continue
+    return rows
 
 
 # ----------------------------------------------------------------------------- the owner's switch
@@ -379,21 +439,72 @@ def make_brain(cfg: Config, st: State):
 def run_desk(name: str, brain, cfg: Config, st: State, mkt: sim.Market, r: Round,
              book: P.Book, *, entered_now: Optional[bool] = None, inputs: Optional[dict] = None,
              budget_s: Optional[float] = None) -> tuple[Optional[dict], dict]:
-    """One desk's answer this round, its state carried over from the last round."""
-    dcfg = DeskConfig(window_days=cfg.window_days, anonymize=False,
+    """One desk's answer this round, its state and journal carried over from the last.
+
+    The desk's journal reconciles against `book` (the server's live) before the desk
+    decides; what it found that disagrees is returned as `journal_issues`. A journal
+    that fails is recorded and the desk decides without memory (`journal_strict` off):
+    the submitted book's entry must not wait on a bug in what the agent is shown.
+    """
+    dcfg = DeskConfig(window_days=cfg.window_days, anonymize=False, journal_strict=False,
                       round_budget_s=budget_s if budget_s is not None else cfg.agent_budget_s)
     desk = Desk(brain, dcfg, **(inputs or {}))
     desk.restore(st.data["desks"].get(name), mkt.tickers)
     if entered_now is not None:
         desk.book.entered = entered_now
-    n = len(desk.log)
+    n, i0 = len(desk.log), len(desk.journal.issues)
     ctx = sim.RoundContext(r.day, r.number, r.deadline, r.execution,
-                           {t: book.shares.get(t, 0.0) for t in mkt.tickers}, book.cash, mkt)
+                           {t: book.shares.get(t, 0.0) for t in mkt.tickers}, book.cash, mkt,
+                           round_id=r.id, book_source=book.source)
     w = desk(ctx)
     st.data["desks"][name] = desk.state()
-    return w, {"roles": [{k: e[k] for k in ("role", "source", "reason", "decision", "latency_s")}
-                         for e in desk.log[n:]],
-               "day_no": desk.day_no, "entered": desk.book.entered}
+    info = {"roles": [{k: e[k] for k in ("role", "source", "reason", "decision", "latency_s")}
+                      for e in desk.log[n:]],
+            "day_no": desk.day_no, "entered": desk.book.entered}
+    if desk.journal_errors:
+        info["journal_error"] = desk.journal_errors[-1]
+    issues = desk.journal.issues[i0:] if not desk.journal_errors else []
+    if issues:
+        info["journal_issues"] = [f"{i['kind']}: {i['text']}" for i in issues]
+    return w, info
+
+
+def journal_order(st: State, name: str, r: Round, status: str, *, why: Optional[str] = None,
+                  target: Optional[dict] = None, source: Optional[str] = None,
+                  ran: bool = True, skip_why: Optional[str] = None) -> None:
+    """Tell desk `name`'s journal what became of this round: the status of what was
+    submitted for its book (uploaded, dry-run, paper, held by the guard), and whose book
+    it was. Without it, every guard hold would read next round as a fill that never came,
+    and an upload as a decision nobody made. A desk that did not run gets the round on
+    record as skipped, with the order its book was given anyway."""
+    d = st.data["desks"].get(name)
+    if d is None:
+        return
+    j = Journal.from_json(d.get("journal"))
+    if not ran:
+        j.skipped(r.id, r.number, str(r.day), skip_why or "the desk did not run")
+    if ran or target is not None:
+        j.set_order(r.id, status, why=why, target=target, source=source)
+    d["journal"] = j.to_json()
+
+
+def journal_files(cfg: Config, st: State) -> None:
+    """Each desk's journal on its own, journal/<desk>.json, after the commit.
+
+    A copy for reading (`tools/live_runner.py journal`), never read back: the journal of
+    record is the one inside state.json, committed with the books it describes. Only
+    the desks' own JSON goes in, never a decision file, which carries the team token.
+    """
+    books = ({"rule": "submitted", "agent": "shadow (paper)"} if cfg.submit == "rule"
+             else {"rule": "submitted (fallback)", "agent": "submitted"})
+    for name, d in st.data["desks"].items():
+        j = d.get("journal")
+        if not isinstance(j, dict):
+            continue
+        write_atomic(cfg.out / "journal" / f"{name}.json", json.dumps(live._clean({
+            "phase": cfg.phase, "desk": name, "book": books.get(name, name), "submit": cfg.submit,
+            "rounds_on_record": len(j.get("rounds", [])), "pnl_since": Journal.from_json(j).since(),
+            "journal": j}), indent=1))
 
 
 def _describe(w: Optional[dict], info: dict, current: Optional[pd.Series]) -> dict:
@@ -516,13 +627,14 @@ def run_round(cfg: Config, row: dict, doors: Doors) -> dict:
         rec["timings"]["total"] = round(time.perf_counter() - t0, 3)
         st.data["rounds"][r.id] = {"outcome": rec.get("outcome"), "at": str(doors.now()),
                                    "upload": rec.get("submitted", {}).get("upload", {}).get("status")}
-        st.save()
-    rec = live._clean(rec)
-    rdir = cfg.out / r.id
-    rdir.mkdir(parents=True, exist_ok=True)
-    (rdir / "round.json").write_text(json.dumps(rec, indent=2))
-    with open(cfg.out / "rounds.jsonl", "a") as f:
-        f.write(json.dumps({k: v for k, v in rec.items() if k != "traceback"}) + "\n")
+        st.save()   # the commit: everything below is a record of it, rewritten whole
+        rec = live._clean(rec)
+        record = cfg.out / r.id / "round.json"
+        if record.exists() and str(rec.get("outcome", "")).startswith("skipped"):
+            record = record.with_name("round.rerun.json")   # the round's own record stays
+        write_atomic(record, json.dumps(rec, indent=2))
+        index_round(cfg.out, st, rec)
+        journal_files(cfg, st)
     return rec
 
 
@@ -571,7 +683,8 @@ def _round(cfg, r: Round, st: State, session, doors: Doors, rec: dict, t0: float
     if daily is not None:
         latest = pd.Timestamp(rec["closes"]["latest_session"])
         today = live.today_60m(bars30, r.day) if bars30 is not None else None
-        mkt = live.market(daily, today, live.market_days(daily, latest))
+        # The 30m opens are the paper books' fills, and the journals price fills at them.
+        mkt = live.market(daily, today, live.market_days(daily, latest), fill_opens=opens)
         if r.day not in mkt.days:
             rec["errors"].append(f"{r.day} is not a session on the NYSE calendar")
             mkt = None
@@ -635,8 +748,8 @@ def _round(cfg, r: Round, st: State, session, doors: Doors, rec: dict, t0: float
         write_private(path, live.check_decision(decision))
     else:
         path = rdir / "hold.json"
-        path.write_text(json.dumps(live._clean({"round_id": r.id, "source": source, "reason": why,
-                                                "target": chosen}), indent=2))
+        write_atomic(path, json.dumps(live._clean({"round_id": r.id, "source": source, "reason": why,
+                                                   "target": chosen}), indent=2))
     sub["file"] = str(path)
     lap("decision_ready")
     rec["ready_before_deadline_s"] = round((r.deadline - doors.now()).total_seconds(), 1)
@@ -654,6 +767,16 @@ def _round(cfg, r: Round, st: State, session, doors: Doors, rec: dict, t0: float
         papers["submitted"].order(r.id, r.execution, chosen)
     rec["outcome"] = (f"trade ({source}) -> upload {up['status']}" if ok else
                       why if why.startswith("hold") else f"no submission: {why}")
+    status = up["status"] if ok else "hold"
+    sent = chosen if ok else None
+    if cfg.submit == "rule":
+        if rule_w is not None or not rule_ok:
+            journal_order(st, "rule", r, status, why=why, ran=rule_ok,
+                          skip_why="the rule desk did not run: " + "; ".join(rec["errors"])[:200])
+    else:   # both desks ran on the submitted book: tell each whose book went in
+        for name, ran in (("rule", rule_ok), ("agent", agent_ok)):
+            journal_order(st, name, r, status, why=why, target=sent, source=source, ran=ran,
+                          skip_why=f"the {name} desk did not run")
 
     # 6. the shadow
     if cfg.submit == "rule" and cfg.shadow != "none" and mkt is not None:
@@ -668,9 +791,21 @@ def _round(cfg, r: Round, st: State, session, doors: Doors, rec: dict, t0: float
             rec["shadow"]["guard"] = s_why
             if s_ok:
                 papers["agent"].order(r.id, r.execution, w)
+            journal_order(st, "agent", r, "paper" if s_ok else "hold", why=s_why)
+        elif not ok_:
+            sh = rec.get("shadow") or {}
+            journal_order(st, "agent", r, "hold", ran=False,
+                          skip_why=f"the shadow did not run: {sh.get('why') or sh.get('error') or 'unknown'}")
     lap("shadow")
     for k, pb in papers.items():
         st.data["paper"][k] = pb.to_json()
+    for label in ("rule", "agent", "shadow"):
+        x = rec.get(label) or {}
+        for issue in x.get("journal_issues", []):
+            rec["warnings"].append(f"journal ({label}): {issue}")
+        if x.get("journal_error"):
+            rec["warnings"].append(f"journal ({label}) failed, the desk decided without memory: "
+                                   f"{x['journal_error']}")
 
 
 def _agent(cfg, r, st, doors, rec, mkt, book, current, *, reserve_s, entered_now, label):
@@ -706,8 +841,8 @@ def _agent(cfg, r, st, doors, rec, mkt, book, current, *, reserve_s, entered_now
             if isinstance(brain.inner, brains.ClaudeBrain):
                 st.data["spent_usd"] = float(st.data.get("spent_usd", 0.0)) + brain.inner.cost()
             if brain.calls:
-                (cfg.out / r.id / f"{label}_calls.json").write_text(
-                    json.dumps(live._clean(brain.calls), indent=1, default=str))
+                write_atomic(cfg.out / r.id / f"{label}_calls.json",
+                             json.dumps(live._clean(brain.calls), indent=1, default=str))
     rec[label] = {**_describe(w, info, current), "inputs": meta, "brain": brain.name,
                   "budget_s": round(budget, 1)}
     return w, True
@@ -803,7 +938,9 @@ def run_phase(cfg: Config, read_schedule: Callable[[], tuple[dict, float]], *,
     cancellation or a moved deadline is seen before the wake, and the wake is computed
     on the server's clock. A worker that dies before recording its round is retried
     once while four minutes remain; after the deadline the round is recorded missed.
-    `fast` replays the rounds back to back with each worker's clock set to its wake.
+    `fast` replays the rounds back to back with each worker's clock set to its wake, and
+    retries a dead worker once too, at the same wake: a replay that skipped the retry
+    would rehearse a recovery the live runner does not have.
     """
     cfg.out.mkdir(parents=True, exist_ok=True)
     if not fast:
@@ -818,9 +955,9 @@ def run_phase(cfg: Config, read_schedule: Callable[[], tuple[dict, float]], *,
             say(f"{cfg.phase}: the schedule has no rounds", cfg.out)
             return done
         cfg.window_days = len({x["day"] for x in rows})
-        snap.write_text(json.dumps({**sched, "clock_offset_s": offset,
-                                    "read_at": str(clock()),
-                                    "window_days": cfg.window_days}, default=str))
+        write_atomic(snap, json.dumps({**sched, "clock_offset_s": offset,
+                                       "read_at": str(clock()),
+                                       "window_days": cfg.window_days}, default=str))
         st = State(cfg.out)
         todo = [x for x in rows if x["id"] not in st.data["rounds"]]
         if fast:
@@ -851,7 +988,7 @@ def run_phase(cfg: Config, read_schedule: Callable[[], tuple[dict, float]], *,
         if got is None:
             left = (deadline - clock() - pd.Timedelta(seconds=offset)).total_seconds()
             say(f"{row['id']}: worker ended without a record ({res.summary()})", cfg.out)
-            if not fast and row["id"] not in retried and left > 240:
+            if row["id"] not in retried and (fast or left > 240):
                 retried.add(row["id"])
                 continue
             st.data["rounds"][row["id"]] = {"outcome": "missed: the worker died", "upload": None,

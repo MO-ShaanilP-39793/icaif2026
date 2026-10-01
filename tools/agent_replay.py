@@ -7,10 +7,12 @@
 The rule brain is the sanity check: its desk must tie `q_riskparity_entry_regime` (the quant
 candidate it stands for) in every window, or the desk's plumbing, not its judgement,
 is what any LLM result would measure. The run stops if it doesn't. The desk reads every
-signal an LLM desk would (walk-forward scores, HAR vol, earnings), so the check covers
-the plumbing those inputs added too. `--ledgers-only` runs just that check, and a
-stricter one: the two ledgers equal trade for trade in every window, not only their
-scores, without ranking anything against the field (a fifth of the time).
+signal an LLM desk would (walk-forward scores, HAR vol, earnings) and its own journal,
+so the check covers the plumbing those inputs added too. `--ledgers-only` runs just
+that check, and two stricter ones: the two ledgers equal trade for trade in every
+window, not only their scores, and the desk's journal agrees with its own ledger in
+every window (`journal.verify`: each fill to the cent, each held name's entry, cost and
+peak), without ranking anything against the field (a fifth of the time).
 
 **Claude replays cost money and need `--yes`.** The tool prints the call and dollar
 estimate first. They are anonymised unless `--real-names` (see `agents.observe`), and
@@ -33,6 +35,7 @@ import pandas as pd  # noqa: E402
 
 from icaif import baselines, compiler, data, markets, quant_strategies as qs, sim, windows  # noqa: E402
 from icaif.agents import brains, signals  # noqa: E402
+from icaif.agents import journal as J  # noqa: E402
 from icaif.agents.desk import DeskConfig, EarningsCalendar, desk  # noqa: E402
 
 OUT = data.ROOT / "output" / "agent"
@@ -111,17 +114,24 @@ def main() -> None:
         live_brains = [shared]
 
     if args.ledgers_only:
-        bad = []
+        bad, wrong = [], []
+        closes = market.recent_closes(pd.Timestamp("2100-01-01", tz="America/New_York"), 10 ** 7)
         for s in starts:
-            got = sim.run(desk(make, cfg, scores=scores, earnings=earnings, vol=har)(), market, s,
-                          windows.WINDOW_DAYS)
+            d = desk(make, cfg, scores=scores, earnings=earnings, vol=har)()
+            got = sim.run(d, market, s, windows.WINDOW_DAYS)
             want = sim.run(qs.CANDIDATES["q_riskparity_entry_regime"](), market, s, windows.WINDOW_DAYS)
             if not got.ledger.equals(want.ledger):
                 bad.append(str(s))
+            problems = J.verify(d.journal, J.sim_fills(got, market), to_ticker=d.anon.ticker, closes=closes)
+            if problems:
+                wrong.append((str(s), problems[:3]))
         print(f"rule desk vs q_riskparity_entry_regime: {len(starts) - len(bad)} of {len(starts)} "
-              f"windows equal trade for trade ({time.time() - t0:.0f}s)")
+              f"windows equal trade for trade; its journal agrees with its ledger in "
+              f"{len(starts) - len(wrong)} of {len(starts)} ({time.time() - t0:.0f}s)")
         if bad:
             raise SystemExit(f"ledgers differ in {len(bad)} windows (first {bad[:3]})")
+        if wrong:
+            raise SystemExit(f"journal and ledger disagree in {len(wrong)} windows (first {wrong[:2]})")
         return
 
     desks = []
