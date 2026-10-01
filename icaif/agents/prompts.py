@@ -116,7 +116,8 @@ a severe, persistent storm. So:
   says what it would trade (`turnover`, `fee_bps_of_nav`) and how many rebalances the
   window has left. Give the `reason`: "score_change" or "vol_change". It pays the fee
   and a turnover rank, so it must expect to earn more than about 20 bps round trip.
-  Exposure null keeps today's gross;
+  Exposure null keeps today's gross. A rebalance needs a name to hold: once every name
+  is out none is offered, and cash is set_exposure 0;
 - reason: null unless the action is "rebalance";
 - exit: codes of held names to sell outright, only for a name-specific reason.
 Give a rationale of one to four sentences.

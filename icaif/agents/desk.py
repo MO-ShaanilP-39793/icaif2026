@@ -375,12 +375,20 @@ class Desk:
     def _tail(closes):
         return np.log(closes).diff().iloc[1:].tail(qs.SHAPE_DAYS)
 
-    def _recipe_book(self, tail, raw_scores, recipe: dict, tickers,
+    def _recipe_book(self, tail, raw_scores, recipe: dict, tickers, budget: float = 1.0,
                      base: Optional[pd.Series] = None) -> Optional[pd.Series]:
-        """The fully invested book `recipe` makes of `tail` and the scores, or None.
+        """The book `recipe` makes of `tail` and the scores at gross `budget`, or None.
 
         One function for the entry and every rebalance, so a rebalance buys the book the
         Strategist chose, on today's inputs, rather than a lookalike of it.
+
+        The names kept out are filled at `budget` itself, never at 1.0 and then scaled:
+        the cap is on the book as bought. Filled at 1.0, three names would each hold the
+        cap and the book land at 0.9 of its exposure (0.765 at 0.85), short of what was
+        chosen with nothing saying so. None too when every name with a weight is kept
+        out: there is no book to rebalance into, and cash is the exposure dial's to
+        reach (set_exposure 0), not a rebalance's. With nothing kept out it is the shape
+        times `budget`, the rule's own arithmetic.
         """
         base = qs.SHAPES[recipe["shape"]](tail) if base is None else base
         if base is None:
@@ -392,11 +400,13 @@ class Desk:
                 return None
             w = w.reindex(tickers).fillna(0.0)
         out = list(recipe["excluded"])
-        if out:
-            w = w.copy()
-            w[out] = 0.0
-            w = pd.Series(compiler._water_fill(w.to_numpy(), 1.0, W.CAP), index=tickers)
-        return w
+        if not out:
+            return w * budget
+        w = w.copy()
+        w[out] = 0.0
+        if not (w > 0).any():
+            return None
+        return pd.Series(compiler._water_fill(w.to_numpy(), budget, W.CAP), index=tickers)
 
     def _exclude(self, tickers_out) -> None:
         """A name sold for a reason stays out: a later rebalance must not buy it back."""
@@ -449,15 +459,17 @@ class Desk:
 
         d, _ = self._ask("entry", payload, EntryDecision, check)
         avoid = [self.anon.ticker(x.name) for x in d.avoid]
-        # views "none" is the rule's own path, untouched: the shape as computed above.
-        w = shapes[d.shape].reindex(tickers).fillna(0.0) if d.views == "none" else books[d.views].copy()
-        if avoid:
-            w[avoid] = 0.0
-            w = pd.Series(compiler._water_fill(w.to_numpy(), 1.0, W.CAP), index=tickers)
-        self.recipe = {"shape": d.shape, "views": d.views, "excluded": sorted(avoid)}
+        recipe = {"shape": d.shape, "views": d.views, "excluded": sorted(avoid)}
+        # With views "none" and nothing avoided this is the rule's own path, untouched:
+        # the shape as computed above, times the exposure.
+        target = self._recipe_book(tail, sig["raw_scores"], recipe, tickers, budget=d.exposure,
+                                   base=shapes[d.shape])
+        if target is None:
+            return None   # check() refuses a views level with no book, so never in practice
+        self.recipe = recipe
         self.at_entry = self._snapshot(sig)
         self.book.entered = True
-        return self._submit(w * d.exposure, current, nav, tickers)
+        return self._submit(target, current, nav, tickers)
 
     def _review(self, ctx, tickers, current, nav):
         closes = qs.daily_closes(ctx, qs.HISTORY_DAYS + 1)
@@ -466,12 +478,12 @@ class Desk:
         tail = self._tail(closes)
         gross = float(current.sum())
         left = self.cfg.max_rebalances - self.rebalances
-        book = self._recipe_book(tail, sig["raw_scores"], self.recipe, tickers) if self.recipe else None
+        book = (self._recipe_book(tail, sig["raw_scores"], self.recipe, tickers, budget=gross)
+                if self.recipe else None)
         previews = offer = None
         if book is not None and gross > compiler.HELD:
-            preview = book * gross
-            moved = float((preview - current).abs().sum())
-            previews = {"rebalanced": preview}
+            moved = float((book - current).abs().sum())
+            previews = {"rebalanced": book}
             offer = {"turnover": round(moved, 4),
                      "fee_bps_of_nav": round(moved * sim.FEE_RATE * 1e4, 2),
                      "rebalances_left": left,
@@ -482,9 +494,16 @@ class Desk:
                                 rule_proposal=rule)
         held = {self.anon.code(t) for t in tickers if current[t] > compiler.HELD}
 
+        def without(codes):
+            return dict(self.recipe, excluded=sorted(set(self.recipe["excluded"])
+                                                     | {self.anon.ticker(c) for c in codes}))
+
         def check(d: ReviewDecision):
             if d.action == "set_exposure" and d.exposure is None:
                 raise ValueError("set_exposure without an exposure")
+            unknown = set(d.exit) - held
+            if unknown:
+                raise ValueError(f"exit names not held: {sorted(unknown)}")
             if d.action == "rebalance":
                 if d.reason is None:
                     raise ValueError("rebalance without a reason")
@@ -492,16 +511,16 @@ class Desk:
                     raise ValueError("no rebalance on offer: the entry's book cannot be rebuilt today")
                 if left <= 0:
                     raise ValueError(f"the window's {self.cfg.max_rebalances} rebalances are spent")
-            unknown = set(d.exit) - held
-            if unknown:
-                raise ValueError(f"exit names not held: {sorted(unknown)}")
+                if self._recipe_book(tail, sig["raw_scores"], without(d.exit), tickers) is None:
+                    raise ValueError("these exits leave no name to rebalance into; to go to cash, "
+                                     "set the exposure to 0")
 
         d, _ = self._ask("review", payload, ReviewDecision, check)
         exits = [self.anon.ticker(code) for code in d.exit]
         if d.action == "rebalance":
-            recipe = dict(self.recipe, excluded=sorted(set(self.recipe["excluded"]) | set(exits)))
-            w = book if not exits else self._recipe_book(tail, sig["raw_scores"], recipe, tickers)
-            target = w * (d.exposure if d.exposure is not None else gross)
+            recipe = without(d.exit)
+            target = self._recipe_book(tail, sig["raw_scores"], recipe, tickers,
+                                       budget=d.exposure if d.exposure is not None else gross)
             if float((target - current).abs().sum()) < self.cfg.rebalance_min_turnover:
                 return None  # drift, not a decision: no fee, and the budget is not spent
             self.rebalances += 1

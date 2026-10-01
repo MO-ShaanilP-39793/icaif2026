@@ -285,6 +285,83 @@ def test_a_name_sold_in_review_stays_out_of_a_later_rebalance():
     assert d.recipe["excluded"] == [sold]
 
 
+def _held(p):
+    return [r["name"] for r in p["names"] if (r.get("weight_now") or 0) > 0]
+
+
+def test_a_rebalance_into_three_names_lands_on_its_exposure_not_nine_tenths_of_it():
+    """A book under the cap must land on its exposure. Filled at 1.0 and then scaled, the
+    three names left would each hold the cap and the book 0.9 of what was chosen
+    (0.765 at 0.85), with the rationale describing a book at 0.85 and nothing else
+    saying otherwise."""
+    m, kw = _world()
+
+    def review(p):
+        held = _held(p)
+        if len(held) > 3:
+            return ReviewDecision(action="hold", exposure=None, reason=None,
+                                  exit=held[: min(8, len(held) - 3)], rationale="names out")
+        return ReviewDecision(action="rebalance", exposure=0.85, reason="vol_change", exit=[],
+                              rationale="three names left; back to full size")
+
+    entry = lambda p: EntryDecision(  # noqa: E731
+        shape="inverse_vol", views="none", exposure=0.6, rationale="x",
+        avoid=[Exclusion(name=r["name"], signal="other", why="x") for r in p["names"][:8]])
+    d = Desk(Scripted(entry=entry, review=review), None, **kw)
+    res = sim.run(d, m, START, 5)
+    assert d.rebalances == 1 and len(d.recipe["excluded"]) == 27
+    bought = res.ledger.iloc[-1][TICKERS] * 100 / res.periods[-7]["nav_before"]
+    assert (bought > 0).sum() == 3 and bought.max() <= W.CAP
+    assert bought.sum() == pytest.approx(0.85, abs=30 * W.GRID)
+
+
+def test_with_every_name_kept_out_the_review_offers_no_rebalance_and_cash_comes_through_the_exposure_dial():
+    """Live, a name can be on the exclusion list while still held (its exit never
+    filled). Once every name is out there is no book to rebalance into; offered anyway,
+    the preview would be all cash, and a rebalance would sell the book out through the
+    lever meant for following the signals, spending a rebalance on it."""
+    m, kw = _world()
+    script = {2: ReviewDecision(action="rebalance", exposure=None, reason="score_change", exit=[],
+                                rationale="follow the ranks"),
+              3: ReviewDecision(action="set_exposure", exposure=0.0, reason=None, exit=[],
+                                rationale="out of the market")}
+    b = Scripted(entry=_views("light"), review=lambda p: script[p["clock"]["day"]])
+    d = Desk(b, None, **kw)
+
+    def strategy(ctx):
+        if ctx.day == DAYS[I0 + 1] and ctx.round == 1:
+            d.recipe["excluded"] = list(TICKERS)
+        return d(ctx)
+
+    res = sim.run(strategy, m, START, 3)
+    first = [p for r, p in b.seen if r == "review"][0]
+    assert first["rebalance"] is None and not any("weight_if_rebalanced" in r for r in first["names"])
+    reviews = [e for e in d.log if e["role"] == "review"]
+    assert [e["source"] for e in reviews] == ["fallback", "brain"]
+    assert "no rebalance on offer" in reviews[0]["reason"] and d.rebalances == 0
+    assert res.ledger.iloc[-1][TICKERS].abs().sum() == 0   # the dial took it to cash
+
+
+def test_a_rebalance_whose_exits_leave_no_name_falls_back_rather_than_selling_out():
+    m, kw = _world()
+    keep = [TICKERS[3], TICKERS[9]]
+    b = Scripted(entry=_views("light"), review=lambda p: ReviewDecision(
+        action="rebalance", exposure=None, reason="vol_change", exit=keep, rationale="sell the last two"))
+    d = Desk(b, None, **kw)
+
+    def strategy(ctx):
+        if ctx.day == DAYS[I0 + 1] and ctx.round == 1:
+            d.recipe["excluded"] = [t for t in TICKERS if t not in keep]
+        return d(ctx)
+
+    res = sim.run(strategy, m, START, 2)
+    review = [p for r, p in b.seen if r == "review"][0]
+    assert review["rebalance"] is not None   # the two names are a book to rebalance into
+    e = [x for x in d.log if x["role"] == "review"][0]
+    assert e["source"] == "fallback" and "set the exposure to 0" in e["reason"]
+    assert d.rebalances == 0 and sum(p["traded_notional"] > 0 for p in res.periods) == 1
+
+
 def test_a_desk_with_views_restored_before_every_round_trades_as_one_that_never_stopped():
     """Live, each round is a new process. A desk that lost its recipe would rebalance to
     plain risk parity, one that lost its count would rebalance past its budget, and

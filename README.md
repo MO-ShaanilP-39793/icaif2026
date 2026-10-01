@@ -352,7 +352,9 @@ The levers built on them, all checked by code rather than asked for in the promp
 - **Rebalance.** The Risk review may `rebalance`, with a reason (`score_change` or
   `vol_change`): the entry's recipe (shape, views, exclusions plus every exit since)
   rebuilt on today's inputs. It is shown the book, its turnover and fee first.
-  Rebalances are capped at 2 a window, and one under 2% turnover is a hold.
+  Rebalances are capped at 2 a window, and one under 2% turnover is a hold. The book is
+  built at the gross it trades to, so a book of a few names under the cap lands on its
+  exposure. Once every name is out, no rebalance is offered: cash is `set_exposure` 0.
 
 **The views do not pay as a rule** (`tools/views_report.py`, 49 s). A rule desk that
 always takes them, over the 61 windows with scores (2023-01 to 2026-08), against the
