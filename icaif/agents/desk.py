@@ -12,13 +12,14 @@ checks, so whatever an LLM desk scores differently is the LLM's doing.
 
 import time
 from dataclasses import dataclass, field
+from datetime import date
 from typing import Optional
 
 import numpy as np
 import pandas as pd
 from pydantic import BaseModel
 
-from icaif import calendar, compiler, quant_strategies as qs
+from icaif import calendar, compiler, quant, quant_strategies as qs
 from icaif import weights as W
 from icaif.agents import observe, prompts
 from icaif.agents.brains import BrainError, rule_event
@@ -185,6 +186,56 @@ class Desk:
         self.book.traded_notional += float((target - current).abs().sum()) * nav
         self.book.weights = target
         return W.safe(target.clip(lower=0.0, upper=W.CAP).to_dict(), tickers)
+
+    # ------------------------------------------------------------------ state
+
+    def state(self) -> dict:
+        """Everything the desk carries from one round to the next, as JSON.
+
+        Live, each round runs in its own process. A desk rebuilt from nothing would
+        re-enter a book it already holds (the entry flag), tell the agent it is day 1
+        again, fire the same event twice in a day, and read the regime with a model fit
+        on a later window than the one it entered on.
+        """
+        hmm = (None if self.hmm is None else
+               {k: getattr(self.hmm, k).tolist() for k in ("mu", "sigma", "trans", "start")})
+        book = (None if self.book is None else
+                {"nav": [float(x) for x in self.book.nav],
+                 "traded_notional": float(self.book.traded_notional),
+                 "entered": bool(self.book.entered)})
+        return {"day_no": self.day_no, "day": None if self._day is None else self._day.isoformat(),
+                "fired": sorted(self._fired), "hmm": hmm, "book": book,
+                "anon": None if self.anon is None else dict(self.anon.to_code),
+                "journal": self.journal, "log": self.log}
+
+    def restore(self, state: Optional[dict], tickers: list[str]) -> None:
+        """Continue from `state()`; an empty state is a desk that has seen no round.
+
+        The book's weights are not restored: every round recomputes them from the
+        shares and cash it is handed, which is the book that actually exists.
+        """
+        state = state or {}
+        self.day_no = int(state.get("day_no", 0))
+        self._day = date.fromisoformat(state["day"]) if state.get("day") else None
+        self._fired = set(state.get("fired", []))
+        self.journal = list(state.get("journal", []))
+        self.log = list(state.get("log", []))
+        h = state.get("hmm")
+        self.hmm = None if h is None else quant.HMM2(**{k: np.asarray(v, dtype=float)
+                                                        for k, v in h.items()})
+        anon = state.get("anon")
+        if anon is not None:
+            self.anon = observe.Anonymizer.from_mapping(anon)
+        elif not self.cfg.anonymize:
+            self.anon = observe.Anonymizer(tickers, None)
+        else:
+            # Codes are drawn from the first day the desk sees, as in a fresh run.
+            self.anon = self.book = None
+            return
+        b = state.get("book") or {}
+        self.book = observe.BookState(pd.Series(0.0, index=tickers), list(b.get("nav", [])),
+                                      float(b.get("traded_notional", 0.0)),
+                                      bool(b.get("entered", False)))
 
     # ------------------------------------------------------------------ the round
 

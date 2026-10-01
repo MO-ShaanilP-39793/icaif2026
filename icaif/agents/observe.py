@@ -39,6 +39,15 @@ class Anonymizer:
             self.to_code = {t: t for t in tickers}
         self.to_ticker = {c: t for t, c in self.to_code.items()}
 
+    @classmethod
+    def from_mapping(cls, to_code: dict) -> "Anonymizer":
+        """The same bijection back from `to_code`, for a desk restored between rounds."""
+        anon = cls(list(to_code), None)
+        anon.to_code = dict(to_code)
+        anon.to_ticker = {c: t for t, c in anon.to_code.items()}
+        anon.enabled = any(t != c for t, c in anon.to_code.items())
+        return anon
+
     def code(self, ticker: str) -> str:
         return self.to_code[ticker]
 

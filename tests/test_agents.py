@@ -169,6 +169,57 @@ def test_a_held_name_with_no_price_makes_the_desk_hold_rather_than_value_the_boo
     assert np.isfinite(nav)  # a name not held needs no price
 
 
+class _Restarted:
+    """A desk rebuilt from its JSON state before every round, as each live round runs
+    in its own process."""
+
+    def __init__(self, brain, cfg=None):
+        self.brain, self.cfg, self.saved = brain, cfg, None
+
+    def __call__(self, ctx):
+        d = Desk(self.brain, self.cfg)
+        d.restore(json.loads(self.saved) if self.saved else None, ctx.market.tickers)
+        out = d(ctx)
+        self.saved = json.dumps(d.state())
+        self.desk = d
+        return out
+
+
+@pytest.mark.parametrize("anonymize", [False, True])
+def test_a_desk_restored_before_every_round_trades_exactly_as_one_that_never_stopped(anonymize):
+    """Rebuilt from nothing, a desk re-enters a book it already holds, tells the agent
+    it is day 1 again and fires the same event twice in a day. Each of those is a
+    trade the backtest never made, and the decision log would read as judgement."""
+    bars = _bars(DAYS, 8)
+    hit = (bars["ticker"] == TICKERS[4]) & (bars["start"] >= calendar.at(DAYS[63], calendar.ROUNDS[2][1]))
+    bars.loc[hit, ["open", "high", "low", "close"]] *= 0.8
+    m = _mkt(bars)
+
+    def script():
+        # The analyst holds, so the name stays in the book and only the desk's memory
+        # of what already fired today stops it waking the analyst every round.
+        return Scripted(
+            review=lambda p: ReviewDecision(action="set_exposure", exposure=round(p["book"]["gross"] - 0.1, 4),
+                                            exit=[], rationale="trim"),
+            event=lambda p: EventDecision(calls=[NameCall(name=t["name"], action="hold", reason="noise")
+                                                 for t in p["triggers"]]))
+
+    cfg = lambda: DeskConfig(anonymize=anonymize)  # noqa: E731
+    b_whole, b_again = script(), script()
+    whole = Desk(b_whole, cfg())
+    want = sim.run(whole, m, START, 4)
+    again = _Restarted(b_again, cfg())
+    got = sim.run(again, m, START, 4)
+    pd.testing.assert_frame_equal(got.ledger, want.ledger)
+    strip = lambda log: [{k: v for k, v in e.items() if k != "latency_s"} for e in log]  # noqa: E731
+    assert strip(again.desk.log) == strip(whole.log)
+    # What the agent was shown (clock, memory, regime, NAV path, turnover) is the same too.
+    assert [json.dumps(p, sort_keys=True) for _, p in b_again.seen] == \
+        [json.dumps(p, sort_keys=True) for _, p in b_whole.seen]
+    assert [e["role"] for e in whole.log].count("event") == 1
+    assert {e["role"] for e in whole.log} == {"entry", "review", "event"}
+
+
 def test_a_cached_replay_asks_the_model_nothing_and_repeats_every_decision(tmp_path):
     """A replay that re-asked the model would score a different sample each run."""
     class Counting(Scripted):
