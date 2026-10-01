@@ -158,7 +158,10 @@ def load_events(symbols: list[str], now: pd.Timestamp) -> tuple[pd.DataFrame, di
         events, missing = earnings.fetch(symbols)
         meta = {"source": "edgar", "stale": False, "no_cik": missing}
     else:
-        path = universe.latest("earnings_*.parquet")
+        # "earnings_2*", not "earnings_*": the Yahoo calendar's earnings_calendar_<date>
+        # sorts after every dated EDGAR snapshot and is a different table (scheduled
+        # dates, no acceptance times).
+        path = universe.latest("earnings_2*.parquet")
         events = pd.read_parquet(path)
         meta = {"source": "snapshot", "path": str(path), "stale": True,
                 "note": "SEC_USER_AGENT unset: releases after the snapshot are missing"}

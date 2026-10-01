@@ -170,3 +170,19 @@ def test_a_holiday_rolls_the_decision_to_the_next_session():
     # Before the close settles, today's session is not complete yet.
     assert live.latest_completed_session(pd.Timestamp("2026-04-02 16:10", tz="America/New_York")) \
         == pd.Timestamp("2026-04-01")
+
+
+def test_the_earnings_snapshot_fallback_never_reads_the_calendar_file(tmp_path, monkeypatch):
+    """earnings_calendar_<date> sorts after every dated EDGAR snapshot, and the fallback
+    globbed earnings_*: without SEC_USER_AGENT it read Yahoo's scheduled dates as EDGAR
+    releases and the scorer died on a missing column."""
+    from icaif import universe
+
+    edgar = pd.DataFrame({"ticker": ["AAPL"], "accepted": [pd.Timestamp("2026-07-30 16:30", tz="America/New_York")]})
+    edgar.to_parquet(tmp_path / "earnings_2026-09-27.parquet")
+    pd.DataFrame({"ticker": ["AAPL"], "date": [pd.Timestamp("2026-10-29")], "side": ["amc"]}).to_parquet(
+        tmp_path / "earnings_calendar_2026-09-28.parquet")
+    monkeypatch.setattr(universe, "EXTERNAL", tmp_path)
+    monkeypatch.delenv("SEC_USER_AGENT", raising=False)
+    events, meta = live.load_events(["AAPL"], NOW)
+    assert meta["path"].endswith("earnings_2026-09-27.parquet") and len(events) == 1
