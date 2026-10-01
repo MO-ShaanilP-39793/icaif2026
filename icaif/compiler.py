@@ -121,8 +121,14 @@ def _water_fill(raw: np.ndarray, budget: float, cap: float) -> np.ndarray:
     Clipping alone would leave the book under its exposure whenever an inverse-vol
     favourite hits the cap; spreading without the cap check would push a second name
     over it.
+
+    A zero in `raw` is a name kept out of the book (the desk zeroes its exclusions
+    before filling), so it takes none of the excess: once every name with a weight is
+    at the cap, the rest is cash. Spreading over the zeros divided 0 by 0 and put a NaN
+    on exactly the names kept out: the agent was shown a preview with null weights, and
+    a role that picked that book crashed the round in `weights.safe`.
     """
-    if budget <= 0 or len(raw) == 0:
+    if budget <= 0 or len(raw) == 0 or raw.sum() <= 0:
         return np.zeros(len(raw))
     w = raw / raw.sum() * budget
     capped = np.zeros(len(raw), dtype=bool)
@@ -134,8 +140,8 @@ def _water_fill(raw: np.ndarray, budget: float, cap: float) -> np.ndarray:
         excess = float((w[over] - cap).sum())
         w[over] = cap
         free = ~capped
-        if not free.any():
-            break  # every name is at the cap: the excess is cash
+        if not free.any() or raw[free].sum() <= 0:
+            break  # every name with a weight is at the cap: the excess is cash
         w[free] += excess * raw[free] / raw[free].sum()
     return np.minimum(w, cap)
 

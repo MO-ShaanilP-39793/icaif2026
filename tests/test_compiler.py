@@ -5,6 +5,7 @@ import pandas as pd
 import pytest
 
 from icaif import calendar, compiler, kit, ranking, sim, windows
+from icaif import weights as W
 from icaif.compiler import Levers, compile_weights, plan
 from tests.test_sim import DAY1, DAY2, TICKERS, _market
 
@@ -55,6 +56,23 @@ def test_a_capped_inverse_vol_favourite_passes_its_excess_to_the_other_names():
     assert w[TICKERS[0]] == pytest.approx(0.30)
     assert sum(w.values()) == pytest.approx(1.0, abs=1e-5)
     assert max(w.values()) <= 0.30
+
+
+def test_a_book_with_fewer_names_than_the_cap_can_fill_keeps_the_rest_in_cash_rather_than_nan():
+    """Three names at the 0.30 cap hold 0.90 of a full book. Spreading the last 0.10
+    over the names the desk had kept out (zeros) divided 0 by 0: a NaN on each of them,
+    shown to the agent as a preview with null weights, and a crash in `weights.safe`
+    when a role picked that book. Spread evenly over them instead, the excess would buy
+    back names the desk had sold for a reason."""
+    raw = np.zeros(len(TICKERS))
+    raw[:3] = [0.5, 0.3, 0.2]  # unequal, so the cap binds on three successive passes
+    w = compiler._water_fill(raw, 1.0, W.CAP)
+    assert np.isfinite(w).all()
+    assert list(w[:3]) == pytest.approx([0.30, 0.30, 0.30])
+    assert (w[3:] == 0.0).all()
+    kit.validate_weights(W.safe(dict(zip(TICKERS, w * 0.85)), TICKERS))
+    # Every name kept out: the whole budget is cash, not 0/0 on the first split.
+    assert (compiler._water_fill(np.zeros(len(TICKERS)), 1.0, W.CAP) == 0.0).all()
 
 
 def test_a_held_name_just_outside_top_k_is_kept_and_one_past_the_buffer_is_dropped():
