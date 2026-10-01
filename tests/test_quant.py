@@ -155,6 +155,30 @@ def test_a_quant_book_decision_is_unchanged_when_every_later_bar_is_rewritten():
     assert got[0] == got[1]
 
 
+def test_a_session_still_trading_is_not_a_daily_close():
+    """A live market holds only the bars fetched so far, so today's latest bar ends
+    before the deadline and would pass the cut as today's close. Every daily return
+    would then carry a partial day, and a move "since yesterday's close" would compare
+    today's price with itself."""
+    days = _days(N_DAYS)
+    d = days[65]
+    bars = _bars(days, 8)
+    fetched = bars[(pd.to_datetime(bars["start"]).dt.date < d)
+                   | (bars["end"] <= calendar.at(d, calendar.ROUNDS[4][0]))]
+    got = []
+    for scale in (1.0, 3.0):
+        live = fetched.copy()
+        today = pd.to_datetime(live["start"]).dt.date == d
+        live.loc[today, ["open", "high", "low", "close"]] *= scale
+        m = _market(days, info_bars=live)
+        ctx = sim.RoundContext(d, 4, calendar.at(d, calendar.ROUNDS[4][0]),
+                               calendar.at(d, calendar.ROUNDS[4][1]), {}, sim.INITIAL_NAV, m)
+        assert ctx.recent_closes(1).index[-1].date() == d  # today's bars are visible...
+        got.append(qs.daily_closes(ctx, 30))
+    assert got[0].index[-1].date() == days[64]             # ...but not as a close
+    pd.testing.assert_frame_equal(got[0], got[1])
+
+
 def test_an_entry_only_book_trades_once_and_every_decision_is_legal():
     """Turnover is ranked, and the hold's single trade ties the best in the field:
     a book meant to decide at entry that re-trades on drift gives that rank away."""

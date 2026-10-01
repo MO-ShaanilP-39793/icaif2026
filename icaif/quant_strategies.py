@@ -30,6 +30,13 @@ def daily_closes(ctx, n_days: int) -> pd.DataFrame:
 
     Built once per market from the bar panel and cut at the deadline by the timestamp
     of each day's last bar, so a round-1 decision never sees the session it trades in.
+
+    A session still trading has no close yet. In a backtest each day's last bar ends at
+    the close, after all of that day's deadlines, so the cut alone suffices. A live
+    market holds only the bars fetched so far, and today's latest bar would pass the
+    cut as today's "close": every daily return and the regime fit would carry a partial
+    day, and the event trigger (a move since the prior close) would measure today's
+    price against itself and never fire.
     """
     m = ctx.market
     if not hasattr(m, "_quant_daily"):
@@ -37,7 +44,10 @@ def daily_closes(ctx, n_days: int) -> pd.DataFrame:
         last = bars.groupby(bars.index.date).tail(1)
         m._quant_daily = last
         m._quant_daily_ends = pd.DatetimeIndex(last.index).asi8
-    k = np.searchsorted(m._quant_daily_ends, pd.Timestamp(ctx.deadline).value, side="right")
+    deadline = pd.Timestamp(ctx.deadline)
+    k = np.searchsorted(m._quant_daily_ends, deadline.value, side="right")
+    if k and m._quant_daily.index[k - 1].date() >= deadline.tz_convert(m._quant_daily.index.tz).date():
+        k -= 1
     return m._quant_daily.iloc[max(0, k - n_days):k]
 
 
