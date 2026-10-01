@@ -1,12 +1,17 @@
-"""A live round's decision from public data and the frozen daily model: a dry run.
+"""A live round's inputs from public data: the desk's market, and the daily model's scores.
 
-Nothing here talks to Codabench. `decide` fetches what a real round would fetch
-(Yahoo daily bars for the training universe and the context series), builds the daily
-features for the next session exactly as training did, scores them with the frozen
-predictor, compiles legal weights, checks them with the organizers' own validator, and
-archives every input beside the decision. The envelope it writes carries the kit's
-placeholder credentials and a `dryrun-` round id, so the kit's client refuses it
-locally (placeholder check, unknown round) before any upload could happen.
+Nothing here talks to Codabench (`runner` does, through the kit). Two products:
+
+- `market`: a `sim.Market` over Yahoo bars, so the rule desk and the shadow agent run
+  the backtested `Desk` unchanged. Each completed session is one bar ending at its
+  close; today's 60m bars, ended by the fetch, sit after them.
+- `daily_scores`: the frozen daily model's scores for the next session, built from the
+  training universe's daily bars exactly as training built them. Only the shadow agent
+  reads them, so a failure here never touches the submitted book.
+
+`envelope` writes the kit's decision.json. Without team credentials it carries the
+kit's placeholders and a `dryrun-` round id, which the kit's client refuses locally
+(placeholder check, unknown round) before any upload could happen.
 
 The traps a live run has and a backtest does not:
 
@@ -31,13 +36,14 @@ The traps a live run has and a backtest does not:
   then is simply missing.
 - **Context off the equity grid.** A context series printing on an equity holiday
   (^VIX on Labor Day 2026) breaks `context`'s 20-row SPY windows; see `fetch_inputs`.
+- **A session still trading has no close.** The market's panel holds today's bars so
+  far; `quant_strategies.daily_closes` must not read the latest as today's close.
 
 Replayed on the 2026-09-27 snapshots for 2026-08-20, the live feature frame equals
 `daily_features.build`'s row for row except `e_sessions_to_next`, and scoring the
 training frame reproduces output/preds/daily_d5_pct.parquet exactly.
 """
 
-import dataclasses
 import json
 import math
 import os
@@ -46,7 +52,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass, field
 from decimal import Decimal
 from pathlib import Path
-from typing import Mapping, Optional
+from typing import Optional
 
 import numpy as np
 import pandas as pd
@@ -54,7 +60,8 @@ from pandas.tseries.holiday import (AbstractHolidayCalendar, GoodFriday, Holiday
                                     USMartinLutherKingJr, USMemorialDay, USPresidentsDay,
                                     USThanksgivingDay, nearest_workday, sunday_to_monday)
 
-from icaif import calendar, compiler, daily_features, data, earnings, external, kit, universe
+from icaif import (alpaca, calendar, daily_features, data, earnings, external, kit, public_bars,
+                   quant_strategies as qs, sim, universe)
 
 MODEL = data.ROOT / "output" / "ag" / "daily" / "d5_pct" / "2026"
 LIVE_OUT = data.ROOT / "output" / "live"
@@ -293,7 +300,7 @@ def fetch_inputs(now: pd.Timestamp) -> LiveInputs:
 
 @dataclass
 class Scored:
-    ours: pd.Series              # the 30, kit order; NaN = missing data, which the compiler holds
+    ours: pd.Series              # the 30, kit order; NaN = missing data: no score shown, never a guess
     universe: pd.Series          # every universe name on the decision date, for the log
     features: pd.DataFrame       # the decision date's feature rows, as scored
     decision_date: pd.Timestamp
@@ -335,7 +342,7 @@ def check_prediction(pred: pd.Series) -> None:
     p = pred.dropna()
     if len(p) < 2 or p.nunique() <= 1 or float(p.std()) < 1e-9:
         # A constant score is what a model fed all-NaN or all-identical rows returns; the
-        # compiler would then pick names by vol alone and call it the model's choice.
+        # agent would read a model with no view as one that likes every name equally.
         raise LiveDataError(f"prediction among the 30 is constant ({p.nunique()} distinct values)")
 
 
@@ -394,56 +401,174 @@ def daily_scores(as_of=None, *, predictor=None, inputs: Optional[LiveInputs] = N
                          index=frame.index, name="pred")
     ours = pred.reindex(tickers)
     # A name with no bar on the latest session has features from older prices mixed with
-    # today's ranks. NaN it: the compiler holds a NaN (frozen), rather than trading on it.
+    # today's ranks. NaN it: the agent is shown no score rather than one from mixed dates.
     last_bar = inputs.daily.groupby("ticker")["date"].max().reindex(tickers)
     stale = [t for t in tickers if not last_bar.get(t) == inputs.latest_session]
     if stale:
-        warnings.append(f"no bar on {inputs.latest_session:%Y-%m-%d} for {stale}: scored NaN (held)")
+        warnings.append(f"no bar on {inputs.latest_session:%Y-%m-%d} for {stale}: scored NaN")
         ours[stale] = np.nan
     check_prediction(ours)
     return Scored(ours=ours, universe=pred, features=frame, decision_date=day, inputs=inputs,
                   events=raw_events, events_meta=events_meta, warnings=warnings)
 
 
-def trailing_vol(daily: pd.DataFrame, decision_date: pd.Timestamp) -> pd.Series:
-    """The 30's 20-session daily vol through the prior close: the backtest's own function.
+# ------------------------------------------------------------------- the desk's market
+# The rule desk and the shadow agent run the backtested `Desk` on a `sim.Market` built
+# from live bars. The desk reads daily closes (shape, regime, the trigger's sigma) and
+# the latest bar (valuation, the trigger's move); nothing in it reads hourly history,
+# so past sessions are one daily bar each and only today keeps its intraday bars.
 
-    Called through `compiler.trailing_daily_vol` rather than recomputed, so live and the
-    backtest cannot drift apart on the window, min_periods or the one-session shift.
+# Calendar days of history: the rule reads qs.HISTORY_DAYS + 1 = 751 sessions.
+CLOSE_HISTORY_DAYS = 1200
+INTRADAY_PERIOD = "5d"
+# Sessions ahead in the market's calendar: the desk counts sessions to the next FOMC
+# decision along `market.days`, and a calendar ending today reads "no meeting ahead".
+FUTURE_DAYS = 60
+
+
+def yahoo_intraday(symbols: list[str], interval: str = "30m",
+                   period: str = INTRADAY_PERIOD) -> pd.DataFrame:
+    """Completed intraday bars (canonical frame); raises if a name has none."""
+    return public_bars.fetch(symbols, interval, period)
+
+
+def fetch_closes(now: pd.Timestamp) -> tuple[pd.DataFrame, dict]:
+    """The 30 names' daily bars through the last completed session, checked fresh.
+
+    Every name must have the latest session's bar. The entry is sized on the last 60
+    sessions' covariance and valued on the latest close, and a name a day behind
+    would be sized and valued on prices the others have moved past.
     """
-    panel = compiler.trailing_daily_vol(with_decision_row(daily, decision_date))
-    day = decision_date.date()
-    return panel.for_day(day, calendar.at(day, calendar.ROUNDS[1][0]))
+    tickers = sorted(data.load_universe())
+    latest = latest_completed_session(now)
+    start = f"{latest - pd.Timedelta(days=CLOSE_HISTORY_DAYS):%Y-%m-%d}"
+    fetched_at = pd.Timestamp.now(tz=calendar.TZ)
+    daily, missing = yahoo_daily(tickers, start)
+    if missing:
+        raise LiveDataError(f"Yahoo returned no daily bars for {missing}")
+    daily, dropped = completed_only(daily, latest)
+    check_fresh(daily, latest, "competition names' daily bars", per_symbol=True)
+    n = int(daily["date"].nunique())
+    if n < qs.HISTORY_DAYS + 1:
+        # The regime fit and the 3-year reference vol would be fit on a shorter span
+        # than the backtest's, a different model with nothing looking wrong.
+        raise LiveDataError(f"only {n} sessions of daily history; the rule reads {qs.HISTORY_DAYS + 1}")
+    return daily, {"latest_session": str(latest.date()), "sessions": n,
+                   "partial_bars_dropped": dropped, "fetched_at": str(fetched_at)}
+
+
+def fetch_intraday(now: pd.Timestamp) -> tuple[pd.DataFrame, dict]:
+    """The 30 names' 30m bars of the last few sessions, ended by `now`.
+
+    30m, not 60m: a round's fill is the open of the bar starting at its execution
+    time, and the 30m bar that starts there has ended by the next round's wake, while
+    the 60m bar has not. `today_60m` pairs them into the backtest's 60m grid.
+    """
+    bars = public_bars.completed(yahoo_intraday(sorted(data.load_universe())), now)
+    return bars, {"bars": int(len(bars)),
+                  "last_end": str(bars["end"].max()) if len(bars) else None}
+
+
+def today_60m(bars_30m: pd.DataFrame, day) -> pd.DataFrame:
+    """`day`'s completed 60m bars (09:30-10:30 ... 15:30-16:00), paired from 30m.
+
+    A pair missing either half is dropped, as in the backtest's `alpaca.to_60m`: with
+    one half missing, its close would be the other half's, 30 minutes off.
+    """
+    b = bars_30m[bars_30m["start"].dt.date == day]
+    if b.empty:
+        return b
+    out = alpaca.to_60m(b)
+    out["source"] = "yahoo_30m_pairs"
+    return out
+
+
+def fills(bars_30m: pd.DataFrame) -> pd.DataFrame:
+    """Opens of the 30m bars, by start time: a round's fill is the row at its execution."""
+    return bars_30m.pivot_table(index="start", columns="ticker", values="open", aggfunc="first")
+
+
+def market(daily: pd.DataFrame, intraday: Optional[pd.DataFrame], days: list) -> sim.Market:
+    """A `sim.Market` the desk can read live: completed sessions as daily bars, then
+    `intraday` (today's 60m bars, ended by the fetch).
+
+    `days` is the market's calendar, history and the sessions ahead. Its execution and
+    close frames are NaN: nothing executes against this market, they only give it its
+    tickers and days.
+    """
+    tickers = sorted(data.load_universe())
+    d = daily[daily["ticker"].isin(tickers)].copy()
+    day = d["date"].dt.date
+    opens = {x: calendar.at(x, calendar.SESSION_OPEN) for x in day.unique()}
+    closes = {x: calendar.at(x, calendar.session_close(x)) for x in day.unique()}
+    bars = pd.DataFrame({
+        "ticker": d["ticker"].to_numpy(), "start": day.map(opens).to_numpy(),
+        "end": day.map(closes).to_numpy(), "open": d["open"].to_numpy(),
+        "high": d["high"].to_numpy(), "low": d["low"].to_numpy(),
+        "close": d["close"].to_numpy(), "volume": d["volume"].to_numpy(), "source": "yahoo_1d"})
+    bars["start"] = pd.to_datetime(bars["start"]).dt.tz_convert(calendar.TZ)
+    bars["end"] = pd.to_datetime(bars["end"]).dt.tz_convert(calendar.TZ)
+    if intraday is not None and len(intraday):
+        late = intraday[intraday["start"].dt.date > max(closes)]
+        bars = pd.concat([bars, late[data.COLUMNS]], ignore_index=True)
+    execution = pd.DatetimeIndex([r["execution"] for s in days for r in calendar.rounds_for(s)])
+    close_ts = pd.DatetimeIndex([calendar.at(s, calendar.session_close(s)) for s in days])
+    return sim.Market(pd.DataFrame(np.nan, index=execution, columns=tickers),
+                      pd.DataFrame(np.nan, index=close_ts, columns=tickers), bars,
+                      issues={"live": True})
+
+
+def market_days(daily: pd.DataFrame, latest: pd.Timestamp) -> list:
+    """Sessions from the first daily bar to FUTURE_DAYS past the latest close."""
+    return [d.date() for d in sessions(daily["date"].min(), latest + pd.Timedelta(days=FUTURE_DAYS))]
+
+
+class CalendarEarnings:
+    """Sessions to each name's next earnings reaction, from Yahoo's scheduled dates.
+
+    The live stand-in for the replay's `agents.desk.EarningsCalendar` (realised EDGAR
+    releases, as if announced), with the same `to_next` contract. Yahoo posts a date
+    and a side of the session, not a time. A date posted with no time is read as
+    before the open, the earlier of its two possible reactions: a flag a session early
+    costs one analyst call, a flag a session late is a gap the book already took.
+    """
+
+    def __init__(self, cal: pd.DataFrame, days: list):
+        from icaif.agents.desk import EarningsCalendar
+
+        from datetime import time as clock
+
+        accepted = pd.Series([calendar.at(pd.Timestamp(d).date(),
+                                          clock(16, 30) if side == "amc" else clock(8, 0))
+                              for d, side in zip(cal["date"], cal["side"])])
+        events = pd.DataFrame({"ticker": cal["ticker"].to_numpy(), "accepted": accepted})
+        self._cal = EarningsCalendar(events, days)
+
+    def to_next(self, day) -> dict:
+        return self._cal.to_next(day)
 
 
 # ----------------------------------------------------------------------------- decision
 
-def portfolio_weights(portfolio: Optional[Mapping], tickers: list[str]) -> pd.Series:
-    """Current weights from {"weights": {...}} or a flat {ticker: weight}; None is all cash.
+def envelope(weights: dict, round_row: dict, team: Optional[dict] = None) -> dict:
+    """The kit's decision.json for `round_row`, every symbol in the template's order.
 
-    An unknown ticker or a negative weight raises: a typo would otherwise read as a zero
-    holding, and the compiler would "buy" a name the book already owns.
+    Without `team` it is a dry run's: the kit's placeholder credentials and a
+    `dryrun-` round id, which the kit's client rejects locally (placeholder check, a
+    round no schedule contains) before any upload. Only an armed live round passes
+    `team`, the credentials the kit's session holds.
     """
-    if portfolio is None:
-        return pd.Series(0.0, index=tickers)
-    w = portfolio.get("weights", portfolio)
-    unknown = sorted(set(w) - set(tickers))
-    if unknown:
-        raise ValueError(f"portfolio names outside the 30: {unknown}")
-    s = pd.Series({t: float(w.get(t, 0.0)) for t in tickers})
-    if (~np.isfinite(s)).any() or (s < 0).any() or s.sum() > 1.0 + 1e-9:
-        raise ValueError("portfolio weights must be finite, non-negative and sum to at most 1")
-    return s
-
-
-def envelope(weights: dict, day, round_no: int) -> dict:
-    """The kit's decision.json, with its placeholder credentials and a round id no
-    schedule contains: the kit's client rejects both locally, before any upload."""
     template = json.loads(DECISION_TEMPLATE.read_text())
-    values = {"submission_type": "decision", "team_id": template["team_id"],
-              "team_token": template["team_token"], "phase": DRY_RUN_PHASE,
-              "round_id": f"dryrun-{pd.Timestamp(day):%Y-%m-%d}-r{round_no}",
-              "weights": {t: weights[t] for t in template["weights"]}}
+    if team is None:
+        creds = {"team_id": template["team_id"], "team_token": template["team_token"]}
+        round_id = f"dryrun-{round_row['id']}"
+    else:
+        creds = {"team_id": team["team_id"], "team_token": team["team_token"]}
+        round_id = round_row["id"]
+    values = {"submission_type": "decision", **creds,
+              "phase": round_row.get("phase") if round_row.get("phase") in ("validation", "official")
+              else DRY_RUN_PHASE,
+              "round_id": round_id, "weights": {t: weights[t] for t in template["weights"]}}
     return {k: values[k] for k in template}
 
 
@@ -469,74 +594,34 @@ def _clean(x):
         return [_clean(v) for v in items]
     if isinstance(x, (np.floating, float)):
         return None if not math.isfinite(float(x)) else float(x)
-    if isinstance(x, np.integer):
+    if isinstance(x, (np.integer,)):
         return int(x)
+    if isinstance(x, (np.bool_,)):
+        return bool(x)
     if isinstance(x, (pd.Timestamp, np.datetime64)):
         return str(pd.Timestamp(x))
     return x
 
 
-def decide(round_no: int, portfolio: Optional[Mapping] = None,
-           levers: compiler.Levers = compiler.Levers(), *, as_of=None, predictor=None,
-           inputs: Optional[LiveInputs] = None, out_dir: Optional[Path] = None,
-           archive: bool = True) -> tuple[dict, dict]:
-    """(decision.json dict, log record) for `round_no` of the next session. Dry run only."""
-    t0 = time.perf_counter()
-    timings: dict = {}
-    scored = daily_scores(as_of, predictor=predictor, inputs=inputs, timings=timings)
-    day = scored.decision_date.date()
-    runs = {r["round"]: r for r in calendar.rounds_for(day)}
-    if round_no not in runs:
-        raise ValueError(f"round {round_no} does not run on {day} (rounds {sorted(runs)})")
-    tickers = list(data.load_universe())
+def archive_scores(scored: "Scored", out: Path) -> dict:
+    """Write what the shadow agent and the record need from a scoring run.
 
-    with _timed(timings, "vol"):
-        vol = trailing_vol(scored.inputs.daily, scored.decision_date).reindex(tickers)
-    current = portfolio_weights(portfolio, tickers)
-    with _timed(timings, "compile"):
-        weights = compiler.compile_weights(scored.ours, vol, current, levers, round_no)
-    with _timed(timings, "validate"):
-        decision = envelope(weights, day, round_no)
-        text = check_decision(decision)
-
-    changed = [t for t in tickers if abs(weights[t] - current[t]) > compiler.HELD]
-    warnings = list(scored.warnings)
-    if levers.stop_sigma is not None and round_no not in levers.rebalance_rounds:
-        warnings.append("stop_sigma set but the dry run has no intraday bars: stops are blind")
-    now = scored.inputs.now
-    deadline = runs[round_no]["deadline"]
-    fetched_at = pd.Timestamp(scored.inputs.meta["fetched_at"])
-    log = {
-        "dry_run": True, "round": round_no, "decision_date": str(day), "now": str(now),
-        "deadline": str(deadline), "execution": str(runs[round_no]["execution"]),
-        "fetched_before_deadline": bool(fetched_at < deadline),
-        "latest_session": str(scored.inputs.latest_session.date()),
-        "inputs": {**scored.inputs.meta, "earnings": scored.events_meta},
-        "model": str(MODEL), "universe_size": int(len(scored.universe)),
-        "levers": dataclasses.asdict(levers),
-        "scores": scored.ours.to_dict(), "vol": vol.to_dict(),
-        "current_weights": current.to_dict(), "weights": weights,
-        "gross": sum(weights.values()), "changed": changed,
-        # The compiler's "hold": nothing moves, so a real round should not upload at all
-        # (re-submitting current weights re-sizes every name at the fill and pays for it).
-        "action": "trade" if changed else "hold",
-        "warnings": warnings,
-    }
-    if archive:
-        with _timed(timings, "archive"):
-            out = Path(out_dir) if out_dir else LIVE_OUT / f"{now:%Y%m%dT%H%M%S}"
-            out.mkdir(parents=True, exist_ok=True)
-            scored.inputs.daily.to_parquet(out / "prices_daily.parquet", index=False)
-            scored.inputs.ctx.to_parquet(out / "prices_context.parquet", index=False)
-            scored.events.to_parquet(out / "earnings_events.parquet", index=False)
-            scored.features.reset_index().to_parquet(out / "features.parquet", index=False)
-            scored.universe.rename("pred").reset_index().to_parquet(out / "scores_universe.parquet", index=False)
-            (out / "decision.json").write_text(text)
-            log["archive"] = str(out)
-            log["decision_path"] = str(out / "decision.json")
-    timings["total"] = round(time.perf_counter() - t0, 3)
-    log["timings"] = timings
-    log = _clean(log)
-    if archive:
-        (Path(log["archive"]) / "log.json").write_text(json.dumps(log, indent=2))
-    return decision, log
+    `scores.parquet` is the 30 names' row for the decision date (what the agent sees);
+    the rest is the evidence that the row was built from data fetched before the
+    deadline: the inputs, the features and every universe name's score.
+    """
+    out.mkdir(parents=True, exist_ok=True)
+    scored.ours.rename("pred").rename_axis("ticker").reset_index().assign(
+        date=scored.decision_date).to_parquet(out / "scores.parquet", index=False)
+    scored.inputs.daily.to_parquet(out / "prices_daily_universe.parquet", index=False)
+    scored.inputs.ctx.to_parquet(out / "prices_context.parquet", index=False)
+    scored.events.to_parquet(out / "earnings_events.parquet", index=False)
+    scored.features.reset_index().to_parquet(out / "features.parquet", index=False)
+    scored.universe.rename("pred").reset_index().to_parquet(out / "scores_universe.parquet", index=False)
+    meta = _clean({"decision_date": str(scored.decision_date.date()),
+                   "latest_session": str(scored.inputs.latest_session.date()),
+                   "inputs": {**scored.inputs.meta, "earnings": scored.events_meta},
+                   "model": str(MODEL), "universe_size": int(len(scored.universe)),
+                   "warnings": scored.warnings})
+    (out / "scores_meta.json").write_text(json.dumps(meta, indent=2))
+    return meta

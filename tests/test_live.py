@@ -1,13 +1,14 @@
 """The live dry run, offline: every network door replaced by a small synthetic world."""
 
 import json
-from decimal import Decimal
+from datetime import date
 
 import numpy as np
 import pandas as pd
 import pytest
 
-from icaif import compiler, data, external, kit, live
+from icaif import calendar, compiler, data, external, kit, live, sim
+from icaif import quant_strategies as qs
 
 OURS = list(data.load_universe())
 OTHERS = [f"X{i:02d}" for i in range(12)]
@@ -28,7 +29,7 @@ LATEST = pd.Timestamp("2026-09-25")
 
 def _walk(names, end=LATEST, n=340, seed=0):
     rng = np.random.default_rng(seed)
-    dates = live.sessions(end - pd.Timedelta(days=600), end)[-n:]
+    dates = live.sessions(end - pd.Timedelta(days=int(n * 1.6) + 30), end)[-n:]
     frames = []
     for s in names:
         close = 100 * np.exp(np.cumsum(rng.normal(0, 0.015, n)))
@@ -62,7 +63,7 @@ def world(monkeypatch, tmp_path):
 
     def fake_yahoo(symbols, start):
         ctx = set(symbols) == set(external.CONTEXT_SYMBOLS)
-        bars = _walk(symbols, end=state["end"], seed=1 if ctx else 0)
+        bars = _walk(symbols, end=state["end"], n=state.get("n", 340), seed=1 if ctx else 0)
         if ctx and state.get("holiday_vix"):
             vix = bars[bars["ticker"] == "^VIX"].tail(1).assign(date=pd.Timestamp("2026-09-07"))
             bars = pd.concat([bars, vix], ignore_index=True).sort_values(["date", "ticker"])
@@ -80,32 +81,12 @@ def world(monkeypatch, tmp_path):
     return state
 
 
-def _decide(**kw):
-    kw.setdefault("predictor", FakePredictor())
-    return live.decide(1, as_of=NOW, **kw)
-
-
-@pytest.mark.parametrize("levers,portfolio", [
-    (compiler.Levers(), None),
-    (compiler.Levers(exposure=1.0, top_k=3, weighting="equal"), None),  # every name at the cap
-    (compiler.Levers(exposure=1.0, top_k=4), {"weights": {"AAPL": 0.3, "MSFT": 0.3, "NVDA": 0.3}}),
-])
-def test_the_decision_always_passes_the_organizers_own_weight_check(world, levers, portfolio):
-    """A weight like 0.1 + 0.2 fails the backend's Decimal cap and the round silently
-    holds. The written file, parsed back as the backend parses it, must pass the kit."""
-    decision, log = _decide(levers=levers, portfolio=portfolio)
-    written = json.loads(open(log["decision_path"]).read(), parse_float=Decimal)
-    kit.validate_weights(written["weights"])
-    assert written == json.loads(json.dumps(decision), parse_float=Decimal)
-    assert sum(decision["weights"].values()) <= levers.exposure + 1e-9
-
-
 def test_a_stale_feed_raises_rather_than_scoring_old_prices(world):
     """Yahoo returning Thursday's bars on Sunday gives ordinary-looking features from old
     prices, and the model scores them as if they were Friday's."""
     world["end"] = LATEST - pd.Timedelta(days=1)
     with pytest.raises(live.StaleDataError, match="2026-09-24"):
-        _decide()
+        live.daily_scores(NOW, predictor=FakePredictor())
 
 
 def test_todays_in_progress_bar_is_dropped_so_the_decision_row_reads_only_the_prior_close(world):
@@ -129,18 +110,24 @@ def test_a_feature_frame_that_is_not_the_models_exact_columns_raises(world, feat
     """AutoGluon picks columns by name, so a missing or renamed feature is scored as NaN
     rather than refused, and a model fed NaN still returns a plausible number."""
     with pytest.raises(live.FeatureMismatchError):
-        _decide(predictor=FakePredictor(features))
+        live.daily_scores(NOW, predictor=FakePredictor(features))
 
 
-def test_the_decision_envelope_carries_all_30_symbols_and_only_the_kits_fields(world):
+def test_a_dry_envelope_carries_all_30_symbols_and_cannot_name_a_real_round():
     """The kit rejects a decision missing a zero-weight symbol, and the first in-window
-    upload consumes the round even when invalid."""
-    decision, log = _decide()
+    upload consumes the round even when invalid. A dry run's file must be one the kit
+    refuses outright: placeholder credentials and a round id no schedule contains."""
+    row = {"id": "validation-2026-10-08-r1", "phase": "validation"}
+    w = {t: 0.0 for t in OURS}
+    decision = live.envelope(w, row)
     assert set(decision) == set(kit.contracts.FIELDS["decision"])
     assert list(decision["weights"]) == list(json.load(open(live.DECISION_TEMPLATE))["weights"])
-    assert set(decision["weights"]) == set(OURS) and len(decision["weights"]) == 30
-    assert decision["round_id"].startswith("dryrun-") and decision["phase"] == "validation"
+    assert decision["round_id"] == "dryrun-validation-2026-10-08-r1"
     assert kit.contracts.is_placeholder(decision["team_token"])
+    real = live.envelope(w, row, team={"team_id": "t-1", "team_token": "tok"})
+    assert real["round_id"] == row["id"] and real["team_token"] == "tok"
+    assert live.envelope(w, {"id": "rehearsal-2026-10-02-r1", "phase": "rehearsal-2026-10-02"})["phase"] \
+        == live.DRY_RUN_PHASE
 
 
 def test_a_constant_prediction_raises_instead_of_letting_vol_alone_pick_the_book(world):
@@ -149,7 +136,7 @@ def test_a_constant_prediction_raises_instead_of_letting_vol_alone_pick_the_book
     flat = FakePredictor()
     flat.predict = lambda frame: pd.Series(0.5, index=range(len(frame)))
     with pytest.raises(live.LiveDataError, match="constant"):
-        _decide(predictor=flat)
+        live.daily_scores(NOW, predictor=flat)
 
 
 def test_a_context_print_on_an_equity_holiday_does_not_blank_the_spy_windows(world):
@@ -172,6 +159,91 @@ def test_a_holiday_rolls_the_decision_to_the_next_session():
         == pd.Timestamp("2026-04-01")
 
 
+# ----------------------------------------------------------------------------- the desk's market
+
+def test_the_rule_desk_needs_every_name_on_the_latest_session(world, monkeypatch):
+    """The entry is sized on the last 60 sessions' covariance and valued on the latest
+    close; a name a day behind would be sized on prices the others have moved past."""
+    world["n"] = 800
+    daily, meta = live.fetch_closes(NOW)
+    assert daily["date"].max() == LATEST and meta["sessions"] == 800
+    real = live.yahoo_daily
+
+    def one_late(symbols, start):
+        bars, missing = real(symbols, start)
+        late = (bars["ticker"] == "NVDA") & (bars["date"] == LATEST)
+        return bars[~late], missing
+
+    monkeypatch.setattr(live, "yahoo_daily", one_late)
+    with pytest.raises(live.StaleDataError, match="NVDA"):
+        live.fetch_closes(NOW)
+
+
+def test_too_short_a_history_raises_rather_than_fitting_the_regime_on_less(world):
+    """The regime model and its reference vol are fit on three years; on less they are
+    a different model, and the exposure they set would look as ordinary as any other."""
+    world["n"] = 600
+    with pytest.raises(live.LiveDataError, match="sessions"):
+        live.fetch_closes(NOW)
+
+
+def _today_30m(day, upto, shock=1.0):
+    rows = []
+    t = calendar.at(day, calendar.SESSION_OPEN)
+    while t + pd.Timedelta(minutes=30) <= upto:
+        for k, s in enumerate(OURS):
+            px = 100.0 * (shock if s == "AAPL" else 1.0)
+            rows.append({"ticker": s, "start": t, "end": t + pd.Timedelta(minutes=30),
+                         "open": px, "high": px, "low": px, "close": px, "volume": 1e5,
+                         "source": "yahoo_30m"})
+        t += pd.Timedelta(minutes=30)
+    return pd.DataFrame(rows)
+
+
+def test_the_live_market_serves_completed_sessions_as_closes_and_today_only_as_bars(world):
+    """The desk reads daily closes for shape, regime and sigma, and the latest bar for the
+    move since the prior close. Today's bars as a close would make that move zero."""
+    world["n"] = 800
+    daily, _ = live.fetch_closes(NOW)
+    day = date(2026, 9, 28)
+    deadline = calendar.at(day, calendar.ROUNDS[4][0])
+    today = live.today_60m(_today_30m(day, deadline - pd.Timedelta(minutes=12)), day)
+    m = live.market(daily, today, live.market_days(daily, LATEST))
+    ctx = sim.RoundContext(day, 4, deadline, calendar.at(day, calendar.ROUNDS[4][1]), {}, 1e6, m)
+    closes = qs.daily_closes(ctx, qs.HISTORY_DAYS + 1)
+    want = daily.pivot(index="date", columns="ticker", values="close").tail(qs.HISTORY_DAYS + 1)
+    assert closes.index[-1].date() == LATEST.date() and len(closes) == qs.HISTORY_DAYS + 1
+    np.testing.assert_allclose(closes[OURS].to_numpy(), want[OURS].to_numpy())
+    assert ctx.recent_closes(1).index[-1] == calendar.at(day, calendar.ROUNDS[3][1])  # 11:30's close
+    assert day in m.days and max(m.days) > day   # sessions ahead, for the FOMC count
+
+
+def test_an_hour_missing_a_half_is_dropped_not_closed_on_the_other_half():
+    """With one half missing, a 60m bar's close would be the other half's, 30 minutes off."""
+    day = date(2026, 9, 28)
+    bars = _today_30m(day, calendar.at(day, calendar.ROUNDS[4][1]))
+    holed = bars[~((bars["ticker"] == "MSFT") & (bars["start"] == calendar.at(day, calendar.ROUNDS[2][1])
+                                                   + pd.Timedelta(minutes=30)))]
+    got = live.today_60m(holed, day)
+    hours = got.groupby("ticker").size()
+    assert hours["MSFT"] == hours["AAPL"] - 1
+    assert live.fills(bars).loc[calendar.at(day, calendar.ROUNDS[2][1]), "AAPL"] == 100.0
+
+
+def test_scheduled_earnings_read_as_sessions_to_the_reaction():
+    """An after-close release reacts at the next open, a pre-open one that morning. A date
+    with no time is read as before the open: a flag a session early costs one analyst
+    call, a flag a session late is a gap the book already took."""
+    days = [d.date() for d in live.sessions("2026-09-21", "2026-10-30")]
+    cal = pd.DataFrame({"ticker": ["NKE", "JPM", "GS"],
+                        "date": pd.to_datetime(["2026-10-01", "2026-10-13", "2026-10-13"]),
+                        "side": ["amc", "bmo", "unknown"]})
+    e = live.CalendarEarnings(cal, days)
+    assert e.to_next(date(2026, 10, 1)) == {"NKE": 1, "JPM": 8, "GS": 8}
+    assert e.to_next(date(2026, 10, 12)) == {"JPM": 1, "GS": 1}
+    assert e.to_next(date(2026, 9, 21)) == {"NKE": 9}
+
+
 def test_the_earnings_snapshot_fallback_never_reads_the_calendar_file(tmp_path, monkeypatch):
     """earnings_calendar_<date> sorts after every dated EDGAR snapshot, and the fallback
     globbed earnings_*: without SEC_USER_AGENT it read Yahoo's scheduled dates as EDGAR
@@ -186,3 +258,16 @@ def test_the_earnings_snapshot_fallback_never_reads_the_calendar_file(tmp_path, 
     monkeypatch.delenv("SEC_USER_AGENT", raising=False)
     events, meta = live.load_events(["AAPL"], NOW)
     assert meta["path"].endswith("earnings_2026-09-27.parquet") and len(events) == 1
+
+
+def test_archived_scores_are_the_panel_the_shadow_agent_reads(world, tmp_path):
+    """The scorer runs in a child and hands its scores over as a file; a file the runner
+    reads under another date or shape would leave the agent with no scores, quietly."""
+    scored = live.daily_scores(NOW, predictor=FakePredictor())
+    live.archive_scores(scored, tmp_path)
+    s = pd.read_parquet(tmp_path / "scores.parquet")
+    panel = compiler.DailyPanel(s.pivot(index="date", columns="ticker", values="pred"), sorted(OURS))
+    day = scored.decision_date.date()
+    got = panel.for_day(day, calendar.at(day, calendar.ROUNDS[1][0]))
+    pd.testing.assert_series_equal(got.sort_index(), scored.ours.reindex(sorted(OURS)).sort_index(),
+                                   check_names=False)

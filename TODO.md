@@ -21,6 +21,14 @@ tilt loses to the hold after fees, and the GNN failed its stage-1 gate.
 - [ ] Confirm the employer is fine with a public entry and published final materials.
 - [ ] Decide whether GNN stage 2 is dropped. Recommended, since stage 1's blend lowered
       IC by 0.006.
+- [ ] After registering, before Oct 8 09:10 ET (the live runner; README "Live runner"):
+      put `CODABENCH_TOKEN` and `ICAIF_PROFILE` in `starter-kit/.env`; run
+      `tools/live_runner.py portfolio --phase validation` and send its printed shape
+      (values blanked) so `portfolio.parse` can be checked; then `arm --phase
+      validation` at a terminal and start `run --phase validation --live`.
+- [ ] Approve the shadow's spend (Opus 5, capped at $10 a phase; about 3 calls in
+      Validation) and set `ANTHROPIC_API_KEY` in the runner's environment, or run it with
+      `--shadow rule` and shadow nothing but the rule.
 
 ## Research (ask before each run)
 
@@ -48,16 +56,28 @@ tilt loses to the hold after fees, and the GNN failed its stage-1 gate.
 
 ## Live runner (before Validation, Oct 8)
 
-- [ ] Commit the Yahoo earnings calendar (`icaif/earnings_calendar.py`, its tool and
-      tests).
-- [ ] Guard that a real round can never upload a "hold" decision by accident.
-- [ ] Watchdog on scoring, for the LightGBM/torch OpenMP deadlock that would silently
-      miss a round.
-- [ ] Intraday bars live, so exits can fire in rounds 2–7.
-- [ ] Read the portfolio in the kit's format once registration shows it.
-- [ ] A scheduler for the 7 rounds, with the fallback chain: agent, then compiler
-      default, then no submission.
-- [ ] A rehearsal: a full day of dry-run rounds on the chosen machine.
+- [x] Commit the Yahoo earnings calendar (`icaif/earnings_calendar.py`, its tool and
+      tests): in a5a0f54.
+- [x] The dry run submits the rule desk's book (risk parity at the regime-blended
+      exposure at round 1 from cash, then hold), not the compiler's top-10 default.
+      Matches the research desk on 7 past entry days (gross within 0.0011).
+- [x] Guard that a real round can never upload a "hold" decision by accident: a hold
+      is `hold.json`, which the kit cannot upload; `runner.guard` checks every trade.
+- [x] Watchdog on scoring, for the LightGBM/torch OpenMP deadlock that would silently
+      miss a round: scoring and each round run in killable child processes.
+- [x] Intraday bars live, so exits can fire in rounds 2–7 (Yahoo 30m, paired into the
+      60m grid; the shadow's Event analyst wakes on a 3-sigma move).
+- [ ] Read the portfolio in the kit's format once registration shows it. The strict
+      reader (`icaif/portfolio.py`) and the `portfolio` command exist; the shape is a
+      guess until the server shows it, and `arm` refuses until it parses.
+- [x] A scheduler for the 7 rounds, with the fallback chain: agent, then rule, then no
+      submission (`tools/live_runner.py run`).
+- [x] A fast rehearsal: 2026-09-30's 7 rounds as worker processes, in 36 s.
+- [ ] A rehearsal: a full day of dry-run rounds at real times on the chosen machine
+      (`tools/live_runner.py rehearse`, 08:58-15:25 ET).
+- [ ] Snapshot the earnings calendar and 8-K filings daily on the runner's machine:
+      the shadow reads the latest snapshot (the calendar's is 2026-09-28).
+- [ ] A standby host (the Deployment tab's hh:23 check) is not built.
 
 ## Agent (`icaif/agents/`, `tools/agent_replay.py`)
 
@@ -83,8 +103,9 @@ tilt loses to the hold after fees, and the GNN failed its stage-1 gate.
       per-year archive pages, a different layout).
 - [ ] First paid replay (owner approves the spend): entry-only (`--no-review`), 2025
       windows, anonymised. It shows whether the Strategist beats its rule at all.
-- [ ] Live adapter: the desk on a live round (portfolio and journal from disk),
-      writing decision.json through `live.check_decision`, never uploading.
+- [x] Live adapter: the desk on a live round, its state carried between rounds as
+      JSON (`Desk.state`/`restore`), writing decision.json through `live.check_decision`,
+      uploading only when armed (`icaif/runner.py`).
 - [ ] Shadow the agent through Validation (Oct 8–9): submit the rule's book, and log
       what the agent would have done.
 

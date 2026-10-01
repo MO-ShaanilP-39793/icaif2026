@@ -248,6 +248,75 @@ IC against the 5-day composite (label shuffled within each day: max |IC| 0.007):
 - **Post-earnings drift has faded** since 2020, as the literature says it has.
 - **The upside target is again mostly volatility** (Parkinson IC 0.16–0.20 in every era).
 
+## Live runner (`tools/live_runner.py`, `icaif/runner.py`)
+
+Each round submits the rule desk's book, and the LLM desk shadows it. The rule desk is
+the backtested `q_riskparity_entry_regime`. At the phase's first round 1 from cash it
+buys risk parity at the regime-blended exposure, then holds. The LLM desk decides on
+its own paper book, and its decision is logged beside the submitted one. The fallback
+chain is the agent's book, then the rule's, then no submission. `--submit rule` (the
+default, and Validation's) puts in the rule's book. `--submit agent` waits for the
+Roadmap's step-6 gate.
+
+```bash
+.venv/bin/python tools/live_dry_run.py --round 1            # one round's book, now, nothing uploaded
+.venv/bin/python tools/live_runner.py rehearse              # today's 7 rounds at real times, dry
+.venv/bin/python tools/live_runner.py rehearse --date 2026-09-30 --fast   # a past day in ~40 s
+.venv/bin/python tools/live_runner.py portfolio --phase validation        # after registration
+.venv/bin/python tools/live_runner.py arm --phase validation              # owner only, at a terminal
+.venv/bin/python tools/live_runner.py run --phase validation --live
+.venv/bin/python tools/live_runner.py status --phase validation
+```
+
+- **Nothing uploads unless armed.** An upload needs `--live` and
+  `starter-kit/.icaif/ARMED.json`. That file names one phase and one submit mode, and
+  it expires an hour after the phase's last close. Only `arm` writes it: at a terminal,
+  after the server's portfolio parses, with the phase name typed back. A dry run's
+  file carries the kit's placeholders and a `dryrun-` round id. The kit refuses it
+  locally.
+- **A hold is never a file the kit can upload.** A hold is written as `hold.json`, and
+  the kit uploads only a file named `decision.json`. A trade must pass `runner.guard`
+  first. The rule trades once a phase, at round 1 from cash. A trade below 0.5%
+  summed turnover is drift. Re-submitting the book as weights would pay the fee on
+  every name's drift.
+- **Entered means entered.** Any held share, or an entry the kit couldn't confirm
+  (`ambiguous`), blocks a second entry. An INVALID receipt frees the next round 1.
+  A receipt that was pending when the upload returned is re-read at the next round 1.
+- **The watchdog.** Each round runs in its own process, and so does the daily model's
+  scoring. Both are killed at a deadline, together with their process group. The
+  LightGBM/torch deadlock was a hang at 0% CPU with no error, which a thread timeout
+  can't interrupt. Scoring runs after the upload, and only the shadow reads its
+  scores, so a hang there never touches the submitted book.
+- **The clock.** It runs on the server's schedule and clock, waking 12 minutes before
+  each deadline. The schedule is re-read every 10 minutes while waiting, so a
+  cancellation or a moved deadline is caught. No upload starts within 45 s of a
+  deadline. On macOS the runner holds `caffeinate -ims` while it runs, but a closed
+  lid on battery still sleeps.
+- **What a round sees.** It reads Yahoo daily closes for the 30 names, about 1,200
+  days, and every name must have the latest session's bar. It also reads Yahoo 30m
+  bars, pairing today's into the backtest's 60m grid for the event trigger. Paper
+  books fill at the 30m bar's :30 open through `sim.rebalance`, the backtest's own
+  rule. A session still trading is never read as a daily close.
+- **Parity with the backtest.** On 7 past entry days (Oct 2025 to Sep 2026) the live
+  rule on Yahoo closes and the research desk on Alpaca bars agree closely. Gross
+  differs by at most 0.0011, the largest single-name gap is 0.0016, and the summed
+  difference is at most 0.015. The turbulent 2025-10-13 (p = 0.78, gross 0.42) agreed
+  as well.
+- **Timing.** A dry round 1 takes 2.7 s without scoring and 21 s with it (the scorer
+  child takes 14 s). A fast rehearsal of 2026-09-30 ran 7 worker processes in 36 s.
+
+The runner's environment needs `CODABENCH_TOKEN` and `ICAIF_PROFILE` (in
+`starter-kit/.env`). It also needs `SEC_USER_AGENT` for fresh EDGAR events in the
+scores, and `ANTHROPIC_API_KEY` for the shadow. Without the key, every role falls back
+to the rule, and the record says so. Shadow spend is capped at $10 a phase. Each
+round's evidence is kept under `output/live/<phase>/`: the inputs, both desks'
+answers, every LLM call's observation and answer, and the file it wrote.
+
+**Before arming.** The portfolio's format is unpublished. `portfolio.parse` accepts
+one declared shape and raises on anything else, rather than reading an unknown book as
+all cash and buying the entry again. After registration, run `live_runner.py
+portfolio --phase validation`, and fix `parse` if the shape it prints is different.
+
 ## Credentials
 
 Registration returns `TEAM_ID` and a **one-time team token that is never reset**.

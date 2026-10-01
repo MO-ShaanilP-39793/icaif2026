@@ -23,7 +23,7 @@ nothing from alphaBT, and alphaBT never tracks it (`icaif2026/` is in alphaBT's
 ## Environment
 
 ```bash
-.venv/bin/python -m pytest -q          # whole suite, ~10 s
+.venv/bin/python -m pytest -q          # whole suite, ~40 s
 .venv/bin/python tools/<name>.py       # every experiment is a tool script
 ```
 
@@ -41,7 +41,7 @@ participants, and the rest is large.
 | `data/public/yahoo_{60m,30m}_<date>.parquet` | Yahoo intraday, dated snapshots | `tools/data_report.py` |
 | `data/public/alpaca_30m_<date>.parquet` | Alpaca 30m bars, 2016 on | `tools/alpaca_report.py` |
 | `data/external/*_<date>.*` | Daily universe, context, S&P membership, earnings | `tools/enrich_data.py` |
-| `output/ag/`, `output/preds/`, `output/live/` | Trained models, out-of-sample predictions, live dry runs | `tools/train_walkforward.py`, `tools/live_dry_run.py` |
+| `output/ag/`, `output/preds/`, `output/live/` | Trained models, out-of-sample predictions, live rounds and rehearsals | `tools/train_walkforward.py`, `tools/live_runner.py` |
 
 Loaders read the latest dated snapshot. Yahoo's old intraday windows can't be
 refetched, so copy `data/public/` from a teammate rather than regenerating it.
@@ -80,7 +80,9 @@ with `--delete` from the bucket root.
   `icaif.net.ssl_context()` (truststore, i.e. macOS verifies). Never turn
   verification off.
 - Nothing uploads to Codabench or registers except a deliberate, human-approved
-  action. `tools/live_dry_run.py` writes a decision to disk and stops.
+  action. `tools/live_runner.py` uploads only with `--live` and an arm file that the
+  owner writes with `arm` at a terminal; never run `arm` for them.
+  `tools/live_dry_run.py` writes a decision to disk and stops.
 
 ## Working here
 

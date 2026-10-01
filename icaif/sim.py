@@ -207,11 +207,7 @@ def run(strategy: Strategy, market: Market, start: date, n_days: int,
                     weights = None
             if weights is not None:
                 w = np.array([float(weights[t]) for t in tickers])
-                target = _target_shares(w, nav_before, price, shares, sizing)
-                trade = target - shares
-                notional = float(np.abs(trade) @ price)
-                cash -= float(trade @ price) + FEE_RATE * notional
-                shares = target
+                shares, cash, notional = rebalance(shares, cash, w, price, sizing)
             periods.append({"execution": r["execution"], "nav_before": nav_before,
                             "nav_after_period": None, "traded_notional": notional,
                             "held": weights is None})
@@ -226,6 +222,22 @@ def run(strategy: Strategy, market: Market, start: date, n_days: int,
     # dedupes points sharing a timestamp, so it is not appended twice.
     periods[-1]["nav_after_period"] = points[-1]
     return Result(periods, points, times, pd.DataFrame(rows), invalid)
+
+
+def rebalance(shares: np.ndarray, cash: float, w: np.ndarray, price: np.ndarray,
+              sizing: str = "pre_fee") -> tuple[np.ndarray, float, float]:
+    """(shares, cash, traded notional) after trading to target weights `w` at `price`.
+
+    The backtest and every paper book (a dry run's stand-in for the server's book, the
+    shadow agent's own) trade through this one function, so a shadow's P&L differs
+    from the submitted book's by its decisions, never by a second copy of the fee or
+    sizing rule.
+    """
+    nav_before = cash + float(shares @ price)
+    target = _target_shares(w, nav_before, price, shares, sizing)
+    trade = target - shares
+    notional = float(np.abs(trade) @ price)
+    return target, cash - (float(trade @ price) + FEE_RATE * notional), notional
 
 
 def _target_shares(w, nav_before, price, shares, sizing):
