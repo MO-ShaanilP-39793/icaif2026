@@ -272,7 +272,7 @@ class DailyPanel:
     def __init__(self, frame: pd.DataFrame, tickers: list[str]):
         frame = frame.copy()
         frame.index = pd.DatetimeIndex(frame.index).normalize()
-        self.frame = frame.reindex(columns=tickers)
+        self.frame = frame.reindex(columns=tickers).sort_index()
         self.tickers = tickers
         self._rows: dict = {}
 
@@ -284,6 +284,18 @@ class DailyPanel:
             self._rows[day] = (self.frame.loc[key].astype(float) if key in self.frame.index
                                else pd.Series(np.nan, index=self.tickers))
         return self._rows[day]
+
+    def trailing(self, day: date, deadline: pd.Timestamp, n: int) -> pd.DataFrame:
+        """The last `n` rows dated on or before `day`, through the same door as `for_day`.
+
+        For a value judged against its own history (a forecast against its typical
+        level). A cut one row late would put tomorrow's value into today's median, where
+        no single lookup would show it.
+        """
+        if pd.Timestamp(deadline).date() != day:
+            raise LookAheadError(f"history to {day} requested at a deadline on {deadline}")
+        k = self.frame.index.searchsorted(pd.Timestamp(day), side="right")
+        return self.frame.iloc[max(0, k - n):k].astype(float)
 
 
 def load_daily_scores(path: Path = PREDS, column: str = "pred") -> DailyPanel:

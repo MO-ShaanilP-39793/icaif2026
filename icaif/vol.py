@@ -182,10 +182,11 @@ def _pools(frame: pd.DataFrame) -> list[np.ndarray]:
     return [m for m in (~is_mkt, is_mkt) if m.any()]
 
 
-def walk_forward(rv: pd.DataFrame, first_test: str = "2022-01-01") -> pd.DataFrame:
+def walk_forward(rv: pd.DataFrame, first_test: str = "2022-01-01",
+                 horizons: tuple[int, ...] = HORIZONS) -> pd.DataFrame:
     """Out-of-sample forecasts of mean daily variance, per horizon.
 
-    Returns rows (session, ticker) with `har_h{H}`, the trailing baselines `rw5_h{H}`
+    Returns rows (session, ticker) with `har_h{H}` for each of `horizons`, the trailing baselines `rw5_h{H}`
     and `rv20_h{H}` (mean RV over the last 5 and 20 sessions) and the realised
     `y_h{H}`, all in mean daily variance. `harlog_h{H}` is the fit in logs before the
     bias correction: the forecast of log RV itself, which a log-space R^2 must use, or
@@ -195,7 +196,7 @@ def walk_forward(rv: pd.DataFrame, first_test: str = "2022-01-01") -> pd.DataFra
     out = []
     sessions = pd.to_datetime(pd.Index(rv.index))
     refits = pd.date_range(first_test, sessions.max(), freq="QS")
-    for h in HORIZONS:
+    for h in horizons:
         frame = _har_frame(rv, h)
         sess = pd.to_datetime(frame.index.get_level_values("session"))
         preds = []
@@ -223,11 +224,12 @@ def _session_to_forecast(as_of: pd.Timestamp) -> date:
     return (pd.Timestamp(d) + pd.offsets.BDay(1)).date()
 
 
-def forecast_next(info_bars: pd.DataFrame, as_of: pd.Timestamp) -> pd.DataFrame:
+def forecast_next(info_bars: pd.DataFrame, as_of: pd.Timestamp,
+                  horizons: tuple[int, ...] = HORIZONS) -> pd.DataFrame:
     """Live: the HAR forecast for the session in progress, or the next one to open.
 
-    Returns one row per name plus `_MKT`, with `har_h1` and `har_h3` in mean daily
-    variance (take the square root for daily vol), the same numbers `walk_forward`
+    Returns one row per name plus `_MKT`, with `har_h{H}` for each of `horizons` (by
+    default `har_h1` and `har_h3`) in mean daily variance (take the square root for daily vol), the same numbers `walk_forward`
     scores for that session. `attrs` carries the session and the refit used.
 
     Only sessions that had closed by `as_of` are read, so every deadline of a day gets
@@ -253,7 +255,7 @@ def forecast_next(info_bars: pd.DataFrame, as_of: pd.Timestamp) -> pd.DataFrame:
     rv.loc[session] = np.nan
     refit = pd.Timestamp(session).to_period("Q").start_time
     out = {}
-    for h in HORIZONS:
+    for h in horizons:
         frame = _har_frame(rv, h)
         target = np.asarray(frame.index.get_level_values("session") == session)
         p = pd.concat([_predict(frame, pool, pool & target, refit) for pool in _pools(frame)])

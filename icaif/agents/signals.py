@@ -58,22 +58,28 @@ class VolForecasts:
     def __init__(self, frame: pd.DataFrame, tickers: list[str]):
         cols = list(tickers) + [vol.MARKET]
         self.tickers = list(tickers)
+        horizons = sorted(int(c[len("har_h"):]) for c in frame.columns
+                          if c.startswith("har_h") and c[len("har_h"):].isdigit())
         self.panels = {h: compiler.DailyPanel(frame[f"har_h{h}"].unstack("ticker"), cols)
-                       for h in vol.HORIZONS}
+                       for h in horizons}
 
     @classmethod
-    def from_bars(cls, info_bars: pd.DataFrame, tickers: list[str]) -> "VolForecasts":
+    def from_bars(cls, info_bars: pd.DataFrame, tickers: list[str],
+                  horizons: tuple[int, ...] = vol.HORIZONS) -> "VolForecasts":
         """The walk-forward over `info_bars`, from the first quarter with enough history.
 
         A quarter the history cannot fit raises in `walk_forward` rather than forecasting
         NaN; here the replay simply starts its forecasts at the next quarter, and the
-        sessions before have none (null in the observation, not a guess).
+        sessions before have none (null in the observation, not a guess). Every horizon
+        starts at the first quarter all of them can fit, so a book comparing horizons
+        compares them on the same sessions.
         """
         rv = vol.realised_variance(info_bars)
         sessions = pd.to_datetime(pd.Index(rv.index))
         for start in pd.date_range(sessions.min(), sessions.max(), freq="QS"):
             try:
-                return cls(vol.walk_forward(rv, first_test=str(start.date())), tickers)
+                return cls(vol.walk_forward(rv, first_test=str(start.date()), horizons=horizons),
+                           tickers)
             except ValueError as err:
                 if "training rows" not in str(err):
                     raise
@@ -91,6 +97,14 @@ class VolForecasts:
     def for_day(self, day, deadline) -> pd.DataFrame:
         """Ticker (and `_MKT`) x har_h1, har_h3 for `day`; NaN where there is none."""
         return pd.DataFrame({f"har_h{h}": p.for_day(day, deadline) for h, p in self.panels.items()})
+
+    def trailing(self, day, deadline, n: int, horizon: int) -> pd.DataFrame:
+        """Session x ticker (and `_MKT`): the last `n` sessions' `horizon` forecasts to `day`.
+
+        Each was made before its own session opened, so all of them are known at `day`'s
+        open, and none after it is served.
+        """
+        return self.panels[horizon].trailing(day, deadline, n)
 
 
 def annualised(var: pd.Series) -> pd.Series:

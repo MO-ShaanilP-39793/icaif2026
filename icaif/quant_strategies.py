@@ -200,6 +200,13 @@ class QuantBook:
         value = shares * px
         return value, ctx.cash + float(value.sum())
 
+    def _shape(self, ctx, rets: pd.DataFrame) -> Optional[pd.Series]:
+        """The book's shape on its first day; None while history is too short."""
+        return self.shape_fn(rets.tail(SHAPE_DAYS))
+
+    def _exposure(self, ctx, rets: pd.DataFrame) -> float:
+        return self.policy(_basket(rets), self.nav)
+
     def __call__(self, ctx):
         if ctx.round != 1:
             return None
@@ -211,11 +218,11 @@ class QuantBook:
         closes = daily_closes(ctx, HISTORY_DAYS + 1)
         rets = _log_returns(closes)
         if self.shape is None:
-            shape = self.shape_fn(rets.tail(SHAPE_DAYS))
+            shape = self._shape(ctx, rets)
             if shape is None:
                 return None  # not enough history yet: cash until there is
             self.shape = shape.reindex(tickers).fillna(0.0)
-        e = float(np.clip(self.policy(_basket(rets), self.nav), 0.0, 1.0))
+        e = float(np.clip(self._exposure(ctx, rets), 0.0, 1.0))
         gross = float(value.sum()) / nav
         self.log.append({"day": ctx.day, "exposure": e, "gross": gross})
         if gross <= W.GRID:
