@@ -271,3 +271,31 @@ def test_archived_scores_are_the_panel_the_shadow_agent_reads(world, tmp_path):
     got = panel.for_day(day, calendar.at(day, calendar.ROUNDS[1][0]))
     pd.testing.assert_series_equal(got.sort_index(), scored.ours.reindex(sorted(OURS)).sort_index(),
                                    check_names=False)
+
+
+def test_live_edgar_adds_recent_filings_to_the_snapshot_without_doubling_any(tmp_path, monkeypatch):
+    """The full EDGAR history took 4m43s live, past the scorer's watchdog, so live asks
+    only for recent filings. Joined to the snapshot, a release both carry must count
+    once (two copies would cluster into one quarter, but only by luck of the gap)."""
+    from icaif import earnings, universe
+
+    ny = "America/New_York"
+    old = pd.Timestamp("2026-07-30 16:30", tz=ny)
+    pd.DataFrame({"ticker": ["AAPL", "MSFT"], "accepted": [old, pd.Timestamp("2026-07-29 16:05", tz=ny)]}
+                 ).to_parquet(tmp_path / "earnings_2026-09-01.parquet")
+    calls = []
+
+    def fake_fetch(symbols, sleep=0.12, recent_only=False):
+        calls.append(recent_only)
+        return pd.DataFrame({"ticker": ["AAPL", "AAPL", "AAPL"],
+                             "accepted": [old, pd.Timestamp("2026-09-25 16:30", tz=ny),
+                                          pd.Timestamp("2026-09-28 16:30", tz=ny)]}), []
+
+    monkeypatch.setattr(universe, "EXTERNAL", tmp_path)
+    monkeypatch.setattr(earnings, "fetch", fake_fetch)
+    monkeypatch.setenv("SEC_USER_AGENT", "test test@example.com")
+    events, meta = live.load_events(["AAPL", "MSFT"], NOW)
+    assert calls == [True] and meta["source"] == "edgar" and not meta["stale"]
+    aapl = events.loc[events["ticker"] == "AAPL", "accepted"].tolist()
+    assert aapl == [old, pd.Timestamp("2026-09-25 16:30", tz=ny)]   # once each; none after NOW
+    assert (events["ticker"] == "MSFT").sum() == 1

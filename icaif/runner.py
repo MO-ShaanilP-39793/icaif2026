@@ -88,7 +88,10 @@ class Config:
     lead_s: float = 12 * 60       # wake this long before each deadline
     upload_margin_s: float = 45   # no upload starts later than this before the deadline
     scoring: bool = True
-    scoring_timeout_s: float = 180
+    # Measured 2026-10-01: 14 s on the EDGAR snapshot, 82 s asking EDGAR for recent
+    # filings (live.load_events). A deadlock never finishes, so the limit only has to
+    # clear the slow honest run; 4 minutes leaves the shadow 7 of round 1's 12.
+    scoring_timeout_s: float = 240
     agent_budget_s: float = 360
     shadow_cost_cap: float = 10.0  # USD per phase
     model: str = brains.DEFAULT_MODEL

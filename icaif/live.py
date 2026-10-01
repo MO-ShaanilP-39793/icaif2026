@@ -160,10 +160,26 @@ def load_events(symbols: list[str], now: pd.Timestamp) -> tuple[pd.DataFrame, di
     EDGAR when SEC_USER_AGENT is set; otherwise the last snapshot, flagged stale.
     Releases after `now` are dropped: a live run cannot know them, and in a replay the
     snapshot does, which would hand the replay a better earnings column than live had.
+
+    With a snapshot on disk, EDGAR is asked only for each name's recent filings and
+    the two are joined. The full history took 4m43s for the ~100 names on
+    2026-10-01, and a scorer killed at its watchdog's limit every round leaves the
+    agent without scores. The features read only the latest releases, which the
+    recent block always holds; older history is the snapshot's.
     """
     if os.environ.get("SEC_USER_AGENT", "").strip():
-        events, missing = earnings.fetch(symbols)
-        meta = {"source": "edgar", "stale": False, "no_cik": missing}
+        snapshots = sorted(universe.EXTERNAL.glob("earnings_2*.parquet"))
+        if not snapshots:
+            events, missing = earnings.fetch(symbols)
+            meta = {"source": "edgar", "stale": False, "no_cik": missing}
+        else:
+            recent, missing = earnings.fetch(symbols, recent_only=True)
+            base = pd.read_parquet(snapshots[-1])
+            events = (pd.concat([base.loc[base["ticker"].isin(symbols), ["ticker", "accepted"]],
+                                 recent[["ticker", "accepted"]]], ignore_index=True)
+                      .drop_duplicates().sort_values(["ticker", "accepted"]).reset_index(drop=True))
+            meta = {"source": "edgar", "stale": False, "no_cik": missing,
+                    "fetched": "recent filings", "history": str(snapshots[-1])}
     else:
         # "earnings_2*", not "earnings_*": the Yahoo calendar's earnings_calendar_<date>
         # sorts after every dated EDGAR snapshot and is a different table (scheduled

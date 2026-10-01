@@ -1,3 +1,5 @@
+import types
+
 import numpy as np
 import pandas as pd
 import pytest
@@ -92,3 +94,28 @@ def test_a_preannouncement_weeks_before_earnings_is_not_the_earnings_event():
                          "2024-04-23 16:10"]).tz_localize(calendar.TZ)
     got = earnings.quarterly(pd.DataFrame({"ticker": "TSLA", "accepted": ts}))
     assert got["accepted"].tolist() == [ts[1], ts[3]]
+
+
+class _Edgar:
+    """A fake EDGAR: one name with a former CIK and two pages of older filings."""
+
+    def __init__(self):
+        self.urls = []
+
+    def get(self, url):
+        self.urls.append(url)
+        block = {"form": ["8-K"], "items": ["2.02"], "acceptanceDateTime": ["2026-07-31T10:31:39.000Z"]}
+        pages = [{"name": "CIK0000000001-submissions-001.json"}, {"name": "CIK0000000001-submissions-002.json"}]
+        body = ({"filings": {"recent": block, "files": pages}} if url.endswith("CIK0000000001.json")
+                else {"filings": {"recent": block}} if url.endswith("CIK0000034088.json") else block)
+        return types.SimpleNamespace(raise_for_status=lambda: types.SimpleNamespace(json=lambda: body))
+
+
+def test_a_live_edgar_read_asks_one_page_a_name_not_the_whole_history():
+    """The whole history of ~100 names took 4m43s; the scorer's watchdog allows 3
+    minutes, so every live round lost its scores. Live needs only the recent block."""
+    full, quick = _Edgar(), _Edgar()
+    earnings.submission_blocks(full, 1, "XOM", sleep=0)
+    earnings.submission_blocks(quick, 1, "XOM", sleep=0, recent_only=True)
+    assert len(full.urls) == 4          # the current CIK, its two older pages, the former CIK
+    assert quick.urls == [earnings.SUBMISSIONS_URL.format(name="CIK0000000001.json")]

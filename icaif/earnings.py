@@ -67,13 +67,21 @@ def parse_filings(block: dict) -> pd.DataFrame:
     return pd.DataFrame({"accepted": accepted.dt.tz_convert(calendar.TZ)})
 
 
-def submission_blocks(client, cik: int, ticker: str, sleep: float = 0.12) -> list[dict]:
-    """Every filings block EDGAR holds for a name, former CIKs included."""
+def submission_blocks(client, cik: int, ticker: str, sleep: float = 0.12,
+                      recent_only: bool = False) -> list[dict]:
+    """Every filings block EDGAR holds for a name, former CIKs included.
+
+    `recent_only` reads the current CIK's latest block alone (its last 1,000 filings
+    or at least a year): one request a name instead of one per page of history. That
+    is all a live round needs on top of a snapshot, and the full history of ~100
+    names takes about five minutes, longer than a round's scorer is given.
+    """
     blocks = []
-    for c in (cik, *FORMER_CIKS.get(ticker.upper(), ())):
+    former = () if recent_only else FORMER_CIKS.get(ticker.upper(), ())
+    for c in (cik, *former):
         sub = client.get(SUBMISSIONS_URL.format(name=f"CIK{c:010d}.json")).raise_for_status().json()
         blocks.append(sub["filings"]["recent"])
-        for extra in sub["filings"].get("files", []):
+        for extra in ([] if recent_only else sub["filings"].get("files", [])):
             time.sleep(sleep)
             blocks.append(client.get(SUBMISSIONS_URL.format(name=extra["name"]))
                           .raise_for_status().json())
@@ -81,11 +89,13 @@ def submission_blocks(client, cik: int, ticker: str, sleep: float = 0.12) -> lis
     return blocks
 
 
-def fetch(tickers: list[str], sleep: float = 0.12) -> tuple[pd.DataFrame, list[str]]:
+def fetch(tickers: list[str], sleep: float = 0.12,
+          recent_only: bool = False) -> tuple[pd.DataFrame, list[str]]:
     """(ticker, accepted) for every earnings 8-K, and the tickers EDGAR has no CIK for.
 
     Delisted names are missing from the current ticker map; they have no Yahoo prices
-    either, so they are outside the universe anyway.
+    either, so they are outside the universe anyway. `recent_only`: see
+    `submission_blocks`; the result is then only the last year or so.
     """
     frames, missing = [], []
     with _client() as client:
@@ -95,7 +105,7 @@ def fetch(tickers: list[str], sleep: float = 0.12) -> tuple[pd.DataFrame, list[s
             if cik is None:
                 missing.append(t)
                 continue
-            blocks = submission_blocks(client, cik, t, sleep)
+            blocks = submission_blocks(client, cik, t, sleep, recent_only)
             events = pd.concat([parse_filings(b) for b in blocks], ignore_index=True)
             frames.append(events.assign(ticker=t))
             time.sleep(sleep)  # the SEC allows 10 requests a second
