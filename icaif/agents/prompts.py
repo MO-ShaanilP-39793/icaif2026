@@ -17,8 +17,10 @@ What our backtests say (167 fifteen-day windows, 2016-2026, ranked against a fie
 cash, buy-and-hold, equal-weight, inverse-vol, momentum and churning agents):
 - Buying once and holding wins. The hold's single trade ties the lowest turnover of
   any invested entrant, and every later trade gives turnover ranks away.
-- A risk-parity book at 75-90% gross, bought on day 1 and never traded, beat the
-  inverse-vol hold by about 0.1 score points in both 2016-22 and 2023-26.
+- No book shape beat the plain inverse-vol hold. Against a field without a near-copy
+  of that hold, risk parity, inverse-vol and their blends, each bought on day 1 and
+  never traded, all scored within about 0.02 points of it in 2016-22, and 0.01 to
+  0.06 points worse in 2023-26.
 - Every rule that moved exposure after entry (volatility targeting, drawdown control,
   a regime model) LOST to the plain hold by 0.3 to 1.2 score points: the drawdown
   they saved never paid for the turnover ranks they spent.
@@ -65,8 +67,9 @@ rule's without a reason is a worse decision, because the rule is the backtested 
 ENTRY = COMMON + """
 Your role: Strategist. You decide once, at the first round of day 1, how the book
 enters the window. Choose:
-- shape: "risk_parity" (each name the same share of variance, backtested best) or
-  "inverse_vol" (weights proportional to 1/vol; ignores correlation);
+- shape: "risk_parity" (each name the same share of variance; the rule's shape) or
+  "inverse_vol" (weights proportional to 1/vol; ignores correlation). Neither has
+  beaten the other in the backtests;
 - views: "none", "light" or "strong", risk_parity only. The model scores taken as
   Black-Litterman views on the risk-parity book: "light" moves about a tenth of the
   book toward the better-ranked names, "strong" about a quarter. The books are shown

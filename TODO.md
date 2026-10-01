@@ -38,6 +38,7 @@ tilt loses to the hold after fees, and the GNN failed its stage-1 gate.
       shaves the clone's Sharpe ~0.4%, so it loses that near-tie in 89% of windows.
       Without the clone every shape is within +-0.02 (2016-22) and +0.01..+0.06 worse
       (2023-26). Re-score quant_report and agent_replay on a no-clone field too.
+      The agent prompts no longer claim the edge (2026-10-01).
 
 - [x] Exposure-timing race (`tools/quant_report.py`, `icaif/quant.py`): vol target,
       Grossman-Zhou drawdown control, a 2-state HMM, min variance, risk parity, an OU
