@@ -33,6 +33,20 @@ Reason only from the numbers you are given. Numbers: returns are log returns,
 volatilities annualised, weights fractions of NAV.
 
 What you may be shown besides prices (each only when the desk has it):
+- Our own signals per name, each made before the round's deadline:
+  - `vol_ann_har_1d`, `vol_ann_har_3d`: the HAR model's forecast of annualised
+    volatility over the next 1 and 3 sessions (in `market`, the equal-weight basket's).
+    It beat trailing 20-day volatility out of sample in each of 10 years tested; it
+    runs a few percent low on average, mostly on earnings jumps it cannot see coming.
+  - `model_score_rank`: the daily model's rank of the name's next 5-session return
+    among the 30 (1 = best). Its rank correlation with what happened has been 0.02 to
+    0.09 a year among these names: a small, real edge, worth a tilt and not a bet.
+  - `earnings_in_sessions`: sessions until the open that first reflects the name's
+    next earnings release (1 = the next open); null when none is announced within 10
+    sessions. A reporting name can gap several daily sigmas, and the book cannot trade
+    out of it cheaply.
+  - after entry, `model_score_rank_at_entry` and `vol_ann_har_3d_at_entry`: the same
+    signals as they stood when the book was bought.
 - `macro`: the market (SPY), VIX, Treasury yields and sector returns as of the prior
   close; in replays as z-scores against the trailing year and changes, not levels.
   FOMC fields say whether a Fed decision is due today (statement at 14:00 ET) and how
@@ -53,12 +67,19 @@ Your role: Strategist. You decide once, at the first round of day 1, how the boo
 enters the window. Choose:
 - shape: "risk_parity" (each name the same share of variance, backtested best) or
   "inverse_vol" (weights proportional to 1/vol; ignores correlation);
+- views: "none", "light" or "strong", risk_parity only. The model scores taken as
+  Black-Litterman views on the risk-parity book: "light" moves about a tenth of the
+  book toward the better-ranked names, "strong" about a quarter. The books are shown
+  exactly, before exposure, as `weight_if_risk_parity_views_light` and `_strong`. The
+  entry trade is paid for anyway, so a tilt costs no extra turnover now; what it costs
+  is concentration, against an edge that is small. "none" is the rule's book;
 - exposure: the gross weight to buy, between 0.30 and 0.95. Lower exposure lowers
   turnover and drawdown and gives up return; the entry trade itself counts as
   turnover;
-- avoid: codes of names to leave out entirely (for example a name reporting earnings
-  in the next session or two, whose gap risk the book cannot trade out of cheaply).
-  Leave it empty unless you have a reason per name;
+- avoid: names to leave out entirely, each with the signal behind it ("model_score",
+  "earnings", "volatility", "filing" or "other") and why: for example a name
+  reporting earnings in the next session or two, whose gap risk the book cannot trade
+  out of cheaply. Leave it empty unless you have a reason per name;
 - rationale: two to five sentences, specific to the observation.
 """
 
@@ -70,6 +91,15 @@ a severe, persistent storm. So:
 - action "hold" (exposure null, exit empty) is the default;
 - action "set_exposure" only for a large, specific deterioration the rule cannot see,
   with the new gross weight (0 to 0.95). A change of under 0.05 is treated as hold;
+- action "rebalance" only when the signals have moved far enough from their
+  `_at_entry` values that the entry's book, rebuilt on today's numbers, is worth what
+  it costs. The desk rebuilds the book the Strategist chose (same shape, views and
+  exclusions); `weight_if_rebalanced` is that book at today's gross, and `rebalance`
+  says what it would trade (`turnover`, `fee_bps_of_nav`) and how many rebalances the
+  window has left. Give the `reason`: "score_change" or "vol_change". It pays the fee
+  and a turnover rank, so it must expect to earn more than about 20 bps round trip.
+  Exposure null keeps today's gross;
+- reason: null unless the action is "rebalance";
 - exit: codes of held names to sell outright, only for a name-specific reason.
 Give a rationale of one to four sentences.
 """

@@ -8,6 +8,13 @@ The rule each role falls back to is the best entry-only candidate of
 of turbulence (0.85 calm, 0.30 turbulent), then hold, and hold through every event. A
 rule desk (`RuleBrain`) reproduces that candidate trade for trade, which a test
 checks, so whatever an LLM desk scores differently is the LLM's doing.
+
+The roles also read our own signals (`signals`: HAR vol, the score's rank, sessions to
+earnings), and have levers built on them: the Strategist can tilt risk parity toward
+the scores (Black-Litterman, at a level whose book it is shown) and name exclusions
+with their cause; the Risk review can rebalance to the entry's recipe on today's
+inputs, with a stated reason, at most `max_rebalances` times. The rule uses none of
+them, so they change what an LLM can do and never what the fallback does.
 """
 
 import time
@@ -19,11 +26,12 @@ import numpy as np
 import pandas as pd
 from pydantic import BaseModel
 
-from icaif import calendar, compiler, quant, quant_strategies as qs
+from icaif import calendar, compiler, quant, quant_strategies as qs, sim
 from icaif import weights as W
-from icaif.agents import observe, prompts
+from icaif.agents import observe, prompts, signals
 from icaif.agents.brains import BrainError, rule_event
 from icaif.agents.schemas import EntryDecision, EventDecision, ReviewDecision
+from icaif.vol import MARKET
 
 E_CALM, E_TURBULENT = 0.85, 0.30  # = quant_strategies.Regime's defaults
 
@@ -34,6 +42,10 @@ class DeskConfig:
     review: bool = True
     events: bool = True
     band: float = 0.05          # a review exposure change smaller than this is a hold
+    # Rebalances a window allows, and the turnover below which one is a hold. Each pays
+    # 0.1% of what it moves and a turnover rank; "occasional" is enforced, not asked.
+    max_rebalances: int = 2
+    rebalance_min_turnover: float = 0.02
     sigma_trigger: float = 3.0  # |move since yesterday's close| in daily sigmas
     anonymize: bool = False
     seed: int = 0
@@ -85,14 +97,20 @@ class Desk:
                  earnings: Optional[EarningsCalendar] = None,
                  context: Optional[pd.DataFrame] = None,
                  fomc=None, filings: Optional[pd.DataFrame] = None,
-                 news_dir=None):
+                 news_dir=None, vol: Optional[signals.VolForecasts] = None):
         """`context`: `macro.wide(...)` closes; `fomc`: a `macro.FomcCalendar`;
         `filings`: `filings.fetch(...)` events; `news_dir`: the headline archive, read
-        only with real names (headlines name companies)."""
+        only with real names (headlines name companies); `vol`: HAR forecasts."""
         self.brain = brain
         self.cfg = config or DeskConfig()
-        self.scores, self.earnings = scores, earnings
+        self.scores, self.earnings, self.vol = scores, earnings, vol
         self.context, self.fomc, self.filings, self.news_dir = context, fomc, filings, news_dir
+        # The entry's recipe (shape, views, names kept out), what the signals read at
+        # entry, and rebalances spent: a rebalance re-applies the recipe, so without it
+        # a restored desk would rebuild a book the Strategist never chose.
+        self.recipe: Optional[dict] = None
+        self.at_entry: Optional[dict] = None
+        self.rebalances = 0
         self.anon: Optional[observe.Anonymizer] = None
         self.book: Optional[observe.BookState] = None
         self.hmm = None
@@ -164,13 +182,36 @@ class Desk:
             out.update(self.fomc.block(ctx.day, ctx.market.days))
         return out
 
-    def _payload(self, closes, rd, ctx, **extra) -> dict:
+    def _signals(self, ctx, tickers) -> dict:
+        """Today's HAR vols and score ranks per ticker and for the basket, unrounded.
+
+        `raw_scores` rides along for the views; it is dropped before the agent sees
+        anything, which reads the rank.
+        """
+        names = {t: {} for t in tickers}
+        market, raw = {}, None
+        if self.vol is not None:
+            ann = signals.annualised(self.vol.for_day(ctx.day, ctx.deadline))
+            for t in tickers:
+                names[t].update(vol_ann_har_1d=ann.at[t, "har_h1"], vol_ann_har_3d=ann.at[t, "har_h3"])
+            market = {"vol_ann_har_1d": ann.at[MARKET, "har_h1"],
+                      "vol_ann_har_3d": ann.at[MARKET, "har_h3"]}
+        if self.scores is not None:
+            raw = self.scores.for_day(ctx.day, ctx.deadline).reindex(tickers)
+            ranks = signals.score_ranks(raw)
+            for t in tickers:
+                names[t]["model_score_rank"] = ranks[t]
+        return {"names": names, "market": market, "raw_scores": raw}
+
+    def _payload(self, closes, rd, ctx, sig: Optional[dict] = None, previews=None, **extra) -> dict:
         from icaif import filings, news
 
-        s = self.scores.for_day(ctx.day, ctx.deadline) if self.scores is not None else None
+        sig = sig if sig is not None else self._signals(ctx, list(closes.columns))
         obs = observe.observation(
             closes, rd, self.book, self.anon, day=self.day_no,
-            window_days=self.cfg.window_days, round_no=ctx.round, scores=s,
+            window_days=self.cfg.window_days, round_no=ctx.round,
+            signals={k: v for k, v in sig.items() if k != "raw_scores"},
+            at_entry=self.at_entry if self.book.entered else None, previews=previews,
             earnings=self.earnings.to_next(ctx.day) if self.earnings is not None else None,
             macro=self._macro(ctx),
             filings=(filings.recent(self.filings, ctx.deadline)
@@ -206,6 +247,7 @@ class Desk:
         return {"day_no": self.day_no, "day": None if self._day is None else self._day.isoformat(),
                 "fired": sorted(self._fired), "hmm": hmm, "book": book,
                 "anon": None if self.anon is None else dict(self.anon.to_code),
+                "recipe": self.recipe, "at_entry": self.at_entry, "rebalances": self.rebalances,
                 "journal": self.journal, "log": self.log}
 
     def restore(self, state: Optional[dict], tickers: list[str]) -> None:
@@ -220,6 +262,8 @@ class Desk:
         self._fired = set(state.get("fired", []))
         self.journal = list(state.get("journal", []))
         self.log = list(state.get("log", []))
+        self.recipe, self.at_entry = state.get("recipe"), state.get("at_entry")
+        self.rebalances = int(state.get("rebalances", 0))
         h = state.get("hmm")
         self.hmm = None if h is None else quant.HMM2(**{k: np.asarray(v, dtype=float)
                                                         for k, v in h.items()})
@@ -262,54 +306,147 @@ class Desk:
             return self._review(ctx, tickers, current, nav) if self.cfg.review else None
         return self._events(ctx, tickers, current, nav) if self.cfg.events else None
 
+    @staticmethod
+    def _tail(closes):
+        return np.log(closes).diff().iloc[1:].tail(qs.SHAPE_DAYS)
+
+    def _recipe_book(self, tail, raw_scores, recipe: dict, tickers,
+                     base: Optional[pd.Series] = None) -> Optional[pd.Series]:
+        """The fully invested book `recipe` makes of `tail` and the scores, or None.
+
+        One function for the entry and every rebalance, so a rebalance buys the book the
+        Strategist chose, on today's inputs, rather than a lookalike of it.
+        """
+        base = qs.SHAPES[recipe["shape"]](tail) if base is None else base
+        if base is None:
+            return None
+        w = base.reindex(tickers).fillna(0.0)
+        if recipe["views"] != "none":
+            w = signals.views_book(w, tail, raw_scores, recipe["views"])
+            if w is None:
+                return None
+            w = w.reindex(tickers).fillna(0.0)
+        out = list(recipe["excluded"])
+        if out:
+            w = w.copy()
+            w[out] = 0.0
+            w = pd.Series(compiler._water_fill(w.to_numpy(), 1.0, W.CAP), index=tickers)
+        return w
+
+    def _exclude(self, tickers_out) -> None:
+        """A name sold for a reason stays out: a later rebalance must not buy it back."""
+        if self.recipe is not None:
+            self.recipe["excluded"] = sorted(set(self.recipe["excluded"]) | set(tickers_out))
+
+    @staticmethod
+    def _snapshot(sig: dict) -> dict:
+        """The entry day's score ranks and 3-day vols, JSON-safe, for every later round."""
+        def clean(x):
+            return None if x is None or not np.isfinite(x) else float(x)
+
+        keep = ("model_score_rank", "vol_ann_har_3d")
+        return {"names": {t: {k: clean(v) for k, v in f.items() if k in keep}
+                          for t, f in sig["names"].items() if any(k in f for k in keep)},
+                "market": {k: clean(v) for k, v in sig["market"].items() if k in keep}}
+
     def _enter(self, ctx, tickers, current, nav):
         closes = qs.daily_closes(ctx, qs.HISTORY_DAYS + 1)
-        tail = np.log(closes).diff().iloc[1:].tail(qs.SHAPE_DAYS)
+        tail = self._tail(closes)
         shapes = {n: qs.SHAPES[n](tail) for n in ("inverse_vol", "risk_parity")}
         if any(s is None for s in shapes.values()):
             return None  # not enough history for a shape: cash until there is
         self.hmm = observe.fit_regime(closes)
         rd = observe.readings(closes, self.hmm)
-        rule = {"shape": "risk_parity", "exposure": rule_exposure(rd.p_turbulent_next),
+        sig = self._signals(ctx, tickers)
+        books = {lvl: self._recipe_book(tail, sig["raw_scores"],
+                                        {"shape": "risk_parity", "views": lvl, "excluded": []},
+                                        tickers, base=shapes["risk_parity"])
+                 for lvl in ("light", "strong")}
+        previews = {f"risk_parity_views_{lvl}": b for lvl, b in books.items() if b is not None}
+        rule = {"shape": "risk_parity", "views": "none",
+                "exposure": rule_exposure(rd.p_turbulent_next),
                 "avoid": [], "rationale": "rule: risk parity at the regime-blended exposure"}
-        payload = self._payload(closes, rd, ctx, rule_proposal=rule)
+        payload = self._payload(closes, rd, ctx, sig=sig, previews=previews, rule_proposal=rule)
 
         def check(d: EntryDecision):
-            for code in d.avoid:
+            codes = [x.name for x in d.avoid]
+            for code in codes:
                 self.anon.ticker(code)
-            if len(d.avoid) >= len(tickers) - 3:
+            if len(set(codes)) != len(codes):
+                raise ValueError("a name excluded twice")
+            if len(codes) >= len(tickers) - 3:
                 raise ValueError("avoid list leaves fewer than 4 names")
+            if d.views != "none" and d.shape != "risk_parity":
+                raise ValueError("views tilt the risk_parity book only")
+            if d.views != "none" and books[d.views] is None:
+                raise ValueError(f"no {d.views} views book today: the model scores are missing")
 
         d, _ = self._ask("entry", payload, EntryDecision, check)
-        w = shapes[d.shape].reindex(tickers).fillna(0.0)
-        avoid = [self.anon.ticker(c) for c in d.avoid]
+        avoid = [self.anon.ticker(x.name) for x in d.avoid]
+        # views "none" is the rule's own path, untouched: the shape as computed above.
+        w = shapes[d.shape].reindex(tickers).fillna(0.0) if d.views == "none" else books[d.views].copy()
         if avoid:
             w[avoid] = 0.0
             w = pd.Series(compiler._water_fill(w.to_numpy(), 1.0, W.CAP), index=tickers)
+        self.recipe = {"shape": d.shape, "views": d.views, "excluded": sorted(avoid)}
+        self.at_entry = self._snapshot(sig)
         self.book.entered = True
         return self._submit(w * d.exposure, current, nav, tickers)
 
     def _review(self, ctx, tickers, current, nav):
         closes = qs.daily_closes(ctx, qs.HISTORY_DAYS + 1)
         rd = observe.readings(closes, self.hmm)
-        rule = {"action": "hold", "exposure": None, "exit": [], "rationale": "rule: hold"}
-        payload = self._payload(closes, rd, ctx, rule_proposal=rule)
+        sig = self._signals(ctx, tickers)
+        tail = self._tail(closes)
+        gross = float(current.sum())
+        left = self.cfg.max_rebalances - self.rebalances
+        book = self._recipe_book(tail, sig["raw_scores"], self.recipe, tickers) if self.recipe else None
+        previews = offer = None
+        if book is not None and gross > compiler.HELD:
+            preview = book * gross
+            moved = float((preview - current).abs().sum())
+            previews = {"rebalanced": preview}
+            offer = {"turnover": round(moved, 4),
+                     "fee_bps_of_nav": round(moved * sim.FEE_RATE * 1e4, 2),
+                     "rebalances_left": left,
+                     "below_this_turnover_is_a_hold": self.cfg.rebalance_min_turnover}
+        rule = {"action": "hold", "exposure": None, "reason": None, "exit": [],
+                "rationale": "rule: hold"}
+        payload = self._payload(closes, rd, ctx, sig=sig, previews=previews, rebalance=offer,
+                                rule_proposal=rule)
         held = {self.anon.code(t) for t in tickers if current[t] > compiler.HELD}
 
         def check(d: ReviewDecision):
             if d.action == "set_exposure" and d.exposure is None:
                 raise ValueError("set_exposure without an exposure")
+            if d.action == "rebalance":
+                if d.reason is None:
+                    raise ValueError("rebalance without a reason")
+                if offer is None:
+                    raise ValueError("no rebalance on offer: the entry's book cannot be rebuilt today")
+                if left <= 0:
+                    raise ValueError(f"the window's {self.cfg.max_rebalances} rebalances are spent")
             unknown = set(d.exit) - held
             if unknown:
                 raise ValueError(f"exit names not held: {sorted(unknown)}")
 
         d, _ = self._ask("review", payload, ReviewDecision, check)
+        exits = [self.anon.ticker(code) for code in d.exit]
+        if d.action == "rebalance":
+            recipe = dict(self.recipe, excluded=sorted(set(self.recipe["excluded"]) | set(exits)))
+            w = book if not exits else self._recipe_book(tail, sig["raw_scores"], recipe, tickers)
+            target = w * (d.exposure if d.exposure is not None else gross)
+            if float((target - current).abs().sum()) < self.cfg.rebalance_min_turnover:
+                return None  # drift, not a decision: no fee, and the budget is not spent
+            self.rebalances += 1
+            self.recipe = recipe
+            return self._submit(target, current, nav, tickers)
         target = current.copy()
-        gross = float(current.sum())
         if d.action == "set_exposure" and abs(d.exposure - gross) >= self.cfg.band and gross > 0:
             target = current * (d.exposure / gross)
-        for code in d.exit:
-            target[self.anon.ticker(code)] = 0.0
+        for t in exits:
+            target[t] = 0.0
+        self._exclude(exits)
         if (target - current).abs().max() <= compiler.HELD:
             return None
         return self._submit(target, current, nav, tickers)
@@ -349,9 +486,10 @@ class Desk:
 
         d, _ = self._ask("event", payload, EventDecision, check)
         target = current.copy()
-        for c in d.calls:
-            if c.action == "exit":
-                target[self.anon.ticker(c.name)] = 0.0
+        exits = [self.anon.ticker(c.name) for c in d.calls if c.action == "exit"]
+        for t in exits:
+            target[t] = 0.0
+        self._exclude(exits)
         if (target - current).abs().max() <= compiler.HELD:
             return None
         return self._submit(target, current, nav, tickers)

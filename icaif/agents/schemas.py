@@ -18,26 +18,45 @@ class _Strict(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
 
+class Exclusion(_Strict):
+    """One name left out of the entry, and the signal that put it there.
+
+    The signal is a closed set so a replay can score exclusions by cause (did leaving
+    out reporters help? low scores?); `why` is the case for this name in this window.
+    """
+
+    name: str
+    signal: Literal["model_score", "earnings", "volatility", "filing", "other"]
+    why: str = Field(max_length=300)
+
+
 class EntryDecision(_Strict):
     """The Strategist's one decision: how to enter the window."""
 
     shape: Literal["inverse_vol", "risk_parity"] = Field(
         description="Book shape: inverse_vol ignores correlation; risk_parity equalises "
                     "each name's share of variance.")
+    views: Literal["none", "light", "strong"] = Field(
+        description="How much the model scores tilt the risk_parity book "
+                    "(Black-Litterman); none for inverse_vol.")
     exposure: float = Field(ge=EXPOSURE_MIN, le=EXPOSURE_MAX,
                             description="Gross weight to enter at; the rest is cash.")
-    avoid: list[str] = Field(max_length=8,
-                             description="Name codes to leave out of the book entirely.")
+    avoid: list[Exclusion] = Field(max_length=8,
+                                   description="Names to leave out of the book entirely.")
     rationale: str = Field(max_length=1500)
 
 
 class ReviewDecision(_Strict):
     """A morning review after entry. Holding is free; every trade costs turnover rank."""
 
-    action: Literal["hold", "set_exposure"]
+    action: Literal["hold", "set_exposure", "rebalance"]
     exposure: Optional[float] = Field(
         ge=0.0, le=EXPOSURE_MAX,
-        description="Required when action is set_exposure: the new gross weight.")
+        description="Required for set_exposure: the new gross weight. For rebalance, "
+                    "null keeps today's gross.")
+    reason: Optional[Literal["score_change", "vol_change"]] = Field(
+        description="Required for rebalance: what changed since entry that the book "
+                    "should follow. Null otherwise.")
     exit: list[str] = Field(max_length=8, description="Held name codes to sell outright.")
     rationale: str = Field(max_length=1500)
 

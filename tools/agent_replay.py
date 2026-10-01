@@ -1,11 +1,16 @@
 """Replay the agent desk through competition windows, ranked like every other strategy.
 
     .venv/bin/python tools/agent_replay.py                          # rule brain: free
+    .venv/bin/python tools/agent_replay.py --ledgers-only           # the same check, ~3 min
     .venv/bin/python tools/agent_replay.py --brain claude --max-calls 60 --yes
 
 The rule brain is the sanity check: its desk must tie `q_riskparity_entry_regime` (the quant
 candidate it stands for) in every window, or the desk's plumbing, not its judgement,
-is what any LLM result would measure. The run stops if it doesn't.
+is what any LLM result would measure. The run stops if it doesn't. The desk reads every
+signal an LLM desk would (walk-forward scores, HAR vol, earnings), so the check covers
+the plumbing those inputs added too. `--ledgers-only` runs just that check, and a
+stricter one: the two ledgers equal trade for trade in every window, not only their
+scores, without ranking anything against the field (a fifth of the time).
 
 **Claude replays cost money and need `--yes`.** The tool prints the call and dollar
 estimate first. They are anonymised unless `--real-names` (see `agents.observe`), and
@@ -26,8 +31,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import pandas as pd  # noqa: E402
 
-from icaif import baselines, compiler, data, markets, quant_strategies as qs, windows  # noqa: E402
-from icaif.agents import brains  # noqa: E402
+from icaif import baselines, compiler, data, markets, quant_strategies as qs, sim, windows  # noqa: E402
+from icaif.agents import brains, signals  # noqa: E402
 from icaif.agents.desk import DeskConfig, EarningsCalendar, desk  # noqa: E402
 
 OUT = data.ROOT / "output" / "agent"
@@ -58,7 +63,11 @@ def main() -> None:
     ap.add_argument("--offline", action="store_true", help="answer only from the cache")
     ap.add_argument("--yes", action="store_true", help="confirm spending on a claude replay")
     ap.add_argument("--tag", default=None)
+    ap.add_argument("--ledgers-only", action="store_true",
+                    help="rule brain: check its ledger equals the candidate's in every window, then stop")
     args = ap.parse_args()
+    if args.ledgers_only and args.brain != "rule":
+        raise SystemExit("--ledgers-only checks the rule desk; it takes no --brain claude")
 
     t0 = time.time()
     market = markets.research_market()
@@ -74,10 +83,12 @@ def main() -> None:
                      anonymize=not args.real_names)
     earnings = load_earnings(market)
     scores = compiler.load_daily_scores()
+    # The walk-forward over the bars the windows trade on: forecasts from its first
+    # fittable quarter (2016-07), each made before its session opened.
+    har = signals.VolForecasts.from_bars(market.info_bars, market.tickers)
 
     tag = args.tag or f"{args.brain}_{'noreview_' if args.no_review else ''}{len(starts)}w"
     log_dir = OUT / tag
-    log_dir.mkdir(parents=True, exist_ok=True)
 
     if args.brain == "rule":
         make = brains.RuleBrain
@@ -99,10 +110,24 @@ def main() -> None:
         make = lambda: cache  # noqa: E731 - one brain across windows, so the budget is global
         live_brains = [shared]
 
+    if args.ledgers_only:
+        bad = []
+        for s in starts:
+            got = sim.run(desk(make, cfg, scores=scores, earnings=earnings, vol=har)(), market, s,
+                          windows.WINDOW_DAYS)
+            want = sim.run(qs.CANDIDATES["q_riskparity_entry_regime"](), market, s, windows.WINDOW_DAYS)
+            if not got.ledger.equals(want.ledger):
+                bad.append(str(s))
+        print(f"rule desk vs q_riskparity_entry_regime: {len(starts) - len(bad)} of {len(starts)} "
+              f"windows equal trade for trade ({time.time() - t0:.0f}s)")
+        if bad:
+            raise SystemExit(f"ledgers differ in {len(bad)} windows (first {bad[:3]})")
+        return
+
     desks = []
 
     def factory():
-        d = desk(make, cfg, scores=scores, earnings=earnings)()
+        d = desk(make, cfg, scores=scores, earnings=earnings, vol=har)()
         desks.append(d)
         return d
 
@@ -121,6 +146,7 @@ def main() -> None:
                          f"(first {bad[:3]}): the desk's plumbing is off; not reporting")
 
     log = [dict(e, window=str(w)) for w, d in zip(starts, desks) for e in d.log]
+    log_dir.mkdir(parents=True, exist_ok=True)
     (log_dir / "log.jsonl").write_text("\n".join(json.dumps(e, default=str) for e in log))
     res.to_csv(log_dir / "windows.csv", index=False)
 

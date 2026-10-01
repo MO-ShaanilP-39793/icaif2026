@@ -14,7 +14,7 @@ import pytest
 from icaif import calendar, data, kit, live, runner, sim
 from icaif import portfolio as P
 from icaif import quant_strategies as qs
-from icaif.agents.schemas import EntryDecision
+from icaif.agents.schemas import EntryDecision, Exclusion
 from tests.test_agents import Failing, Scripted
 
 TICKERS = sorted(data.load_universe())
@@ -312,7 +312,7 @@ def test_a_failing_agent_hands_the_round_to_the_rule(world):
 
 
 def test_a_working_agent_submits_its_own_book(world):
-    pick = EntryDecision(shape="inverse_vol", exposure=0.5, avoid=[], rationale="calmer start")
+    pick = EntryDecision(shape="inverse_vol", views="none", exposure=0.5, avoid=[], rationale="calmer start")
     cfg = _cfg(world, submit="agent")
     rec = _play(world, cfg, _doors(world, brain=Scripted(entry=pick)), DAY1, 1)
     assert rec["submitted"]["source"] == "agent"
@@ -333,7 +333,8 @@ def test_with_no_prices_no_desk_answers_and_nothing_is_submitted(world, monkeypa
 # ----------------------------------------------------------------------------- the shadow
 
 def test_the_shadow_is_logged_beside_the_submitted_book_and_trades_only_on_paper(world):
-    pick = EntryDecision(shape="inverse_vol", exposure=0.5, avoid=["TSLA"], rationale="earnings gap")
+    pick = EntryDecision(shape="inverse_vol", views="none", exposure=0.5, rationale="earnings gap",
+                         avoid=[Exclusion(name="TSLA", signal="earnings", why="reports tomorrow")])
     cfg = _cfg(world)
     rec = _play(world, cfg, _doors(world, brain=Scripted(entry=pick)), DAY1, 1)
     assert rec["submitted"]["source"] == "rule" and rec["rule"]["gross"] > 0.5
@@ -525,3 +526,27 @@ def test_an_upload_whose_receipt_was_still_pending_counts_as_uploaded_and_is_rer
     rec = _play(world, cfg, _doors(world, session=lambda: fake), DAY2, 1)
     assert any("uploaded -> failed" in w for w in rec["warnings"])
     assert rec["submitted"]["action"] == "trade" and len(fake.calls) == 2
+
+
+def test_a_har_forecast_that_cannot_be_made_is_recorded_and_the_other_inputs_still_load(world, monkeypatch):
+    """The agent's inputs load one by one. A HAR failure that raised through would take
+    the scores, the calendar and the round's shadow with it, for want of one signal."""
+    from types import SimpleNamespace
+
+    r = runner.Round.from_row(_row(world, DAY1, 1))
+    mkt = SimpleNamespace(tickers=TICKERS, days=[DAY1, DAY2])
+    calls = []
+
+    def broken(deadline, out_dir, tickers):
+        calls.append((deadline, out_dir))
+        raise live.LiveDataError("no completed 30m bars")
+
+    monkeypatch.setattr(live, "vol_forecasts", broken)
+    kw, meta = runner.agent_inputs(_cfg(world), mkt, r)
+    assert "vol" not in kw and meta["vol"].startswith("LiveDataError")
+    assert {"scores", "context", "earnings", "fomc", "filings"} <= set(meta)
+    assert calls == [(r.deadline, _cfg(world).out / "vol" / str(DAY1))]
+
+    monkeypatch.setattr(live, "vol_forecasts", lambda *a: "forecasts")
+    kw, meta = runner.agent_inputs(_cfg(world), mkt, r)
+    assert kw["vol"] == "forecasts" and meta["vol"] == "ok"

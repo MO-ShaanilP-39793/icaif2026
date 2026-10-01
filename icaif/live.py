@@ -52,7 +52,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass, field
 from decimal import Decimal
 from pathlib import Path
-from typing import Optional
+from typing import Callable, Optional
 
 import numpy as np
 import pandas as pd
@@ -562,6 +562,79 @@ class CalendarEarnings:
 
     def to_next(self, day) -> dict:
         return self._cal.to_next(day)
+
+
+# ------------------------------------------------------------------------------ HAR vol
+# The agent's HAR forecasts, live. The desk's market holds past sessions as one daily
+# bar each, and realised variance needs the intraday bars, so the forecast reads its own:
+# the research archive the walk-forward was scored on, then a fresh Yahoo fetch.
+
+# Yahoo serves 30m bars ~60 days back: the regressors need 22 sessions and the lag.
+VOL_PERIOD = "60d"
+
+
+def vol_archive() -> pd.DataFrame:
+    """The bars HAR was scored on (`markets.intraday_info_bars`): Alpaca from 2016, then
+    Yahoo 60m. Required: without it the quarter's refit would train on the fetch's two
+    months alone, a different model from the one the walk-forward measured."""
+    from icaif import markets
+
+    return markets.intraday_info_bars()
+
+
+def vol_bars(now: pd.Timestamp, recent_30m: Optional[pd.DataFrame] = None) -> tuple[pd.DataFrame, dict]:
+    """60m bars for `vol.forecast_next`: the archive, then the fetch from its first session on.
+
+    The fetch wins every session it covers. An archive snapshot taken during a session
+    holds a partial day, which realised variance blanks rather than shrinks, but a fresh
+    complete copy of that day is better than a blank. Bars are paired into the 60m grid
+    as the archive's Alpaca bars were (`alpaca.to_60m`), so the regressors come from the
+    grid the fit was made on.
+    """
+    tickers = sorted(data.load_universe())
+    raw = recent_30m if recent_30m is not None else yahoo_intraday(tickers, "30m", VOL_PERIOD)
+    recent = alpaca.to_60m(public_bars.completed(raw, now))
+    if recent.empty:
+        raise LiveDataError("no completed 30m bars for the HAR forecast")
+    recent["source"] = "yahoo_30m_pairs"
+    archive = vol_archive()
+    first = recent["start"].min().date()
+    old = archive[archive["start"].dt.date < first]
+    bars = pd.concat([old, recent[data.COLUMNS]], ignore_index=True)
+    return bars, {"archive_through": str(old["end"].max()) if len(old) else None,
+                  "fetched_from": str(recent["start"].min()), "fetched_to": str(recent["end"].max())}
+
+
+def vol_forecasts(deadline: pd.Timestamp, out_dir: Path, tickers: list[str], *,
+                  bars: Optional[Callable] = None):
+    """HAR forecasts for the deadline's session, made once a day and cached in `out_dir`.
+
+    Once a day is exact, not an approximation: `forecast_next` reads only sessions that
+    had closed, so every deadline of a session gets the same forecast (test_vol checks
+    09:10 and 12:25). The cache records the session it was made for; read on another
+    day, the desk's lookup finds no row for that day and shows nothing.
+    """
+    from icaif import vol
+    from icaif.agents import signals
+
+    path, meta_path = out_dir / "har.parquet", out_dir / "har_meta.json"
+    if path.exists() and meta_path.exists():
+        fc = pd.read_parquet(path)
+        meta = json.loads(meta_path.read_text())
+        fc.attrs.update(session=pd.Timestamp(meta["session"]).date())
+    else:
+        b, meta = (bars or vol_bars)(deadline)
+        fc = vol.forecast_next(b, deadline)
+        meta.update(session=str(fc.attrs["session"]), refit=str(fc.attrs["refit"]),
+                    made_at=str(deadline))
+        out_dir.mkdir(parents=True, exist_ok=True)
+        # The session goes in the meta file: pandas writes attrs into the parquet as JSON,
+        # and a date in them fails the write after the forecast was already made.
+        bare = fc.copy()
+        bare.attrs = {}
+        bare.to_parquet(path)
+        meta_path.write_text(json.dumps(meta, indent=2))
+    return signals.VolForecasts.from_live(fc, tickers)
 
 
 # ----------------------------------------------------------------------------- decision

@@ -118,6 +118,54 @@ def risk_contributions(w: pd.Series, cov: pd.DataFrame) -> pd.Series:
     return pd.Series(v * (s @ v) / total, index=w.index)
 
 
+# The prior book's Sharpe ratio, annual, assumed. It is the risk aversion that turns
+# the prior's weights into the returns they imply (pi = delta Σ w): the prior is held
+# as if each unit of its risk earned this much, so a view's tilt is sized against it.
+PRIOR_SHARPE = 0.5
+
+
+def black_litterman(prior: pd.Series, cov: pd.DataFrame, alpha: pd.Series,
+                    confidence: float, cap: float = 0.30,
+                    sharpe: float = PRIOR_SHARPE) -> pd.Series:
+    """Long-only weights summing to 1 (none above `cap`): `prior` moved by views.
+
+    `alpha` is each viewed name's expected daily return above what the prior implies
+    (NaN: no view on it). The view variance is Idzorek's, (1 - c) / c times the prior's
+    own uncertainty about that name, so τ cancels and the posterior book is
+
+        w = w_prior + P' (P Σ P' + k diag(P Σ P'))^-1 α / δ,   k = (1 - c) / c,
+
+    with δ = sharpe / σ_prior (daily). `confidence` c = 0 is the prior exactly, which
+    is what lets a desk with views switched off reproduce its prior's backtest; c = 1
+    takes the views at face value. A name with no view gets no tilt of its own and
+    moves only with the renormalisation, rather than being pushed around through its
+    covariance with names that have one.
+
+    Negative weights are cut to zero before renormalising: the book is long-only, and
+    a short leg would be sold for a view the rest of the book then paid for.
+    """
+    if not 0.0 <= confidence <= 1.0:
+        raise ValueError(f"confidence {confidence} is outside [0, 1]")
+    names = prior.index
+    w0 = prior.to_numpy(dtype=float)
+    if confidence == 0.0:
+        return prior.astype(float).copy()
+    s = cov.loc[names, names].to_numpy()
+    a = alpha.reindex(names).to_numpy(dtype=float)
+    viewed = np.isfinite(a)
+    if not viewed.any():
+        return prior.astype(float).copy()
+    delta = sharpe / np.sqrt(TRADING_DAYS) / np.sqrt(w0 @ s @ w0)
+    k = (1.0 - confidence) / confidence
+    sv = s[np.ix_(viewed, viewed)]
+    tilt = np.zeros(len(names))
+    tilt[viewed] = np.linalg.solve(sv + k * np.diag(np.diag(sv)), a[viewed]) / delta
+    w = np.maximum(w0 + tilt, 0.0)
+    if w.sum() <= 0:
+        raise ValueError("views removed every name from the book")
+    return pd.Series(_capped(w / w.sum(), 1.0, cap), index=names)
+
+
 # ----------------------------------------------------------------------------- exposure
 
 def drawdown_exposure(nav: np.ndarray, e_max: float, dd_limit: float) -> float:

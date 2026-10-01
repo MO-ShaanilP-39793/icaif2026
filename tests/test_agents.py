@@ -10,7 +10,7 @@ from icaif import weights as W
 from icaif.agents import brains
 from icaif.agents.brains import BrainError, CachedBrain, ClaudeBrain, RuleBrain
 from icaif.agents.desk import Desk, DeskConfig
-from icaif.agents.schemas import EntryDecision, EventDecision, NameCall, ReviewDecision
+from icaif.agents.schemas import EntryDecision, EventDecision, Exclusion, NameCall, ReviewDecision
 from tests.test_quant import _bars, _days
 from tests.test_sim import TICKERS, _market
 
@@ -78,18 +78,20 @@ def test_a_failing_brain_falls_back_to_the_rule_every_time_and_never_misses_a_ro
 
 def test_an_avoid_code_the_agent_invented_is_rejected_not_guessed():
     """Mapped by a guess, an unknown code would drop a name the agent never named."""
-    bad = EntryDecision(shape="risk_parity", exposure=0.6, avoid=["S99"], rationale="x")
+    bad = EntryDecision(shape="risk_parity", views="none", exposure=0.6,
+                        avoid=[Exclusion(name="S99", signal="other", why="x")], rationale="x")
     desk, _ = _run(Scripted(entry=bad), DeskConfig(anonymize=True))
     assert desk.log[0]["role"] == "entry" and desk.log[0]["source"] == "fallback"
     assert "S99" in desk.log[0]["reason"]
 
 
 def test_an_avoided_name_is_left_out_and_the_book_still_lands_on_its_exposure():
-    pick = lambda p: EntryDecision(shape="inverse_vol", exposure=0.6,  # noqa: E731
-                                   avoid=[p["names"][0]["name"]], rationale="x")
+    pick = lambda p: EntryDecision(  # noqa: E731
+        shape="inverse_vol", views="none", exposure=0.6, rationale="x",
+        avoid=[Exclusion(name=p["names"][0]["name"], signal="earnings", why="reports tomorrow")])
     desk, res = _run(Scripted(entry=pick))
     first = res.ledger.iloc[0]
-    left_out = desk.log[0]["decision"]["avoid"][0]
+    left_out = desk.log[0]["decision"]["avoid"][0]["name"]
     assert first[left_out] == 0
     assert _gross_after_trade(res, 0) == pytest.approx(0.6, abs=30 * W.GRID)
 
@@ -117,17 +119,17 @@ def test_the_entry_observation_is_unchanged_when_every_later_bar_is_rewritten():
 
 def test_a_review_change_smaller_than_the_band_is_a_hold_not_a_trade():
     """A 1-point exposure trim pays the fee and a turnover rank for nothing."""
-    nudge = lambda p: ReviewDecision(action="set_exposure",  # noqa: E731
+    nudge = lambda p: ReviewDecision(action="set_exposure", reason=None,  # noqa: E731
                                      exposure=p["book"]["gross"] - 0.01, exit=[], rationale="x")
     _, res = _run(Scripted(review=nudge))
     assert sum(p["traded_notional"] > 0 for p in res.periods) == 1
 
 
 def test_a_review_cut_rescales_the_book_and_set_exposure_without_a_number_falls_back():
-    cut = ReviewDecision(action="set_exposure", exposure=0.30, exit=[], rationale="storm")
+    cut = ReviewDecision(action="set_exposure", exposure=0.30, reason=None, exit=[], rationale="storm")
     desk, res = _run(Scripted(review=cut), n=2)
     assert _gross_after_trade(res, 1) == pytest.approx(0.30, abs=30 * W.GRID)
-    broken = ReviewDecision(action="set_exposure", exposure=None, exit=[], rationale="x")
+    broken = ReviewDecision(action="set_exposure", exposure=None, reason=None, exit=[], rationale="x")
     desk, _ = _run(Scripted(review=broken), n=2)
     assert [e["source"] for e in desk.log if e["role"] == "review"] == ["fallback"]
 
@@ -199,7 +201,7 @@ def test_a_desk_restored_before_every_round_trades_exactly_as_one_that_never_sto
         # The analyst holds, so the name stays in the book and only the desk's memory
         # of what already fired today stops it waking the analyst every round.
         return Scripted(
-            review=lambda p: ReviewDecision(action="set_exposure", exposure=round(p["book"]["gross"] - 0.1, 4),
+            review=lambda p: ReviewDecision(action="set_exposure", exposure=round(p["book"]["gross"] - 0.1, 4), reason=None,
                                             exit=[], rationale="trim"),
             event=lambda p: EventDecision(calls=[NameCall(name=t["name"], action="hold", reason="noise")
                                                  for t in p["triggers"]]))
@@ -227,7 +229,7 @@ def test_a_cached_replay_asks_the_model_nothing_and_repeats_every_decision(tmp_p
             self.calls = getattr(self, "calls", 0) + 1
             return super().decide(*a, **k)
 
-    inner = Counting(entry=lambda p: EntryDecision(shape="inverse_vol", exposure=0.5,
+    inner = Counting(entry=lambda p: EntryDecision(shape="inverse_vol", views="none", exposure=0.5,
                                                    avoid=[], rationale="x"))
     m = _mkt()
     _, first = _run(CachedBrain(inner, tmp_path), market=m)
@@ -279,7 +281,7 @@ def test_only_models_the_competition_allows_can_be_asked():
 
 
 def test_a_claude_request_caches_the_system_prompt_and_sends_no_model_fallback():
-    ans = EntryDecision(shape="risk_parity", exposure=0.7, avoid=[], rationale="calm")
+    ans = EntryDecision(shape="risk_parity", views="none", exposure=0.7, avoid=[], rationale="calm")
     fake = FakeClient(_reply(ans))
     brain = ClaudeBrain(client=fake)
     got = brain.decide("entry", "SYSTEM", {"a": 1}, EntryDecision, timeout=30)
@@ -304,7 +306,7 @@ def test_a_refused_or_truncated_answer_is_an_error_the_desk_falls_back_on():
 
 
 def test_the_call_budget_stops_spending_and_the_desk_keeps_trading_on_the_rule():
-    ans = EntryDecision(shape="risk_parity", exposure=0.7, avoid=[], rationale="x")
+    ans = EntryDecision(shape="risk_parity", views="none", exposure=0.7, avoid=[], rationale="x")
     brain = ClaudeBrain(client=FakeClient(_reply(ans)), max_calls=1)
     desk, res = _run(brain, n=3)
     assert [e["source"] for e in desk.log] == ["brain", "fallback", "fallback"]

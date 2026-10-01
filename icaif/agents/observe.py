@@ -12,7 +12,8 @@ random name codes (S01-S30, sorted by code, so even the alphabetical order of re
 tickers is gone), dates become "day k of 15", no price level appears, macro levels
 become z-scores and changes (`macro.readings`), and headlines, which name companies,
 are dropped. 8-K events stay: "director or officer change" names no one. Only windows after the model's training cutoff can
-be replayed with real names and still count.
+be replayed with real names and still count. Our own signals (HAR vols, the score's
+rank, sessions to earnings) are numbers about a code and stay too.
 """
 
 from dataclasses import dataclass, field
@@ -98,14 +99,28 @@ def _r(x, nd=4):
     return None if x is None or not np.isfinite(x) else round(float(x), nd)
 
 
+def _signal(field_: str, value):
+    """A rank is a count (1 = best), the rest are vols rounded like vol_ann_20d."""
+    if field_.endswith("_rank"):
+        return None if value is None or not np.isfinite(value) else int(value)
+    return _r(value)
+
+
 def observation(closes: pd.DataFrame, rd: Readings, book: BookState, anon: Anonymizer, *,
                 day: int, window_days: int, round_no: int,
-                scores: Optional[pd.Series] = None,
+                signals: Optional[dict] = None,
+                at_entry: Optional[dict] = None,
+                previews: Optional[dict] = None,
                 earnings: Optional[dict] = None,
                 news: Optional[dict] = None,
                 macro: Optional[dict] = None,
                 filings: Optional[dict] = None,
                 calendar_date: Optional[str] = None) -> dict:
+    """`signals`: today's {"names": {ticker: {field: value}}, "market": {...}} from
+    `Desk._signals`; `at_entry`: the same fields as they stood on the entry day, shown
+    with an `_at_entry` suffix so a change since entry is a comparison the agent reads,
+    not one it must remember; `previews`: {key: weights} shown as `weight_if_<key>`,
+    the exact books a decision would buy."""
     tickers = list(closes.columns)
     rets = rd.returns
     tail = rets.tail(qs.SHAPE_DAYS)
@@ -115,7 +130,8 @@ def observation(closes: pd.DataFrame, rd: Readings, book: BookState, anon: Anony
         shapes[name] = s.reindex(tickers) if s is not None else pd.Series(np.nan, index=tickers)
     cov = quant.shrunk_cov(tail)
     ou = quant.s_scores(tail) if len(tail) >= 20 else pd.DataFrame(index=tickers, columns=["s"])
-    pct = scores.rank(pct=True) if scores is not None else None
+    sig_names = (signals or {}).get("names", {})
+    entry_names = (at_entry or {}).get("names", {})
 
     nav = np.array(book.nav, dtype=float)
     peak = nav.max() if len(nav) else np.nan
@@ -133,8 +149,12 @@ def observation(closes: pd.DataFrame, rd: Readings, book: BookState, anon: Anony
             "weight_if_risk_parity": _r(shapes["risk_parity"][t]),
             "ou_s_score": _r(ou["s"].get(t, np.nan) if "s" in ou else np.nan, 2),
         }
-        if pct is not None:
-            row["model_score_pct"] = _r(pct.get(t, np.nan), 2)
+        for key, w in (previews or {}).items():
+            row[f"weight_if_{key}"] = _r(w.get(t, np.nan))
+        for field_, value in sig_names.get(t, {}).items():
+            row[field_] = _signal(field_, value)
+        for field_, value in entry_names.get(t, {}).items():
+            row[f"{field_}_at_entry"] = _signal(field_, value)
         if earnings is not None:
             row["earnings_in_sessions"] = earnings.get(t)
         if filings is not None:
@@ -171,6 +191,8 @@ def observation(closes: pd.DataFrame, rd: Readings, book: BookState, anon: Anony
                                         {"calm": _r(hmm.persistence[0], 1),
                                          "turbulent": _r(hmm.persistence[1], 1)}),
             "avg_pairwise_corr_60d": avg_corr,
+            **{k: _signal(k, v) for k, v in (signals or {}).get("market", {}).items()},
+            **{f"{k}_at_entry": _signal(k, v) for k, v in (at_entry or {}).get("market", {}).items()},
         },
         "names": names,
     }

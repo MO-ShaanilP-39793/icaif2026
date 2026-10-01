@@ -299,3 +299,66 @@ def test_live_edgar_adds_recent_filings_to_the_snapshot_without_doubling_any(tmp
     aapl = events.loc[events["ticker"] == "AAPL", "accepted"].tolist()
     assert aapl == [old, pd.Timestamp("2026-09-25 16:30", tz=ny)]   # once each; none after NOW
     assert (events["ticker"] == "MSFT").sum() == 1
+
+
+# ----------------------------------------------------------------------------- HAR vol
+
+def _bars_30m(first="2021-07-01", last="2022-05-20", seed=4):
+    """A random walk of 30m bars on the live grid, full sessions only."""
+    rng = np.random.default_rng(seed)
+    frames, px = [], np.full(len(OURS), 100.0)
+    for d in pd.bdate_range(first, last).date:
+        if d in calendar.EARLY_CLOSES:
+            continue
+        starts = pd.date_range(calendar.at(d, calendar.SESSION_OPEN),
+                               calendar.at(d, calendar.session_close(d)), freq="30min")[:-1]
+        px = px * np.exp(rng.normal(0, 0.01, len(OURS)))
+        o, scale = px.copy(), np.exp(rng.normal(0, 0.4))
+        for s in starts:
+            c = o * np.exp(rng.normal(0, 0.004 * scale, len(OURS)))
+            frames.append(pd.DataFrame({"ticker": OURS, "start": s, "end": s + pd.Timedelta(minutes=30),
+                                        "open": o, "high": np.maximum(o, c), "low": np.minimum(o, c),
+                                        "close": c, "volume": 1.0, "source": "yahoo_30m"}))
+            o = c
+        px = o
+    return pd.concat(frames, ignore_index=True)
+
+
+def test_the_live_har_forecast_reads_no_later_bar_prefers_the_fetch_and_is_made_once_a_day(
+        monkeypatch, tmp_path):
+    """The live forecast joins two feeds. It must read nothing that ended after the
+    deadline, take every session the fresh fetch covers from the fetch (a snapshot's
+    copy of a recent day may be partial or stale), and be made once: later rounds of
+    the day read the file, so a fetch failing at round 5 cannot blank the forecast."""
+    from icaif import alpaca, vol
+    from icaif.agents import signals
+
+    bars = _bars_30m()
+    session = date(2022, 5, 16)
+    deadline = calendar.at(session, calendar.ROUNDS[1][0])
+    cut = date(2022, 3, 1)
+    clean_60m = alpaca.to_60m(bars[bars["end"] <= deadline])
+    archive = alpaca.to_60m(bars[bars["start"].dt.date < date(2022, 4, 1)])
+    # The archive's overlap with the fetch is wrong on purpose: the fetch must win it.
+    overlap = archive["start"].dt.date >= cut
+    archive.loc[overlap, ["open", "high", "low", "close"]] *= np.exp(
+        np.random.default_rng(9).normal(0, 0.05, (int(overlap.sum()), 1)))
+    monkeypatch.setattr(live, "vol_archive", lambda: archive)
+    fetched = bars[bars["start"].dt.date >= cut]  # includes bars after the deadline
+
+    got = live.vol_forecasts(deadline, tmp_path, OURS,
+                             bars=lambda now: live.vol_bars(now, recent_30m=fetched))
+    want = vol.forecast_next(clean_60m, deadline)
+    row = got.for_day(session, deadline)
+    for h in vol.HORIZONS:
+        pd.testing.assert_series_equal(row[f"har_h{h}"], want[f"har_h{h}"].reindex(row.index),
+                                       check_names=False)
+    assert json.loads((tmp_path / "har_meta.json").read_text())["session"] == str(session)
+
+    def offline(now):
+        raise AssertionError("fetched again")
+
+    later = calendar.at(session, calendar.ROUNDS[5][0])
+    again = live.vol_forecasts(later, tmp_path, OURS, bars=offline)
+    pd.testing.assert_frame_equal(again.for_day(session, later), row)
+    assert isinstance(again, signals.VolForecasts)

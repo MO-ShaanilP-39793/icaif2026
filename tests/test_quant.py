@@ -43,6 +43,43 @@ def test_risk_parity_gives_every_name_the_same_share_of_variance():
     assert rc.to_numpy() == pytest.approx(np.full(10, 0.1), abs=1e-6)
 
 
+def _bl_world(n=10):
+    cov = _random_cov(n, 4)
+    prior = quant.risk_parity(cov, 1.0, cap=1.0)
+    alpha = pd.Series(np.linspace(-2e-4, 2e-4, n), index=cov.index)  # N9 best, N0 worst
+    return cov, prior, alpha
+
+
+def test_black_litterman_with_no_confidence_is_the_prior_exactly():
+    """Views switched off must be the prior to the last digit, or a desk that declined
+    the views would still trade a book its backtest never held."""
+    cov, prior, alpha = _bl_world()
+    pd.testing.assert_series_equal(quant.black_litterman(prior, cov, alpha, 0.0), prior)
+    pd.testing.assert_series_equal(
+        quant.black_litterman(prior, cov, alpha * np.nan, 0.7), prior)
+
+
+def test_views_tilt_toward_the_better_names_and_further_with_confidence():
+    """A sign slip in the posterior would buy the names the model likes least, with
+    a rationale saying the opposite; nothing else in the book would look wrong."""
+    cov, prior, alpha = _bl_world()
+    books = [quant.black_litterman(prior, cov, alpha, c, cap=0.30) for c in (0.05, 0.2, 0.6)]
+    for w in books:
+        assert w.sum() == pytest.approx(1.0) and (w >= 0).all() and (w <= 0.30 + 1e-12).all()
+        assert w["N9"] > prior["N9"] and w["N0"] < prior["N0"]
+    active = [0.5 * (w - prior).abs().sum() for w in books]
+    assert active[0] < active[1] < active[2]
+
+
+def test_a_name_without_a_view_moves_only_with_the_renormalisation():
+    """Without the projection onto viewed names, a name with no score would be tilted
+    through its covariances with names that have one: a view nobody stated."""
+    cov, prior, alpha = _bl_world()
+    alpha[["N3", "N6"]] = np.nan
+    w = quant.black_litterman(prior, cov, alpha, 0.1, cap=1.0)
+    assert (w["N3"] / prior["N3"]) == pytest.approx(w["N6"] / prior["N6"], rel=1e-12)
+
+
 def test_an_ou_fit_recovers_the_speed_of_a_simulated_ou_path():
     rng = np.random.default_rng(3)
     kappa, m, s = 0.15, 0.2, 0.01

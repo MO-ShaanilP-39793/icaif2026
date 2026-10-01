@@ -453,6 +453,7 @@ def agent_inputs(cfg: Config, mkt: sim.Market, r: Round) -> tuple[dict, dict]:
             pd.read_parquet(universe.latest("earnings_calendar_*.parquet")), mkt.days),
         "fomc": macro.FomcCalendar.load,
         "filings": lambda: pd.read_parquet(universe.latest("edgar_8k_*.parquet")),
+        "vol": lambda: live.vol_forecasts(r.deadline, cfg.out / "vol" / str(r.day), tickers),
     }
     for key, load in loaders.items():
         try:

@@ -296,7 +296,10 @@ Roadmap's step-6 gate.
   days, and every name must have the latest session's bar. It also reads Yahoo 30m
   bars, pairing today's into the backtest's 60m grid for the event trigger. Paper
   books fill at the 30m bar's :30 open through `sim.rebalance`, the backtest's own
-  rule. A session still trading is never read as a daily close.
+  rule. A session still trading is never read as a daily close. For the shadow's HAR
+  forecast it reads the `data/public` archive and 60 days of Yahoo 30m bars, once a
+  day (`output/live/<phase>/vol/<day>/`). Without the archive the forecast is left out
+  rather than refit on two months.
 - **Parity with the backtest.** On 7 past entry days (Oct 2025 to Sep 2026) the live
   rule on Yahoo closes and the research desk on Alpaca bars agree closely. Gross
   differs by at most 0.0011, the largest single-name gap is 0.0016, and the summed
@@ -316,6 +319,39 @@ answers, every LLM call's observation and answer, and the file it wrote.
 one declared shape and raises on anything else, rather than reading an unknown book as
 all cash and buying the entry again. After registration, run `live_runner.py
 portfolio --phase validation`, and fix `parse` if the shape it prints is different.
+
+## Agent signals (Roadmap step 2; `icaif/agents/signals.py`)
+
+Every role's observation carries our own signals, each served for the decision's day
+only (`compiler.DailyPanel`'s door raises on any other day):
+
+| Field | What | Replays | Live |
+| --- | --- | --- | --- |
+| `vol_ann_har_1d`, `_3d` | HAR forecast per name, and the basket's in `market` | `vol.walk_forward` from 2016-07 | `vol.forecast_next`, once a day |
+| `model_score_rank` | daily model's rank among the 30 (1 = best) | walk-forward predictions, 2023 on | frozen 2026 model |
+| `earnings_in_sessions` | sessions to the open that reflects the next release | EDGAR releases within 10 sessions | Yahoo calendar |
+| `*_at_entry` | the rank and 3-day vol on the entry day, after entry | | |
+
+The levers built on them, all checked by code rather than asked for in the prompt:
+
+- **Exclusions.** The Strategist's `avoid` lists names, each with its signal
+  (`model_score`, `earnings`, `volatility`, `filing`, `other`) and a reason, so a
+  replay can score exclusions by cause.
+- **Black-Litterman views.** `views` is `none`, `light` or `strong`, and applies to
+  risk parity only. The risk-parity book is the prior and the score ranks are views
+  sized by Grinold's IC x vol x z, at IC 0.03 (the frozen model's last two years among
+  the 30). On the 61 entry days with scores, `light` moves a median 10% of the book
+  and `strong` 27% (`tools/bl_calibration.py`, 24 s). The Strategist is shown both
+  books exactly; `none` is the rule's own path.
+- **Rebalance.** The Risk review may `rebalance`, with a reason (`score_change` or
+  `vol_change`): the entry's recipe (shape, views, exclusions plus every exit since)
+  rebuilt on today's inputs. It is shown the book, its turnover and fee first.
+  Rebalances are capped at 2 a window, and one under 2% turnover is a hold.
+
+The rule desk reading every input equals `q_riskparity_entry_regime` trade for trade
+in all 167 windows (`tools/agent_replay.py --ledgers-only`, 99 s). Each input has a
+test that rewrites the future and requires the entry's observation unchanged
+(`tests/test_signals.py`).
 
 ## Credentials
 

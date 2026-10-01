@@ -48,9 +48,13 @@ tilt loses to the hold after fees, and the GNN failed its stage-1 gate.
       morning, the exposure with the best expected final rank against a simulated
       field, over bootstrapped rest-of-window paths. Planned and scored on both fields.
 - [ ] Exotic queue, in order: signature features (for the write-up; the organizers
-      are the signatures group), Black-Litterman with the model scores as views on the
-      risk-parity prior, rough-volatility sizing. Overnight-vs-intraday is ruled out by
-      arithmetic: a 1.6 bps/day gap against 20 bps x fraction moved.
+      are the signatures group), rough-volatility sizing. Black-Litterman is built, as
+      the Strategist's `views` lever (Roadmap step 2), but not yet scored as a rule.
+      Overnight-vs-intraday is ruled out by arithmetic: a 1.6 bps/day gap against
+      20 bps x fraction moved.
+- [ ] Score a rule desk that always takes `views: light` (and `strong`) against the
+      plain one on the 2023-26 windows, no LLM: whether the tilt pays before the
+      Strategist is asked to choose it. About 5 min per level with the field.
 - [ ] Refit the 2026 folds after the VIX-holiday context fix. About 15 min.
 - [ ] Move the period and rolling-window reports into `tools/period_report.py`.
 
@@ -108,6 +112,14 @@ tilt loses to the hold after fees, and the GNN failed its stage-1 gate.
       uploading only when armed (`icaif/runner.py`).
 - [ ] Shadow the agent through Validation (Oct 8–9): submit the rule's book, and log
       what the agent would have done.
+- [x] Our signals in every role's observation (Roadmap step 2, `icaif/agents/signals.py`):
+      HAR 1- and 3-day vol per name and for the basket, the score's rank among the 30,
+      sessions to earnings, and their values at entry, each with a no-look-ahead test.
+      The levers: exclusions with their cause, Black-Litterman views on risk parity,
+      and a rebalance with a reason (at most 2 a window). The rule desk reading every
+      input equals its candidate in all 167 windows (`agent_replay.py --ledgers-only`).
+- [ ] What the LLM does with the signals is step 6's paid replay: count views,
+      exclusions by signal, and rebalances by reason in its log.
 
 ## Final materials (Nov 3)
 
