@@ -307,7 +307,20 @@ Own venv (pandas 2.3, for AutoGluon later): `python3 -m venv .venv &&
 .venv/bin/pip install -r requirements.txt`. Tests: `.venv/bin/python -m pytest -q`.
 Data is not committed. `data/hourly_market_data_2021_2026.parquet` comes from the
 Codabench Files tab. The dated Yahoo snapshots in `data/public/` cannot be refetched
-once their window rolls past, so copy them from a teammate rather than refetching.
+once their window rolls past, so copy them rather than refetching.
+
+Data, trained models and report CSVs are kept in `s3://shaanil/icaif2026/`, under the
+same paths as the repo (about 4 GB, mostly `output/ag/`). With AWS SSO access to that
+bucket:
+
+```bash
+cd icaif2026
+for d in data output reports; do aws s3 sync s3://shaanil/icaif2026/$d $d; done
+```
+
+Push new data or a retrain back the same way, source and destination swapped. The
+bucket also holds alphaBT production data, so write only under `icaif2026/` and never
+use `--delete` there. Credentials (`.env`, `.icaif/`) are never uploaded.
 
 ```bash
 cd icaif2026/starter-kit

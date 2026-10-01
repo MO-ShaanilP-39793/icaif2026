@@ -16,7 +16,8 @@ tilt loses to the hold after fees, and the GNN failed its stage-1 gate.
       19:00–01:30 IST, and must not sleep. It must not be alphaBT infrastructure.
 - [ ] Decide on an LLM or no LLM, after the first paid replay below.
 - [ ] If there is an LLM: apply for Nodexi API credits when the window opens.
-- [ ] Set `SEC_USER_AGENT="<name> <email>"` in the runner's environment.
+- [x] Set `SEC_USER_AGENT="<name> <email>"` on the owner's Mac (2026-10-01, in ~/.bash_profile and ~/.zshrc). The live
+      runner's machine needs it too, in its launchd/cron job's own environment.
 - [ ] Confirm the employer is fine with a public entry and published final materials.
 - [ ] Decide whether GNN stage 2 is dropped. Recommended, since stage 1's blend lowered
       IC by 0.006.
@@ -76,8 +77,8 @@ tilt loses to the hold after fees, and the GNN failed its stage-1 gate.
       of the prior close; levels become z-scores in replays. FOMC decisions 2021-27
       from the Fed's page (`tools/macro_calendar.py`); next: **2026-10-28**, inside
       the Official phase, statement at 14:00 ET.
-- [ ] Fetch 8-K events (`tools/filings_events.py`): needs `SEC_USER_AGENT`. Then pass
-      `filings=` to the desk in `tools/agent_replay.py`.
+- [x] Fetch 8-K events (`tools/filings_events.py`): 10,411 for the 30 names on 2026-10-01.
+- [ ] Pass `filings=` to the desk in `tools/agent_replay.py`.
 - [ ] CPI and jobs-report dates (BLS schedules), and FOMC before 2021 (the Fed's
       per-year archive pages, a different layout).
 - [ ] First paid replay (owner approves the spend): entry-only (`--no-review`), 2025
