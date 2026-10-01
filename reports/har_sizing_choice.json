@@ -1,0 +1,443 @@
+{
+ "made": "2026-10-01",
+ "objective": "lowest mean score, no_clone field",
+ "selection_windows": {
+  "n": 146,
+  "first": "2016-10-11",
+  "last": "2025-11-26"
+ },
+ "grid": {
+  "horizons": [
+   1,
+   3,
+   15
+  ],
+  "typical_days": [
+   250,
+   750
+  ],
+  "clips": [
+   [
+    0.5,
+    0.95
+   ],
+   [
+    0.25,
+    0.95
+   ],
+   [
+    0.6,
+    0.9
+   ]
+  ],
+  "rp_modes": [
+   "har",
+   "mean",
+   "min"
+  ],
+  "e_ref": 0.75
+ },
+ "win": "against both references: paired diff < 0 on both fields in both splits, and > 2 SE below 0 on the no_clone field in the selection windows",
+ "variants": {
+  "1_weights": {
+   "settings": {
+    "weights_h": 15
+   },
+   "label": "1_weights h15",
+   "selection": {
+    "inv_vol_hold_75": {
+     "default": {
+      "diff": -0.13527397260273974,
+      "se": 0.029970729730535703,
+      "score": 2.9743150684931505,
+      "se_score": 0.04248769946581557,
+      "top3": 0.952054794520548
+     },
+     "no_clone": {
+      "diff": -0.02910958904109589,
+      "se": 0.020833805155315768,
+      "score": 2.690068493150685,
+      "se_score": 0.04348868714984859,
+      "top3": 0.9383561643835616
+     }
+    },
+    "q_riskparity_entry_regime": {
+     "default": {
+      "diff": -0.0273972602739726,
+      "se": 0.04507664755596255,
+      "score": 2.9743150684931505,
+      "se_score": 0.04248769946581557,
+      "top3": 0.952054794520548
+     },
+     "no_clone": {
+      "diff": -0.03767123287671233,
+      "se": 0.03378766689989718,
+      "score": 2.690068493150685,
+      "se_score": 0.04348868714984859,
+      "top3": 0.9383561643835616
+     }
+    }
+   },
+   "entry_exposure_mean": 0.75,
+   "entry_exposure_min": 0.75,
+   "entry_exposure_max": 0.75,
+   "windows_with_fallback": 1,
+   "fallbacks": [
+    "2022-01-31 weights: no h15 forecast for T, TMO, UNH, V, WMT, XOM; trailing weights"
+   ]
+  },
+  "2_exposure": {
+   "settings": {
+    "exposure": {
+     "horizon": 15,
+     "typical_days": 250,
+     "lo": 0.6,
+     "hi": 0.9,
+     "e_ref": 0.75
+    }
+   },
+   "label": "2_exposure e:h15_t250_0.6-0.9",
+   "selection": {
+    "inv_vol_hold_75": {
+     "default": {
+      "diff": 0.0273972602739726,
+      "se": 0.011167998174536817,
+      "score": 3.136986301369863,
+      "se_score": 0.05120663722986747,
+      "top3": 0.8835616438356164
+     },
+     "no_clone": {
+      "diff": 0.0273972602739726,
+      "se": 0.011167998174536817,
+      "score": 2.7465753424657535,
+      "se_score": 0.0504459506618541,
+      "top3": 0.910958904109589
+     }
+    },
+    "q_riskparity_entry_regime": {
+     "default": {
+      "diff": 0.13527397260273974,
+      "se": 0.04095911935966998,
+      "score": 3.136986301369863,
+      "se_score": 0.05120663722986747,
+      "top3": 0.8835616438356164
+     },
+     "no_clone": {
+      "diff": 0.018835616438356163,
+      "se": 0.03169044748388073,
+      "score": 2.7465753424657535,
+      "se_score": 0.0504459506618541,
+      "top3": 0.910958904109589
+     }
+    }
+   },
+   "entry_exposure_mean": 0.754899296480762,
+   "entry_exposure_min": 0.6,
+   "entry_exposure_max": 0.9,
+   "windows_with_fallback": 11,
+   "fallbacks": [
+    "2016-10-11 exposure: no basket forecast or typical level; e_ref 0.75",
+    "2016-11-01 exposure: no basket forecast or typical level; e_ref 0.75",
+    "2016-11-22 exposure: no basket forecast or typical level; e_ref 0.75",
+    "2016-12-14 exposure: no basket forecast or typical level; e_ref 0.75",
+    "2017-01-06 exposure: no basket forecast or typical level; e_ref 0.75"
+   ]
+  },
+  "3_both": {
+   "settings": {
+    "weights_h": 15,
+    "exposure": {
+     "horizon": 15,
+     "typical_days": 250,
+     "lo": 0.6,
+     "hi": 0.9,
+     "e_ref": 0.75
+    }
+   },
+   "label": "3_both h15 e:h15_t250_0.6-0.9",
+   "selection": {
+    "inv_vol_hold_75": {
+     "default": {
+      "diff": -0.13013698630136986,
+      "se": 0.03142227460789498,
+      "score": 2.9794520547945207,
+      "se_score": 0.0430247241179068,
+      "top3": 0.9657534246575342
+     },
+     "no_clone": {
+      "diff": -0.02226027397260274,
+      "se": 0.02172329324740944,
+      "score": 2.6969178082191783,
+      "se_score": 0.0448853644108488,
+      "top3": 0.9383561643835616
+     }
+    },
+    "q_riskparity_entry_regime": {
+     "default": {
+      "diff": -0.02226027397260274,
+      "se": 0.045128878644902025,
+      "score": 2.9794520547945207,
+      "se_score": 0.0430247241179068,
+      "top3": 0.9657534246575342
+     },
+     "no_clone": {
+      "diff": -0.030821917808219176,
+      "se": 0.03313012475476899,
+      "score": 2.6969178082191783,
+      "se_score": 0.0448853644108488,
+      "top3": 0.9383561643835616
+     }
+    }
+   },
+   "entry_exposure_mean": 0.754899296480762,
+   "entry_exposure_min": 0.6,
+   "entry_exposure_max": 0.9,
+   "windows_with_fallback": 11,
+   "fallbacks": [
+    "2016-10-11 exposure: no basket forecast or typical level; e_ref 0.75",
+    "2016-11-01 exposure: no basket forecast or typical level; e_ref 0.75",
+    "2016-11-22 exposure: no basket forecast or typical level; e_ref 0.75",
+    "2016-12-14 exposure: no basket forecast or typical level; e_ref 0.75",
+    "2017-01-06 exposure: no basket forecast or typical level; e_ref 0.75"
+   ]
+  },
+  "4a_rp_sizing": {
+   "settings": {
+    "vol_h": 15
+   },
+   "label": "4a_rp_sizing h15",
+   "selection": {
+    "inv_vol_hold_75": {
+     "default": {
+      "diff": -0.1284246575342466,
+      "se": 0.04075024896031294,
+      "score": 2.981164383561644,
+      "se_score": 0.05536229370457971,
+      "top3": 0.8972602739726028
+     },
+     "no_clone": {
+      "diff": -0.00684931506849315,
+      "se": 0.03014932971766916,
+      "score": 2.712328767123288,
+      "se_score": 0.048436981258954466,
+      "top3": 0.9178082191780822
+     }
+    },
+    "q_riskparity_entry_regime": {
+     "default": {
+      "diff": -0.02054794520547945,
+      "se": 0.025077448447027063,
+      "score": 2.981164383561644,
+      "se_score": 0.05536229370457971,
+      "top3": 0.8972602739726028
+     },
+     "no_clone": {
+      "diff": -0.015410958904109588,
+      "se": 0.02107505688699484,
+      "score": 2.712328767123288,
+      "se_score": 0.048436981258954466,
+      "top3": 0.9178082191780822
+     }
+    }
+   },
+   "entry_exposure_mean": 0.7157446166743565,
+   "entry_exposure_min": 0.3089568918286014,
+   "entry_exposure_max": 0.8468753179782688,
+   "windows_with_fallback": 1,
+   "fallbacks": [
+    "2022-01-31 shape: no h15 forecast for T, TMO, UNH, V, WMT, XOM; sample vols"
+   ]
+  },
+  "4b_rp_exposure": {
+   "settings": {
+    "mode": "har",
+    "exposure": {
+     "horizon": 15,
+     "typical_days": 250,
+     "lo": 0.6,
+     "hi": 0.9,
+     "e_ref": 0.75
+    }
+   },
+   "label": "4b_rp_exposure har e:h15_t250_0.6-0.9",
+   "selection": {
+    "inv_vol_hold_75": {
+     "default": {
+      "diff": -0.11472602739726027,
+      "se": 0.04023187342348995,
+      "score": 2.9948630136986303,
+      "se_score": 0.058896179064297796,
+      "top3": 0.863013698630137
+     },
+     "no_clone": {
+      "diff": 0.0017123287671232876,
+      "se": 0.030203272851940063,
+      "score": 2.720890410958904,
+      "se_score": 0.05191822730259115,
+      "top3": 0.8904109589041096
+     }
+    },
+    "q_riskparity_entry_regime": {
+     "default": {
+      "diff": -0.00684931506849315,
+      "se": 0.014568507530430786,
+      "score": 2.9948630136986303,
+      "se_score": 0.058896179064297796,
+      "top3": 0.863013698630137
+     },
+     "no_clone": {
+      "diff": -0.00684931506849315,
+      "se": 0.012845417705136654,
+      "score": 2.720890410958904,
+      "se_score": 0.05191822730259115,
+      "top3": 0.8904109589041096
+     }
+    }
+   },
+   "entry_exposure_mean": 0.7523413054579096,
+   "entry_exposure_min": 0.5673696675069452,
+   "entry_exposure_max": 0.9,
+   "windows_with_fallback": 11,
+   "fallbacks": [
+    "2016-10-11 exposure: no basket forecast or typical level; the HMM's 0.575",
+    "2016-11-01 exposure: no basket forecast or typical level; the HMM's 0.575",
+    "2016-11-22 exposure: no basket forecast or typical level; the HMM's 0.575",
+    "2016-12-14 exposure: no basket forecast or typical level; the HMM's 0.575",
+    "2017-01-06 exposure: no basket forecast or typical level; the HMM's 0.834"
+   ]
+  },
+  "4c_rp_both": {
+   "settings": {
+    "vol_h": 15,
+    "mode": "har",
+    "exposure": {
+     "horizon": 15,
+     "typical_days": 250,
+     "lo": 0.6,
+     "hi": 0.9,
+     "e_ref": 0.75
+    }
+   },
+   "label": "4c_rp_both h15 har e:h15_t250_0.6-0.9",
+   "selection": {
+    "inv_vol_hold_75": {
+     "default": {
+      "diff": -0.11643835616438356,
+      "se": 0.04081743166455217,
+      "score": 2.993150684931507,
+      "se_score": 0.057087701834568114,
+      "top3": 0.8767123287671232
+     },
+     "no_clone": {
+      "diff": 0.005136986301369863,
+      "se": 0.029905888646440528,
+      "score": 2.7243150684931505,
+      "se_score": 0.05043091661220483,
+      "top3": 0.910958904109589
+     }
+    },
+    "q_riskparity_entry_regime": {
+     "default": {
+      "diff": -0.008561643835616438,
+      "se": 0.028171985087154388,
+      "score": 2.993150684931507,
+      "se_score": 0.057087701834568114,
+      "top3": 0.8767123287671232
+     },
+     "no_clone": {
+      "diff": -0.003424657534246575,
+      "se": 0.023682364769960017,
+      "score": 2.7243150684931505,
+      "se_score": 0.05043091661220483,
+      "top3": 0.910958904109589
+     }
+    }
+   },
+   "entry_exposure_mean": 0.7523413054579096,
+   "entry_exposure_min": 0.5673696675069452,
+   "entry_exposure_max": 0.9,
+   "windows_with_fallback": 11,
+   "fallbacks": [
+    "2016-10-11 exposure: no basket forecast or typical level; the HMM's 0.575",
+    "2016-11-01 exposure: no basket forecast or typical level; the HMM's 0.575",
+    "2016-11-22 exposure: no basket forecast or typical level; the HMM's 0.575",
+    "2016-12-14 exposure: no basket forecast or typical level; the HMM's 0.575",
+    "2017-01-06 exposure: no basket forecast or typical level; the HMM's 0.834"
+   ]
+  }
+ },
+ "references": {
+  "inv_vol_hold_75": {
+   "selection": {
+    "inv_vol_hold_75": {
+     "default": {
+      "diff": 0.0,
+      "se": 0.0,
+      "score": 3.1095890410958904,
+      "se_score": 0.048899835609625096,
+      "top3": 0.9178082191780822
+     },
+     "no_clone": {
+      "diff": 0.0,
+      "se": 0.0,
+      "score": 2.719178082191781,
+      "se_score": 0.04810352429001071,
+      "top3": 0.9246575342465754
+     }
+    },
+    "q_riskparity_entry_regime": {
+     "default": {
+      "diff": 0.10787671232876712,
+      "se": 0.04014230813317724,
+      "score": 3.1095890410958904,
+      "se_score": 0.048899835609625096,
+      "top3": 0.9178082191780822
+     },
+     "no_clone": {
+      "diff": -0.008561643835616438,
+      "se": 0.030583830870006955,
+      "score": 2.719178082191781,
+      "se_score": 0.04810352429001071,
+      "top3": 0.9246575342465754
+     }
+    }
+   }
+  },
+  "q_riskparity_entry_regime": {
+   "selection": {
+    "inv_vol_hold_75": {
+     "default": {
+      "diff": -0.10787671232876712,
+      "se": 0.04014230813317724,
+      "score": 3.0017123287671232,
+      "se_score": 0.056492533363528594,
+      "top3": 0.8767123287671232
+     },
+     "no_clone": {
+      "diff": 0.008561643835616438,
+      "se": 0.030583830870006955,
+      "score": 2.7277397260273974,
+      "se_score": 0.04925767043634658,
+      "top3": 0.8904109589041096
+     }
+    },
+    "q_riskparity_entry_regime": {
+     "default": {
+      "diff": 0.0,
+      "se": 0.0,
+      "score": 3.0017123287671232,
+      "se_score": 0.056492533363528594,
+      "top3": 0.8767123287671232
+     },
+     "no_clone": {
+      "diff": 0.0,
+      "se": 0.0,
+      "score": 2.7277397260273974,
+      "se_score": 0.04925767043634658,
+      "top3": 0.8904109589041096
+     }
+    }
+   }
+  }
+ }
+}
