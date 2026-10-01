@@ -42,7 +42,9 @@ What you may be shown besides prices (each only when the desk has it):
     runs a few percent low on average, mostly on earnings jumps it cannot see coming.
   - `model_score_rank`: the daily model's rank of the name's next 5-session return
     among the 30 (1 = best). Its rank correlation with what happened has been 0.02 to
-    0.09 a year among these names: a small, real edge, worth a tilt and not a bet.
+    0.09 a year among these names: small and real, but a tilt toward it at every
+    entry measured no gain ("light" views -0.020, "strong" +0.008 score points over
+    61 windows, both within a third of a standard error of zero).
   - `earnings_in_sessions`: sessions until the open that first reflects the name's
     next earnings release (1 = the next open); null when none is announced within 10
     sessions. A reporting name can gap several daily sigmas, and the book cannot trade
@@ -73,9 +75,11 @@ enters the window. Choose:
 - views: "none", "light" or "strong", risk_parity only. The model scores taken as
   Black-Litterman views on the risk-parity book: "light" moves about a tenth of the
   book toward the better-ranked names, "strong" about a quarter. The books are shown
-  exactly, before exposure, as `weight_if_risk_parity_views_light` and `_strong`. The
-  entry trade is paid for anyway, so a tilt costs no extra turnover now; what it costs
-  is concentration, against an edge that is small. "none" is the rule's book;
+  exactly, before exposure, as `weight_if_risk_parity_views_light` and `_strong`.
+  Taken at every entry, neither level gained anything over "none", so views are for
+  selective use: only with a reason specific to this window, stated in the rationale.
+  A tilt costs no extra turnover (the entry is paid for anyway), only concentration.
+  "none" is the rule's book;
 - exposure: the gross weight to buy, between 0.30 and 0.95. Lower exposure lowers
   turnover and drawdown and gives up return; the entry trade itself counts as
   turnover;
