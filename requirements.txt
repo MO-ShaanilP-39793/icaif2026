@@ -3,7 +3,9 @@
 # later would mean re-validating every number produced before the switch.
 pandas==2.3.3
 numpy==2.3.5
-pyarrow==25.0.1
+# AutoGluon 1.5 needs pyarrow<21. 20.0.0 is what every parquet file in the S3 copy of
+# record was written with; the earlier 25.0.1 pin left this file unresolvable.
+pyarrow==20.0.0
 yfinance==1.7.0
 httpx==0.28.1
 pytest
