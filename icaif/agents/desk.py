@@ -21,6 +21,14 @@ reconciled against it before anything is decided, each role reads it back as `me
 and per-name entry fields, and the round's decisions go into it after. It changes what
 a role is shown, never what the rule decides, so the rule desk still equals its
 candidate trade for trade.
+
+Roadmap step 5 adds news and profit booking. The Risk review and the Event analyst read
+each held name's headlines (live only) and every role its recent 8-K filings, and a new
+8-K for a held name wakes the Event analyst beside earnings and the 3-sigma move. Both
+roles can trim a held name (a quarter or half of it, with a cause), floored at
+`trim.MIN_TRIM` of NAV and capped at `max_trims` a window. The rule's own trim
+(`trim.TrimRule`) is passed in only once it has won its gate; without it the rule
+proposes no trim and the rule desk is still its candidate.
 """
 
 import time
@@ -33,6 +41,8 @@ import pandas as pd
 from pydantic import BaseModel
 
 from icaif import calendar, compiler, quant, quant_strategies as qs, sim
+from icaif import filings as F
+from icaif import trim as TR
 from icaif import weights as W
 from icaif.agents import observe, prompts, signals
 from icaif.agents.brains import BrainError, rule_event
@@ -63,6 +73,11 @@ class DeskConfig:
     # without memory (live): the memory informs a role, and a bug in it must not cost
     # the submitted book its entry.
     journal_strict: bool = True
+    # Trims a window allows, rule and agent together. Each pays the fee on what it sells
+    # and a turnover rank, so "part of a winner, sometimes" is enforced, not asked.
+    max_trims: int = TR.MAX_TRIMS
+    # The roles that read held names' headlines: the two that can act on a held name.
+    headline_roles: tuple = ("review", "event")
 
 
 def rule_exposure(p_turbulent: float) -> float:
@@ -108,14 +123,24 @@ class Desk:
                  earnings: Optional[EarningsCalendar] = None,
                  context: Optional[pd.DataFrame] = None,
                  fomc=None, filings: Optional[pd.DataFrame] = None,
-                 news_dir=None, vol: Optional[signals.VolForecasts] = None):
+                 news_dir=None, vol: Optional[signals.VolForecasts] = None,
+                 trim: Optional[TR.TrimRule] = None):
         """`context`: `macro.wide(...)` closes; `fomc`: a `macro.FomcCalendar`;
-        `filings`: `filings.fetch(...)` events; `news_dir`: the headline archive, read
-        only with real names (headlines name companies); `vol`: HAR forecasts."""
+        `filings`: `filings.fetch(...)` events (a `text` column, live); `news_dir`: the
+        headline archive, read only with real names (headlines name companies); `vol`:
+        HAR forecasts; `trim`: the rule's own trim, once it has won its gate (it reads
+        `vol`)."""
         self.brain = brain
         self.cfg = config or DeskConfig()
         self.scores, self.earnings, self.vol = scores, earnings, vol
         self.context, self.fomc, self.filings, self.news_dir = context, fomc, filings, news_dir
+        self.trim_rule = trim
+        # Trims spent this window, each {ticker, day, round, fraction, role}; the window's
+        # first day; and the acceptance time up to which 8-Ks have been triggered on. A
+        # desk rebuilt without the last would wake the analyst on the same filing again.
+        self.trims: list[dict] = []
+        self._start: Optional[date] = None
+        self._filings_to: Optional[pd.Timestamp] = None
         # The entry's recipe (shape, views, names kept out), what the signals read at
         # entry, and rebalances spent: a rebalance re-applies the recipe, so without it
         # a restored desk would rebuild a book the Strategist never chose.
@@ -214,9 +239,8 @@ class Desk:
                 names[t]["model_score_rank"] = ranks[t]
         return {"names": names, "market": market, "raw_scores": raw}
 
-    def _payload(self, closes, rd, ctx, sig: Optional[dict] = None, previews=None, **extra) -> dict:
-        from icaif import filings, news
-
+    def _payload(self, closes, rd, ctx, role: str, sig: Optional[dict] = None, previews=None,
+                 held=(), triggered=(), **extra) -> dict:
         sig = sig if sig is not None else self._signals(ctx, list(closes.columns))
         obs = observe.observation(
             closes, rd, self.book, self.anon, day=self.day_no,
@@ -225,14 +249,38 @@ class Desk:
             at_entry=self.at_entry if self.book.entered else None, previews=previews,
             earnings=self.earnings.to_next(ctx.day) if self.earnings is not None else None,
             macro=self._macro(ctx),
-            filings=(filings.recent(self.filings, ctx.deadline)
+            filings=(F.recent(self.filings, ctx.deadline)
                      if self.filings is not None else None),
-            news=(news.as_of(ctx.deadline, directory=self.news_dir)
-                  if self.news_dir is not None and not self.cfg.anonymize else None),
+            news=self._headlines(ctx, role, held, triggered),
             calendar_date=str(ctx.day), positions=self._name_fields())
         obs["memory"] = self._memory()
         obs.update(extra)
         return obs
+
+    def _headlines(self, ctx, role: str, held, triggered) -> Optional[dict]:
+        """{ticker: headlines} for each held name, in the roles that act on held names.
+
+        A triggered name shows its newest few in full, naming the company first; any other
+        held name its titles that name the company. Never anonymised: a headline names
+        the company, which is the one thing a replay's codes exist to hide.
+        """
+        if (self.news_dir is None or self.cfg.anonymize or role not in self.cfg.headline_roles
+                or not len(held)):
+            return None
+        from icaif import news
+
+        known = news.known_at(ctx.deadline, self.news_dir)
+        out = {t: [] for t in held}
+        hot = [t for t in held if t in set(triggered)]
+        full = news.recent(known, ctx.deadline, hot, observe.HEADLINES_TRIGGERED,
+                           observe.HEADLINE_HOURS)
+        rest = news.recent(known, ctx.deadline, [t for t in held if t not in set(hot)],
+                           observe.HEADLINES_HELD, observe.HEADLINE_HOURS)
+        rest = rest[rest["names_it"]] if len(rest) else rest
+        for rows, whole in ((full, True), (rest, False)):
+            for t, g in rows.groupby("ticker"):
+                out[t] = observe.headline_rows(g, ctx.deadline, full=whole)
+        return out
 
     # ------------------------------------------------------------------ the journal
 
@@ -300,6 +348,8 @@ class Desk:
                 "fired": sorted(self._fired), "hmm": hmm, "book": book,
                 "anon": None if self.anon is None else dict(self.anon.to_code),
                 "recipe": self.recipe, "at_entry": self.at_entry, "rebalances": self.rebalances,
+                "trims": self.trims, "start": None if self._start is None else self._start.isoformat(),
+                "filings_to": None if self._filings_to is None else self._filings_to.isoformat(),
                 "journal": self.journal.to_json(), "log": self.log}
 
     def restore(self, state: Optional[dict], tickers: list[str]) -> None:
@@ -317,6 +367,11 @@ class Desk:
         self.log = list(state.get("log", []))
         self.recipe, self.at_entry = state.get("recipe"), state.get("at_entry")
         self.rebalances = int(state.get("rebalances", 0))
+        self.trims = list(state.get("trims", []))
+        self._start = date.fromisoformat(state["start"]) if state.get("start") else None
+        # A state from before the 8-K trigger has none: the desk then starts watching at
+        # its next event round, rather than waking on every filing of the window so far.
+        self._filings_to = pd.Timestamp(state["filings_to"]) if state.get("filings_to") else None
         h = state.get("hmm")
         self.hmm = None if h is None else quant.HMM2(**{k: np.asarray(v, dtype=float)
                                                         for k, v in h.items()})
@@ -346,6 +401,7 @@ class Desk:
         if ctx.day != self._day:
             self._day, self._fired = ctx.day, set()
             self.day_no += 1
+            self._start = self._start or ctx.day
         n0 = len(self.log)
         self._journal_open(ctx)
         w = None
@@ -442,7 +498,8 @@ class Desk:
         rule = {"shape": "risk_parity", "views": "none",
                 "exposure": rule_exposure(rd.p_turbulent_next),
                 "avoid": [], "rationale": "rule: risk parity at the regime-blended exposure"}
-        payload = self._payload(closes, rd, ctx, sig=sig, previews=previews, rule_proposal=rule)
+        payload = self._payload(closes, rd, ctx, "entry", sig=sig, previews=previews,
+                                rule_proposal=rule)
 
         def check(d: EntryDecision):
             codes = [x.name for x in d.avoid]
@@ -469,6 +526,9 @@ class Desk:
         self.recipe = recipe
         self.at_entry = self._snapshot(sig)
         self.book.entered = True
+        # Every filing accepted by now was in the Strategist's observation; the analyst
+        # wakes for the ones after it.
+        self._filings_to = pd.Timestamp(ctx.deadline)
         return self._submit(target, current, nav, tickers)
 
     def _review(self, ctx, tickers, current, nav):
@@ -488,11 +548,15 @@ class Desk:
                      "fee_bps_of_nav": round(moved * sim.FEE_RATE * 1e4, 2),
                      "rebalances_left": left,
                      "below_this_turnover_is_a_hold": self.cfg.rebalance_min_turnover}
+        held_t = [t for t in tickers if current[t] > compiler.HELD]
+        rule_cuts = self._rule_trims(ctx, current)
         rule = {"action": "hold", "exposure": None, "reason": None, "exit": [],
-                "rationale": "rule: hold"}
-        payload = self._payload(closes, rd, ctx, sig=sig, previews=previews, rebalance=offer,
-                                rule_proposal=rule)
-        held = {self.anon.code(t) for t in tickers if current[t] > compiler.HELD}
+                "trim": [self._rule_trim_call(c) for c in rule_cuts],
+                "rationale": "rule: hold" + (f", and book part of {len(rule_cuts)} winner(s) that "
+                                             f"turned" if rule_cuts else "")}
+        payload = self._payload(closes, rd, ctx, "review", sig=sig, previews=previews, held=held_t,
+                                rebalance=offer, trim_lever=self._trim_lever(), rule_proposal=rule)
+        held = {self.anon.code(t) for t in held_t}
 
         def without(codes):
             return dict(self.recipe, excluded=sorted(set(self.recipe["excluded"])
@@ -514,6 +578,10 @@ class Desk:
                 if self._recipe_book(tail, sig["raw_scores"], without(d.exit), tickers) is None:
                     raise ValueError("these exits leave no name to rebalance into; to go to cash, "
                                      "set the exposure to 0")
+                if d.trim:
+                    raise ValueError("a rebalance rebuilds every name; a trim goes with hold or "
+                                     "set_exposure")
+            self._check_trims([(x.name, x.fraction) for x in d.trim], held, set(d.exit), current)
 
         d, _ = self._ask("review", payload, ReviewDecision, check)
         exits = [self.anon.ticker(code) for code in d.exit]
@@ -531,14 +599,26 @@ class Desk:
             target = current * (d.exposure / gross)
         for t in exits:
             target[t] = 0.0
+        cuts = self._cuts([(x.name, x.fraction) for x in d.trim], current)
+        self._done(cuts)
+        target = TR.apply(target, cuts)
         self._exclude(exits)
         if (target - current).abs().max() <= compiler.HELD:
             return None
+        self._spend(cuts, ctx, "review")
         return self._submit(target, current, nav, tickers)
 
     def _events(self, ctx, tickers, current, nav):
-        held = [t for t in tickers if current[t] > compiler.HELD and t not in self._fired]
-        if not held:
+        held_all = [t for t in tickers if current[t] > compiler.HELD]
+        # Each filing wakes the analyst once: from the entry's deadline, or the last event
+        # round's, to this one's. Overnight filings land in the day's first event round.
+        after, self._filings_to = self._filings_to, pd.Timestamp(ctx.deadline)
+        fresh = {}
+        if self.filings is not None and after is not None and held_all:
+            fresh = {t: g for t, g in F.new(self.filings, after, ctx.deadline).groupby("ticker")
+                     if t in held_all}
+        held = [t for t in held_all if t not in self._fired]
+        if not held and not fresh:
             return None
         why = {}
         last_round = len(calendar.rounds_for(ctx.day))
@@ -549,35 +629,118 @@ class Desk:
                     why[t] = "earnings reaction at the next open"
         closes = qs.daily_closes(ctx, qs.HISTORY_DAYS + 1)
         bars = ctx.recent_closes(1)
-        if len(bars) and len(closes) > 21 and bars.index[-1] > closes.index[-1]:
+        if held and len(bars) and len(closes) > 21 and bars.index[-1] > closes.index[-1]:
             rets = np.log(closes).diff().tail(20)
             z = np.log(bars.iloc[-1] / closes.iloc[-1]) / rets.std()
             for t in held:
                 if np.isfinite(z[t]) and abs(z[t]) >= self.cfg.sigma_trigger and t not in why:
                     why[t] = f"moved {z[t]:+.1f} daily sigmas since yesterday's close"
+        # A price or earnings trigger fires once a day per name; a filing fires once per
+        # filing, so a second 8-K the same day is a second event, not a repeat.
+        self._fired |= set(why)
+        for t, g in fresh.items():
+            what = ", ".join(dict.fromkeys(x for items in g["items"] for x in F.labels(items)))
+            why[t] = (f"{why[t]}; " if t in why else "") + f"new 8-K: {what}"
         if not why:
             return None
-        self._fired |= set(why)
         codes = [self.anon.code(t) for t in why]
         rd = observe.readings(closes, self.hmm)
-        payload = self._payload(
-            closes, rd, ctx, triggers=[{"name": self.anon.code(t), "why": w} for t, w in why.items()],
-            rule_proposal=rule_event(codes).model_dump())
+        real = not self.anon.enabled
+        triggers = [{"name": self.anon.code(t), "why": w,
+                     **({"new_8k": observe.filing_rows(fresh[t], ctx.deadline, real)}
+                        if t in fresh else {})} for t, w in why.items()]
+        payload = self._payload(closes, rd, ctx, "event", held=held_all, triggered=list(why),
+                                triggers=triggers, trim_lever=self._trim_lever(),
+                                rule_proposal=rule_event(codes).model_dump())
 
         def check(d: EventDecision):
             extra = {c.name for c in d.calls} - set(codes)
             if extra:
                 raise ValueError(f"calls for names with no trigger: {sorted(extra)}")
+            names = [c.name for c in d.calls]
+            if len(set(names)) != len(names):
+                raise ValueError("a name called twice")
+            for c in d.calls:
+                if c.action == "trim" and (c.fraction is None or c.cause is None):
+                    raise ValueError(f"{c.name}: a trim needs its fraction and its cause")
+                if c.action != "trim" and (c.fraction is not None or c.cause is not None):
+                    raise ValueError(f"{c.name}: a fraction or a cause belongs to a trim only")
+            self._check_trims([(c.name, c.fraction) for c in d.calls if c.action == "trim"],
+                              set(codes), set(), current)
 
         d, _ = self._ask("event", payload, EventDecision, check)
+        # What woke the analyst, beside its answer: a replay counts calls by cause from it.
+        self.log[-1]["triggers"] = {t["name"]: t["why"] for t in triggers}
         target = current.copy()
         exits = [self.anon.ticker(c.name) for c in d.calls if c.action == "exit"]
         for t in exits:
             target[t] = 0.0
+        cuts = self._cuts([(c.name, c.fraction) for c in d.calls if c.action == "trim"], current)
+        self._done(cuts)
+        target = TR.apply(target, cuts)
         self._exclude(exits)
         if (target - current).abs().max() <= compiler.HELD:
             return None
+        self._spend(cuts, ctx, "event")
         return self._submit(target, current, nav, tickers)
+
+    # ------------------------------------------------------------------ the trim lever
+
+    def _trim_lever(self) -> dict:
+        return {"trims_left": max(self.cfg.max_trims - len(self.trims), 0),
+                "fractions": dict(TR.FRACTIONS),
+                "below_this_sale_of_nav_is_a_hold": TR.MIN_TRIM}
+
+    def _cuts(self, calls, current: pd.Series) -> list[dict]:
+        """The trims that trade: each named fraction of the position, where the sale is at
+        least `trim.MIN_TRIM` of NAV. A smaller one is a hold: it would pay the fee and a
+        turnover rank to move almost nothing, so it neither trades nor spends the budget."""
+        out = []
+        for code, frac in calls:
+            t, f = self.anon.ticker(code), TR.FRACTIONS[frac]
+            if f * float(current[t]) >= TR.MIN_TRIM:
+                out.append({"ticker": t, "fraction": f})
+        return out
+
+    def _check_trims(self, calls, allowed: set, exits: set, current: pd.Series) -> None:
+        names = [c for c, _ in calls]
+        unknown = set(names) - allowed
+        if unknown:
+            raise ValueError(f"trims for names that are not held or not triggered: {sorted(unknown)}")
+        if len(set(names)) != len(names):
+            raise ValueError("a name trimmed twice in one answer")
+        if set(names) & exits:
+            raise ValueError(f"names both exited and trimmed: {sorted(set(names) & exits)}")
+        n, left = len(self._cuts(calls, current)), self.cfg.max_trims - len(self.trims)
+        if n > left:
+            raise ValueError(f"{n} trims asked for, {max(left, 0)} left of the window's "
+                             f"{self.cfg.max_trims}")
+
+    def _done(self, cuts: list[dict]) -> None:
+        """Which trims traded, beside the answer that asked for them: a trim under the
+        floor is a hold, and the journal checks only the ones that sold."""
+        self.log[-1]["trims_done"] = [self.anon.code(c["ticker"]) for c in cuts]
+
+    def _spend(self, cuts: list[dict], ctx, role: str) -> None:
+        self.trims += [{"ticker": c["ticker"], "day": self.day_no, "round": ctx.round,
+                        "fraction": c["fraction"], "role": role} for c in cuts]
+
+    def _rule_trims(self, ctx, current: pd.Series) -> list[dict]:
+        """The rule's trims this morning: none unless it was given one (it has to win its
+        gate first) and the journal it reads is whole this round."""
+        if self.trim_rule is None or self.vol is None or self._journal_error is not None:
+            return []
+        return self.trim_rule.proposals(
+            self.journal.positions, current, TR.sigma_today(self.vol, ctx), day_no=self.day_no,
+            window_days=self.cfg.window_days, start=self._start,
+            done={x["ticker"] for x in self.trims}, trims_left=self.cfg.max_trims - len(self.trims))
+
+    def _rule_trim_call(self, c: dict) -> dict:
+        frac = next(k for k, v in TR.FRACTIONS.items() if v == c["fraction"])
+        return {"name": self.anon.code(c["ticker"]), "fraction": frac, "cause": "give_back",
+                "why": (f"rule: up {c['gain']:.1%} since entry and {c['give_back']:.1%} off its "
+                        f"high; expected give-back {c['egb']:.2%} over {c['sessions_left']} "
+                        f"sessions beats the cost")}
 
 
 def desk(brain_factory, config: Optional[DeskConfig] = None, **kw):

@@ -44,13 +44,14 @@ def brain() -> Scripted:
     def cut(p):
         held = [r["name"] for r in p["names"] if (r.get("weight_now") or 0) > 0]
         return ReviewDecision(action="set_exposure", exposure=0.35, reason=None, exit=held[:1],
-                              rationale="the storm is persistent; trim, and sell the weakest name")
+                              trim=[], rationale="the storm is persistent; trim, and sell the weakest name")
     return Scripted(
         entry=EntryDecision(shape="inverse_vol", views="none", exposure=0.5,
                             avoid=[Exclusion(name="TSLA", signal="earnings", why="reports tomorrow")],
                             rationale="a calmer start than the rule, without the reporter"),
         review=cut,
-        event=lambda p: EventDecision(calls=[NameCall(name=t["name"], action="exit", reason="a gap")
+        event=lambda p: EventDecision(calls=[NameCall(name=t["name"], action="exit", fraction=None,
+                                                          cause=None, reason="a gap")
                                              for t in p["triggers"]]))
 
 

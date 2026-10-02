@@ -8,7 +8,9 @@ The rule brain is the sanity check: its desk must tie `q_riskparity_entry_regime
 candidate it stands for) in every window, or the desk's plumbing, not its judgement,
 is what any LLM result would measure. The run stops if it doesn't. The desk reads every
 signal an LLM desk would (walk-forward scores, HAR vol, earnings) and its own journal,
-so the check covers the plumbing those inputs added too. `--ledgers-only` runs just
+so the check covers the plumbing those inputs added too. Since step 5 it reads the 8-K
+snapshot as well, so every filing for a held name wakes its analyst (the rule holds).
+`--ledgers-only` runs just
 that check, and two stricter ones: the two ledgers equal trade for trade in every
 window, not only their scores, and the desk's journal agrees with its own ledger in
 every window (`journal.verify`: each fill to the cent, each held name's entry, cost and
@@ -51,6 +53,32 @@ def load_earnings(market) -> EarningsCalendar:
     return EarningsCalendar(events, market.days)
 
 
+def load_filings(market) -> pd.DataFrame:
+    """Every event 8-K for the 30 names (item codes and acceptance times only: a filing's
+    text names the company, so replays never carry it)."""
+    path = sorted((data.ROOT / "data" / "external").glob("edgar_8k_*.parquet"))[-1]
+    events = pd.read_parquet(path)
+    return events[events["ticker"].isin(market.tickers)].reset_index(drop=True)
+
+
+def eight_k_wakes(filings: pd.DataFrame, market, starts) -> float:
+    """Mean 8-K wake-ups a window: filings accepted between its entry and its last round.
+
+    An upper bound on the analyst calls the trigger adds (two filings for one name in one
+    gap are one call; a name sold out is not woken), so a cost estimate made from it is
+    on the safe side.
+    """
+    from icaif import calendar
+
+    n = []
+    for s in starts:
+        days = market.days[market.days.index(s): market.days.index(s) + windows.WINDOW_DAYS]
+        lo = calendar.rounds_for(days[0])[0]["deadline"]
+        hi = calendar.rounds_for(days[-1])[-1]["deadline"]
+        n.append(int(((filings["accepted"] > lo) & (filings["accepted"] <= hi)).sum()))
+    return float(sum(n) / max(len(n), 1))
+
+
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--brain", choices=["rule", "claude"], default="rule")
@@ -85,6 +113,7 @@ def main() -> None:
     cfg = DeskConfig(review=not args.no_review, events=not args.no_events,
                      anonymize=not args.real_names)
     earnings = load_earnings(market)
+    filings = load_filings(market)
     scores = compiler.load_daily_scores()
     # The walk-forward over the bars the windows trade on: forecasts from its first
     # fittable quarter (2016-07), each made before its session opened.
@@ -97,12 +126,14 @@ def main() -> None:
         make = brains.RuleBrain
         live_brains = []
     else:
-        per_window = 1 + (0 if args.no_review else 14) + (0 if args.no_events else 2)
+        per_window = (1 + (0 if args.no_review else 14)
+                      + (0 if args.no_events else 2 + eight_k_wakes(filings, market, starts)))
         n_calls = per_window * len(starts)
         if args.max_calls:
             n_calls = min(n_calls, args.max_calls)
         p_in, p_out, _, _ = brains.PRICES[args.model]
         est = n_calls * (EST_IN * p_in + EST_OUT * p_out) / 1e6
+        n_calls = int(round(n_calls))
         print(f"{len(starts)} windows, ~{n_calls} calls to {args.model} at effort "
               f"{args.effort}: ~${est:.0f} (cache hits are free)")
         if not (args.yes or args.offline):
@@ -114,10 +145,10 @@ def main() -> None:
         live_brains = [shared]
 
     if args.ledgers_only:
-        bad, wrong = [], []
+        bad, wrong, woken = [], [], []
         closes = market.recent_closes(pd.Timestamp("2100-01-01", tz="America/New_York"), 10 ** 7)
         for s in starts:
-            d = desk(make, cfg, scores=scores, earnings=earnings, vol=har)()
+            d = desk(make, cfg, scores=scores, earnings=earnings, vol=har, filings=filings)()
             got = sim.run(d, market, s, windows.WINDOW_DAYS)
             want = sim.run(qs.CANDIDATES["q_riskparity_entry_regime"](), market, s, windows.WINDOW_DAYS)
             if not got.ledger.equals(want.ledger):
@@ -125,9 +156,18 @@ def main() -> None:
             problems = J.verify(d.journal, J.sim_fills(got, market), to_ticker=d.anon.ticker, closes=closes)
             if problems:
                 wrong.append((str(s), problems[:3]))
+            for e in d.log:
+                if e["role"] == "event":
+                    woken.append(e)
+        causes = pd.Series([cause for e in woken for why in e.get("triggers", {}).values()
+                            for cause in (["8-K"] if "new 8-K" in why else [])
+                            + (["earnings"] if "earnings" in why else [])
+                            + (["3-sigma move"] if "sigmas" in why else [])])
         print(f"rule desk vs q_riskparity_entry_regime: {len(starts) - len(bad)} of {len(starts)} "
               f"windows equal trade for trade; its journal agrees with its ledger in "
               f"{len(starts) - len(wrong)} of {len(starts)} ({time.time() - t0:.0f}s)")
+        print(f"analyst calls: {len(woken)} ({len(woken) / len(starts):.1f} a window); names woken: "
+              + ", ".join(f"{k} {v}" for k, v in causes.value_counts().items()))
         if bad:
             raise SystemExit(f"ledgers differ in {len(bad)} windows (first {bad[:3]})")
         if wrong:
@@ -137,7 +177,7 @@ def main() -> None:
     desks = []
 
     def factory():
-        d = desk(make, cfg, scores=scores, earnings=earnings, vol=har)()
+        d = desk(make, cfg, scores=scores, earnings=earnings, vol=har, filings=filings)()
         desks.append(d)
         return d
 
@@ -170,6 +210,11 @@ def main() -> None:
     if len(lg):
         print("\ndecisions by role and source:")
         print(lg.groupby(["role", "source"]).size().to_string())
+        trims = [t for e in log for t in (e["decision"].get("trim") or [])]
+        trims += [c for e in log for c in e["decision"].get("calls", []) if c["action"] == "trim"]
+        if trims:
+            print("trims by cause: " + ", ".join(
+                f"{k} {v}" for k, v in pd.Series([t["cause"] for t in trims]).value_counts().items()))
         print(f"answers that differ from the rule: {(~lg['same_as_rule'].astype(bool)).sum()} "
               f"of {len(lg)}")
     for b in live_brains:

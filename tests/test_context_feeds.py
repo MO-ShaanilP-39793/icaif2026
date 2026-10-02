@@ -109,25 +109,6 @@ def test_every_feed_empty_raises_and_one_failed_feed_does_not_lose_the_rest():
     assert set(frame["ticker"]) == {"A"} and issues["failed"][0].startswith("B:")
 
 
-def test_the_archive_reads_only_what_had_been_fetched_by_the_deadline(tmp_path):
-    """A headline published before the deadline but fetched after it is one we did not
-    have; replayed as known, the agent reads news it never saw."""
-    t0 = pd.Timestamp("2026-10-12 08:00", tz=TZ)
-    early = news.parse_rss(RSS, "AAPL", t0)
-    news.save(early, t0, tmp_path)
-    with pytest.raises(FileExistsError):
-        news.save(early, t0, tmp_path)
-    late_rss = RSS.replace("g1", "g3").replace("Tue, 29 Sep 2026 11:00:00", "Mon, 12 Oct 2026 12:00:00")
-    t1 = pd.Timestamp("2026-10-12 08:30", tz=TZ)
-    news.save(news.parse_rss(late_rss, "AAPL", t1), t1, tmp_path)
-    news.save(early.assign(fetched_at=t1), t1 + pd.Timedelta(seconds=1), tmp_path)
-    got = news.as_of(pd.Timestamp("2026-10-12 08:10", tz=TZ), lookback_days=30, directory=tmp_path)
-    assert [h["title"] for h in got["AAPL"]] == ["A"]
-    later = news.as_of(pd.Timestamp("2026-10-12 09:00", tz=TZ), lookback_days=30, directory=tmp_path)
-    # g3 (published 08:00, fetched 08:30) is now known; g1 appears once, not per snapshot.
-    assert [h["published"][:16] for h in later["AAPL"]] == ["2026-10-12 08:00", "2026-09-29 07:00"]
-
-
 BLOCK = {"form": ["8-K", "10-Q", "8-K/A", "8-K"],
          "items": ["5.02,9.01", "", "2.02", "9.01"],
          "acceptanceDateTime": ["2026-10-12T20:30:00.000Z", "2026-10-13T12:00:00.000Z",

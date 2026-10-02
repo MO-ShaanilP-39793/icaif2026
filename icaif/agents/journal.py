@@ -558,26 +558,41 @@ def _decision(d: dict) -> dict:
     if "calls" in dec:
         calls = dec["calls"]
         why = "; ".join(f"{c['name']}: {c['reason']}" for c in calls)
-        dec = {"calls": [{"name": c["name"], "action": c["action"]} for c in calls]}
+        dec = {"calls": [{"name": c["name"], "action": c["action"],
+                          **({"fraction": c.get("fraction"), "cause": c.get("cause")}
+                             if c["action"] == "trim" else {})} for c in calls]}
     if "weights" in dec:   # the free desk's whole book: its size, not 30 lines a day
         ws = dec.pop("weights") or []
         dec.update(names=len(ws), gross=_r(sum(w["weight"] for w in ws)))
-    return {"role": d.get("role"), "brain": d.get("brain"), "source": d.get("source"),
-            "fallback": d.get("reason"), "levers": dec, "why": why or "",
-            "same_as_rule": d.get("same_as_rule")}
+    out = {"role": d.get("role"), "brain": d.get("brain"), "source": d.get("source"),
+           "fallback": d.get("reason"), "levers": dec, "why": why or "",
+           "same_as_rule": d.get("same_as_rule")}
+    if d.get("trims_done") is not None:   # a trim under the floor is a hold: not traded
+        out["trimmed"] = list(d["trims_done"])
+    return out
+
+
+def _trim_label(name: str, fraction, cause) -> str:
+    return f"{name}:{fraction}({cause})"
 
 
 def _levers_view(lv: dict) -> dict:
     if "calls" in lv:
         out: dict = {}
         for c in lv["calls"]:
-            out.setdefault(c["action"], []).append(c["name"])
+            label = (_trim_label(c["name"], c.get("fraction"), c.get("cause"))
+                     if c["action"] == "trim" else c["name"])
+            out.setdefault(c["action"], []).append(label)
         if len(out.get("hold", [])) > 5:   # a hold changes nothing; the exits are the decision
             out["hold"] = len(out["hold"])
         return out
     out = {k: _r(v) if isinstance(v, float) else v for k, v in lv.items()}
     if out.get("avoid"):
         out["avoid"] = [{"name": a["name"], "signal": a["signal"]} for a in out["avoid"]]
+    if "trim" in out:   # the cause is the lever; the reason sits in `why` with the rest
+        out["trim"] = [_trim_label(x["name"], x["fraction"], x["cause"]) for x in out["trim"]]
+        if not out["trim"]:
+            del out["trim"]
     return out
 
 
@@ -601,6 +616,7 @@ def _decision_line(e: dict, d: dict) -> str:
         what = lv["action"] + (f" {lv['exposure']}" if lv.get("exposure") is not None else "")
         what += f" ({lv['reason']})" if lv.get("reason") else ""
         what += (" exit " + " ".join(lv["exit"])) if lv.get("exit") else ""
+        what += (" trim " + " ".join(lv["trim"])) if lv.get("trim") else ""
     else:
         what = "; ".join(f"{a} {' '.join(ns)}" if isinstance(ns, list) else f"{a} {ns} names"
                          for a, ns in lv.items())
@@ -842,13 +858,31 @@ def _levers_vs_book(e: dict, f: dict, to_ticker) -> list[str]:
         elif role == "review":
             out += [f"{e['key']}: the review exited {c}, and the book still holds it"
                     for c in lv.get("exit", []) if after.get(to_ticker(c), 0.0) > EPS]
+            trimmed = d.get("trimmed", [x["name"] for x in lv.get("trim", [])])
+            out += _trims_vs_book(e["key"], "review", trimmed, f, to_ticker)
             if (own and lv.get("action") == "set_exposure" and lv.get("exposure") is not None
-                    and not lv.get("exit") and abs(gross - lv["exposure"]) > 31e-6):
+                    and not lv.get("exit") and not lv.get("trim")
+                    and abs(gross - lv["exposure"]) > 31e-6):
                 out.append(f"{e['key']}: exposure set to {lv['exposure']:.6f}, target gross {gross:.6f}")
         elif role == "event":
             out += [f"{e['key']}: the analyst exited {c['name']}, and the book still holds it"
                     for c in lv.get("calls", [])
                     if c["action"] == "exit" and after.get(to_ticker(c["name"]), 0.0) > EPS]
+            out += _trims_vs_book(e["key"], "analyst", d.get("trimmed", [
+                c["name"] for c in lv.get("calls", []) if c["action"] == "trim"]), f, to_ticker)
+    return out
+
+
+def _trims_vs_book(key: str, who: str, names: list, f: dict, to_ticker) -> list[str]:
+    """A trim sells part of a name: some of it sold, some of it still held. `names` are the
+    trims that traded (a trim under the floor is a hold, recorded as `trimmed`)."""
+    out = []
+    for c in names:
+        t = to_ticker(c)
+        if f["shares_after"].get(t, 0.0) <= EPS:
+            out.append(f"{key}: the {who} trimmed {c}, and the book sold all of it")
+        elif f["sold"].get(t, 0.0) <= EPS:
+            out.append(f"{key}: the {who} trimmed {c}, and the book sold none of it")
     return out
 
 

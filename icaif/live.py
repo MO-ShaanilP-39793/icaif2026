@@ -194,6 +194,82 @@ def load_events(symbols: list[str], now: pd.Timestamp) -> tuple[pd.DataFrame, di
     return events, meta
 
 
+# Filing texts a round reads: filings accepted this recently, at most this many, newest
+# first. Each is one request, read once and kept by accession number (a filing never
+# changes after acceptance; an amendment is its own filing).
+TEXT_HOURS, MAX_TEXTS = 24.0, 6
+# A text kept on disk beyond this is never shown (the observation caps far lower).
+TEXT_KEEP_CHARS = 20_000
+# The live EDGAR read, per request and in all: past it the snapshot stands in, flagged.
+EDGAR_TIMEOUT_S, EDGAR_BUDGET_S = 10.0, 45.0
+
+
+def load_filings(tickers: list[str], now: pd.Timestamp, text_dir: Path, *,
+                 fetch: Optional[Callable] = None,
+                 read_text: Optional[Callable] = None) -> tuple[pd.DataFrame, dict]:
+    """8-K events known at `now` for `tickers`, the newest few with their text, and where
+    they came from.
+
+    The dated snapshot alone goes stale the day after it is taken: in Validation a
+    snapshot of Oct 1 holds no filing from that week, the new-8-K trigger would never
+    fire, and every name would read as having filed nothing. So with SEC_USER_AGENT set,
+    each name's latest filings are read from EDGAR and joined to it. Without it, or if
+    EDGAR fails, the snapshot is used and the meta says it is stale.
+
+    A filing whose text cannot be read is shown by its item codes alone, and the meta
+    lists it: the codes say what kind of event it was, and the text is a bonus.
+    """
+    from icaif import filings
+
+    path = universe.latest("edgar_8k_*.parquet")
+    snap = pd.read_parquet(path)
+    events = snap[snap["ticker"].isin(tickers)]
+    meta = {"snapshot": path.name, "source": "snapshot", "stale": True}
+    if os.environ.get("SEC_USER_AGENT", "").strip():
+        try:
+            recent, missing = (fetch(tickers, recent_only=True) if fetch is not None else
+                               filings.fetch(tickers, recent_only=True, timeout=EDGAR_TIMEOUT_S,
+                                             budget_s=EDGAR_BUDGET_S))
+            events = filings.merge(events, recent)
+            meta.update(source="edgar", stale=False, recent_rows=len(recent), no_cik=missing)
+        except Exception as err:  # noqa: BLE001 - the snapshot stands in, flagged
+            meta["edgar_error"] = f"{type(err).__name__}: {err}"
+    else:
+        meta["note"] = "SEC_USER_AGENT unset: filings after the snapshot are missing"
+    events = events[events["accepted"] <= now].copy()
+    texts, errors = {}, []
+    if "accession" in events.columns:
+        want = events[events["accession"].notna()
+                      & (events["accepted"] > now - pd.Timedelta(hours=TEXT_HOURS))]
+        want = want.sort_values("accepted", ascending=False).head(MAX_TEXTS)
+        client = None
+        for r in want.itertuples():
+            cached = text_dir / f"{r.accession}.txt"
+            if cached.exists():
+                texts[r.accession] = cached.read_text()
+                continue
+            try:
+                if read_text is None and client is None:
+                    client = earnings._client(EDGAR_TIMEOUT_S)
+                body = (read_text(r) if read_text is not None else
+                        filings.document_text(client, r.cik, r.accession, r.document))
+                texts[r.accession] = body[:TEXT_KEEP_CHARS]
+                text_dir.mkdir(parents=True, exist_ok=True)
+                # Whole or not at all: a worker killed mid-write would otherwise leave a
+                # truncated text that every later round reads as the filing.
+                tmp = cached.with_suffix(".tmp")
+                tmp.write_text(texts[r.accession])
+                os.replace(tmp, cached)
+            except Exception as err:  # noqa: BLE001 - recorded; the codes still show
+                errors.append(f"{r.ticker} {r.accession}: {type(err).__name__}: {err}")
+        if client is not None:
+            client.close()
+        events["text"] = events["accession"].map(texts)
+    meta.update(texts=len(texts), text_errors=errors,
+                latest=str(events["accepted"].max()) if len(events) else None)
+    return events.reset_index(drop=True), meta
+
+
 def load_predictor(path: Path = MODEL):
     """The frozen ensemble, with torch held to one thread.
 

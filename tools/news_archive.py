@@ -15,14 +15,13 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import pandas as pd  # noqa: E402
 
-from icaif import calendar, data, news  # noqa: E402
+from icaif import data, news  # noqa: E402
 
 
 def main() -> None:
-    now = pd.Timestamp.now(tz=calendar.TZ).floor("s")
     tickers = sorted(data.load_universe())
-    frame, issues = news.fetch(tickers, now=now)
-    path = news.save(frame, now)
+    path, frame, issues = news.snapshot(tickers)
+    now = frame["fetched_at"].max()
     per = frame.groupby("ticker").size()
     fresh = frame[frame["published"] >= now - pd.Timedelta(hours=24)].groupby("ticker").size()
     print(f"{len(frame)} headlines for {per.size} names -> {path}")

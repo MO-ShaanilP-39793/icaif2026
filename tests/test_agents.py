@@ -120,16 +120,18 @@ def test_the_entry_observation_is_unchanged_when_every_later_bar_is_rewritten():
 def test_a_review_change_smaller_than_the_band_is_a_hold_not_a_trade():
     """A 1-point exposure trim pays the fee and a turnover rank for nothing."""
     nudge = lambda p: ReviewDecision(action="set_exposure", reason=None,  # noqa: E731
-                                     exposure=p["book"]["gross"] - 0.01, exit=[], rationale="x")
+                                     exposure=p["book"]["gross"] - 0.01, exit=[], trim=[], rationale="x")
     _, res = _run(Scripted(review=nudge))
     assert sum(p["traded_notional"] > 0 for p in res.periods) == 1
 
 
 def test_a_review_cut_rescales_the_book_and_set_exposure_without_a_number_falls_back():
-    cut = ReviewDecision(action="set_exposure", exposure=0.30, reason=None, exit=[], rationale="storm")
+    cut = ReviewDecision(action="set_exposure", exposure=0.30, reason=None, exit=[], trim=[],
+                         rationale="storm")
     desk, res = _run(Scripted(review=cut), n=2)
     assert _gross_after_trade(res, 1) == pytest.approx(0.30, abs=30 * W.GRID)
-    broken = ReviewDecision(action="set_exposure", exposure=None, reason=None, exit=[], rationale="x")
+    broken = ReviewDecision(action="set_exposure", exposure=None, reason=None, exit=[], trim=[],
+                            rationale="x")
     desk, _ = _run(Scripted(review=broken), n=2)
     assert [e["source"] for e in desk.log if e["role"] == "review"] == ["fallback"]
 
@@ -141,7 +143,8 @@ def test_a_sharp_move_wakes_the_analyst_for_that_name_and_an_exit_sells_only_it(
     hit = (bars["ticker"] == victim) & (bars["start"] >= calendar.at(day, calendar.ROUNDS[2][1]))
     bars.loc[hit, ["open", "high", "low", "close"]] *= 0.8
     exit_all = lambda p: EventDecision(calls=[  # noqa: E731
-        NameCall(name=t["name"], action="exit", reason="gap") for t in p["triggers"]])
+        NameCall(name=t["name"], action="exit", fraction=None, cause=None, reason="gap")
+        for t in p["triggers"]])
     b = Scripted(event=exit_all)
     desk, res = _run(b, market=_mkt(bars), n=3)
     events = [p for r, p in b.seen if r == "event"]
@@ -202,8 +205,9 @@ def test_a_desk_restored_before_every_round_trades_exactly_as_one_that_never_sto
         # of what already fired today stops it waking the analyst every round.
         return Scripted(
             review=lambda p: ReviewDecision(action="set_exposure", exposure=round(p["book"]["gross"] - 0.1, 4), reason=None,
-                                            exit=[], rationale="trim"),
-            event=lambda p: EventDecision(calls=[NameCall(name=t["name"], action="hold", reason="noise")
+                                            exit=[], trim=[], rationale="trim"),
+            event=lambda p: EventDecision(calls=[NameCall(name=t["name"], action="hold", fraction=None,
+                                                          cause=None, reason="noise")
                                                  for t in p["triggers"]]))
 
     cfg = lambda: DeskConfig(anonymize=anonymize)  # noqa: E731

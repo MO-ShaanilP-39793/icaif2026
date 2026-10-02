@@ -67,10 +67,11 @@ class Busy:
             held = [r["name"] for r in names if (r.get("weight_now") or 0) > 0]
             if self.reviews % 2 and gross > 0.4:
                 return ReviewDecision(action="set_exposure", exposure=round(max(0.3, gross - 0.08), 4),
-                                      reason=None, exit=[], rationale=LONG[:1400])
+                                      reason=None, exit=[], trim=[], rationale=LONG[:1400])
             return ReviewDecision(action="hold", exposure=None, reason=None, exit=held[-1:],
-                                  rationale=LONG[:1400])
-        return EventDecision(calls=[NameCall(name=t["name"], action="exit", reason=LONG[:580])
+                                  trim=[], rationale=LONG[:1400])
+        return EventDecision(calls=[NameCall(name=t["name"], action="exit", fraction=None,
+                                                 cause=None, reason=LONG[:580])
                                     for t in payload["triggers"]])
 
 

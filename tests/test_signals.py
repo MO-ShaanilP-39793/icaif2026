@@ -223,9 +223,9 @@ def _rebalancer(reason="score_change", exit_first=None):
     def review(p):
         if exit_first and p["clock"]["day"] == 2:
             return ReviewDecision(action="hold", exposure=None, reason=None, exit=[exit_first],
-                                  rationale="x")
+                                  trim=[], rationale="x")
         return ReviewDecision(action="rebalance", exposure=None, reason=reason, exit=[],
-                              rationale="the ranks moved")
+                              trim=[], rationale="the ranks moved")
     return review
 
 
@@ -259,7 +259,7 @@ def test_a_rebalance_past_the_windows_budget_or_without_a_reason_falls_back_to_h
     assert sum(p["traded_notional"] > 0 for p in res.periods) == 2
 
     d = Desk(Scripted(entry=_views("light"), review=lambda p: ReviewDecision(
-        action="rebalance", exposure=None, reason=None, exit=[], rationale="x")), None, **kw)
+        action="rebalance", exposure=None, reason=None, exit=[], trim=[], rationale="x")), None, **kw)
     sim.run(d, m, START, 2)
     assert [e["source"] for e in d.log if e["role"] == "review"] == ["fallback"]
 
@@ -300,9 +300,9 @@ def test_a_rebalance_into_three_names_lands_on_its_exposure_not_nine_tenths_of_i
         held = _held(p)
         if len(held) > 3:
             return ReviewDecision(action="hold", exposure=None, reason=None,
-                                  exit=held[: min(8, len(held) - 3)], rationale="names out")
+                                  exit=held[: min(8, len(held) - 3)], trim=[], rationale="names out")
         return ReviewDecision(action="rebalance", exposure=0.85, reason="vol_change", exit=[],
-                              rationale="three names left; back to full size")
+                              trim=[], rationale="three names left; back to full size")
 
     entry = lambda p: EntryDecision(  # noqa: E731
         shape="inverse_vol", views="none", exposure=0.6, rationale="x",
@@ -322,9 +322,9 @@ def test_with_every_name_kept_out_the_review_offers_no_rebalance_and_cash_comes_
     lever meant for following the signals, spending a rebalance on it."""
     m, kw = _world()
     script = {2: ReviewDecision(action="rebalance", exposure=None, reason="score_change", exit=[],
-                                rationale="follow the ranks"),
+                                trim=[], rationale="follow the ranks"),
               3: ReviewDecision(action="set_exposure", exposure=0.0, reason=None, exit=[],
-                                rationale="out of the market")}
+                                trim=[], rationale="out of the market")}
     b = Scripted(entry=_views("light"), review=lambda p: script[p["clock"]["day"]])
     d = Desk(b, None, **kw)
 
@@ -346,7 +346,8 @@ def test_a_rebalance_whose_exits_leave_no_name_falls_back_rather_than_selling_ou
     m, kw = _world()
     keep = [TICKERS[3], TICKERS[9]]
     b = Scripted(entry=_views("light"), review=lambda p: ReviewDecision(
-        action="rebalance", exposure=None, reason="vol_change", exit=keep, rationale="sell the last two"))
+        action="rebalance", exposure=None, reason="vol_change", exit=keep, trim=[],
+        rationale="sell the last two"))
     d = Desk(b, None, **kw)
 
     def strategy(ctx):

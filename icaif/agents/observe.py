@@ -11,9 +11,18 @@ on memory is not evidence the agent can judge. So in replays each window gets it
 random name codes (S01-S30, sorted by code, so even the alphabetical order of real
 tickers is gone), dates become "day k of 15", no price level appears, macro levels
 become z-scores and changes (`macro.readings`), and headlines, which name companies,
-are dropped. 8-K events stay: "director or officer change" names no one. Only windows after the model's training cutoff can
-be replayed with real names and still count. Our own signals (HAR vols, the score's
-rank, sessions to earnings) are numbers about a code and stay too.
+are dropped. 8-K events stay as item labels: "director or officer change" names no
+one, while the filing's own text would, so that is live only too. Only windows after the
+model's training cutoff can be replayed with real names and still count. Our own
+signals (HAR vols, the score's rank, sessions to earnings) are numbers about a code and
+stay too.
+
+**Headlines are for held names, in the roles that act on them** (the Risk review and the
+Event analyst), and capped: a triggered name's newest few in full, any other held name's
+titles that name the company. Every name's whole feed went into every role before:
+55,000 of the first live entry observation's 65,000 characters, most of them stories
+about other companies. External text is cleaned, capped and quoted in `source_text`
+(`untrusted.py`).
 """
 
 from dataclasses import dataclass, field
@@ -22,9 +31,15 @@ from typing import Optional
 import numpy as np
 import pandas as pd
 
-from icaif import quant, quant_strategies as qs
+from icaif import filings as F, quant, quant_strategies as qs
+from icaif.agents import untrusted
 
 ANNUAL = np.sqrt(252)
+# External text where it is shown: a headline's title and summary, a filing's own words.
+TITLE_CHARS, SUMMARY_CHARS, FILING_CHARS = 160, 240, 1200
+# Headlines a triggered name shows in full, and titles naming the company for any other
+# held name; first seen within HEADLINE_HOURS (a Monday review still sees Friday's).
+HEADLINES_TRIGGERED, HEADLINES_HELD, HEADLINE_HOURS = 4, 2, 72
 
 
 class Anonymizer:
@@ -99,6 +114,40 @@ def _r(x, nd=4):
     return None if x is None or not np.isfinite(x) else round(float(x), nd)
 
 
+def _hours(deadline, ts) -> float:
+    return round((pd.Timestamp(deadline) - pd.Timestamp(ts)).total_seconds() / 3600, 1)
+
+
+def headline_rows(rows: pd.DataFrame, deadline, full: bool) -> list[dict]:
+    """`news.recent` rows as a role reads them: when we first had each (`seen_hours_ago`,
+    the clock that counts), what the publisher dated it, whether it names the company,
+    and its text, quoted. `full` adds the summary."""
+    out = []
+    for r in rows.itertuples():
+        text = {"title": untrusted.clean(r.title, TITLE_CHARS)}
+        if full:
+            text["summary"] = untrusted.clean(r.summary, SUMMARY_CHARS)
+        out.append({"seen_hours_ago": _hours(deadline, r.first_seen),
+                    # Yahoo's pubDate can run after our first fetch; never "in the future".
+                    "published_hours_ago": max(0.0, _hours(deadline, r.published)),
+                    "names_the_company": bool(r.names_it), untrusted.FIELD: text})
+    return out
+
+
+def filing_rows(rows: pd.DataFrame, deadline, real: bool) -> list[dict]:
+    """New 8-Ks as the Event analyst reads them: item labels (ours), hours since
+    acceptance, and live only, the filing's own words, quoted and capped."""
+    out = []
+    for r in rows.sort_values("accepted", ascending=False).itertuples():
+        row = {"hours_ago": _hours(deadline, r.accepted), "events": F.labels(r.items),
+               "amendment": bool(r.amended)}
+        text = getattr(r, "text", None)
+        if real and isinstance(text, str) and text.strip():
+            row[untrusted.FIELD] = untrusted.clean(text, FILING_CHARS)
+        out.append(row)
+    return out
+
+
 def _signal(field_: str, value):
     """A rank is a count (1 = best), the rest are vols rounded like vol_ann_20d."""
     if field_.endswith("_rank"):
@@ -122,7 +171,9 @@ def observation(closes: pd.DataFrame, rd: Readings, book: BookState, anon: Anony
     with an `_at_entry` suffix so a change since entry is a comparison the agent reads,
     not one it must remember; `previews`: {key: weights} shown as `weight_if_<key>`,
     the exact books a decision would buy; `positions`: the journal's fields for each
-    held name (`Journal.name_fields`: entry day, gain since entry and its peak)."""
+    held name (`Journal.name_fields`: entry day, gain since entry and its peak);
+    `news`: {ticker: `headline_rows`} for the names whose headlines this role reads
+    (never shown anonymised); `filings`: `filings.recent` per name."""
     tickers = list(closes.columns)
     rets = rd.returns
     tail = rets.tail(qs.SHAPE_DAYS)
@@ -161,8 +212,8 @@ def observation(closes: pd.DataFrame, rd: Readings, book: BookState, anon: Anony
             row["earnings_in_sessions"] = earnings.get(t)
         if filings is not None:
             row["recent_8k_filings"] = filings.get(t, [])
-        if news is not None and not anon.enabled:
-            row["headlines"] = news.get(t, [])[:5]
+        if news is not None and not anon.enabled and t in news:
+            row["headlines"] = news[t]
         if positions and t in positions:
             row.update(positions[t])
         names.append(row)

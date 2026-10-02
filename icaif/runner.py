@@ -548,13 +548,25 @@ def score_in_child(cfg: Config, r: Round, now: pd.Timestamp, left_s: float) -> d
             "dir": str(target), "tries": tries}
 
 
+# A round this close to its deadline on the wall clock is happening now: it archives the
+# feeds itself before the shadow decides. A rehearsal of a past day never does.
+NEWS_NOW_S = 30 * 60
+
+
 def agent_inputs(cfg: Config, mkt: sim.Market, r: Round) -> tuple[dict, dict]:
     """What the agent desk reads besides prices, each loaded alone: a missing input is
     recorded and left out, never a reason to drop the others or the round."""
-    from icaif import filings, macro, news, universe
+    from icaif import macro, news, universe
 
     kw, meta, tickers = {}, {}, mkt.tickers
     sdir = cfg.out / "scores" / str(r.day)
+    filings_meta = {}
+
+    def load_filings():
+        events, m = live.load_filings(tickers, r.deadline, cfg.out / "filings" / "text")
+        filings_meta.update(m)
+        return events
+
     loaders = {
         "scores": lambda: compiler.DailyPanel(
             pd.read_parquet(sdir / "scores.parquet").pivot(index="date", columns="ticker",
@@ -563,7 +575,7 @@ def agent_inputs(cfg: Config, mkt: sim.Market, r: Round) -> tuple[dict, dict]:
         "earnings": lambda: live.CalendarEarnings(
             pd.read_parquet(universe.latest("earnings_calendar_*.parquet")), mkt.days),
         "fomc": macro.FomcCalendar.load,
-        "filings": lambda: pd.read_parquet(universe.latest("edgar_8k_*.parquet")),
+        "filings": load_filings,
         "vol": lambda: live.vol_forecasts(r.deadline, cfg.out / "vol" / str(r.day), tickers),
     }
     for key, load in loaders.items():
@@ -574,10 +586,21 @@ def agent_inputs(cfg: Config, mkt: sim.Market, r: Round) -> tuple[dict, dict]:
             meta[key] = "ok" if value is not None else "none"
         except Exception as err:  # noqa: BLE001 - one missing input, not a missing round
             meta[key] = f"{type(err).__name__}: {err}"
-    for key, pattern in (("earnings", "earnings_calendar_*.parquet"), ("filings", "edgar_8k_*.parquet")):
-        if key in kw:
-            meta[f"{key}_snapshot"] = universe.latest(pattern).name
+    if "earnings" in kw:
+        meta["earnings_snapshot"] = universe.latest("earnings_calendar_*.parquet").name
+    if filings_meta:
+        meta["filings_source"] = filings_meta
     if news.ARCHIVE.exists():
+        # The scheduled archiver runs 5 minutes before each deadline, after this round's
+        # shadow has decided (the runner wakes 12 minutes before): read alone, the archive
+        # would show the shadow headlines an hour old, missing whatever moved the name.
+        left = (r.deadline - pd.Timestamp.now(tz=calendar.TZ)).total_seconds()
+        if 0 < left <= NEWS_NOW_S:
+            try:
+                path, frame, issues = news.snapshot(tickers, budget_s=40)
+                meta["news_snapshot"] = {"file": path.name, "headlines": len(frame), **issues}
+            except Exception as err:  # noqa: BLE001 - the archive as it stands still serves
+                meta["news_snapshot"] = f"{type(err).__name__}: {err}"
         kw["news_dir"] = news.ARCHIVE
         meta["news"] = "archive"
     return kw, meta

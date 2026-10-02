@@ -39,13 +39,13 @@ FORMER_CIKS = {
 CLUSTER_DAYS = 30
 
 
-def _client():
+def _client(timeout: float = 60):
     import httpx
 
     agent = os.environ.get("SEC_USER_AGENT", "").strip()
     if not agent:
         raise RuntimeError("set SEC_USER_AGENT='<name> <email>' (the SEC requires a contact)")
-    return httpx.Client(headers={"User-Agent": agent}, timeout=60, follow_redirects=True)
+    return httpx.Client(headers={"User-Agent": agent}, timeout=timeout, follow_redirects=True)
 
 
 def cik_map(client) -> dict[str, int]:

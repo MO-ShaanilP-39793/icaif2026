@@ -57,18 +57,19 @@ def _active():
         held = [r["name"] for r in p["names"] if (r.get("weight_now") or 0) > 0]
         if reviews["n"] == 1:
             return ReviewDecision(action="set_exposure", exposure=0.45, reason=None, exit=[],
-                                  rationale="a deterioration the regime model is slow to see")
+                                  trim=[], rationale="a deterioration the regime model is slow to see")
         if reviews["n"] == 2:
             return ReviewDecision(action="hold", exposure=None, reason=None, exit=held[:1],
-                                  rationale="one name's own news")
-        return ReviewDecision(action="hold", exposure=None, reason=None, exit=[], rationale="steady")
+                                  trim=[], rationale="one name's own news")
+        return ReviewDecision(action="hold", exposure=None, reason=None, exit=[], trim=[], rationale="steady")
 
     return Scripted(
         entry=lambda p: EntryDecision(
             shape="inverse_vol", views="none", exposure=0.6, rationale="a calmer start",
             avoid=[Exclusion(name=p["names"][0]["name"], signal="earnings", why="reports tomorrow")]),
         review=review,
-        event=lambda p: EventDecision(calls=[NameCall(name=t["name"], action="exit", reason="a gap")
+        event=lambda p: EventDecision(calls=[NameCall(name=t["name"], action="exit", fraction=None,
+                                                          cause=None, reason="a gap")
                                              for t in p["triggers"]]))
 
 

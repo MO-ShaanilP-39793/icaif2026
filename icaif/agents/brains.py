@@ -55,7 +55,8 @@ class RuleBrain:
 
 
 def rule_event(trigger_names: list[str]) -> EventDecision:
-    return EventDecision(calls=[NameCall(name=n, action="hold", reason="rule: hold")
+    return EventDecision(calls=[NameCall(name=n, action="hold", fraction=None, cause=None,
+                                         reason="rule: hold")
                                 for n in trigger_names])
 
 

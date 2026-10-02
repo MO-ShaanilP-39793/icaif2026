@@ -71,7 +71,7 @@ class FreeDesk(Desk):
         rd = observe.readings(closes, self.hmm)
         rule = self._rule(ctx, tickers)
         extra = {"rule_proposal": rule} if self.arm == "informed" else {}
-        payload = self._payload(closes, rd, ctx, **extra)
+        payload = self._payload(closes, rd, ctx, self.role, **extra)
 
         def check(d: FreeDecision):
             codes = [x.name for x in d.weights]

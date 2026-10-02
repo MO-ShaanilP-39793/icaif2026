@@ -46,6 +46,25 @@ class EntryDecision(_Strict):
     rationale: str = Field(max_length=1500)
 
 
+# The trim lever's grid: the fraction of a position sold. Two steps, so a trim is a
+# decision about whether, not a dial tuned to a story; the desk adds the floor and the cap.
+TRIM_FRACTIONS = ("quarter", "half")
+TrimCause = Literal["give_back", "news", "filing", "volatility", "earnings"]
+
+
+class Trim(_Strict):
+    """Part of one held name sold, how much, and the cause behind it.
+
+    The cause is a closed set so a replay can score trims by cause (did booking a
+    give-back pay? trimming into a filing?); `why` is the case for this name today.
+    """
+
+    name: str
+    fraction: Literal["quarter", "half"] = Field(description="Of the position, sold.")
+    cause: TrimCause
+    why: str = Field(max_length=300)
+
+
 class ReviewDecision(_Strict):
     """A morning review after entry. Holding is free; every trade costs turnover rank."""
 
@@ -58,12 +77,17 @@ class ReviewDecision(_Strict):
         description="Required for rebalance: what changed since entry that the book "
                     "should follow. Null otherwise.")
     exit: list[str] = Field(max_length=8, description="Held name codes to sell outright.")
+    trim: list[Trim] = Field(max_length=3, description="Held names to sell part of, with "
+                                                       "hold or set_exposure; none with rebalance.")
     rationale: str = Field(max_length=1500)
 
 
 class NameCall(_Strict):
     name: str
-    action: Literal["hold", "exit"]
+    action: Literal["hold", "exit", "trim"]
+    fraction: Optional[Literal["quarter", "half"]] = Field(
+        description="Required for trim: the fraction of the position sold. Null otherwise.")
+    cause: Optional[TrimCause] = Field(description="Required for trim. Null otherwise.")
     reason: str = Field(max_length=600)
 
 

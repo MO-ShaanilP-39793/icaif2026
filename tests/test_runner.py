@@ -487,7 +487,8 @@ def test_a_sharp_move_today_wakes_the_shadows_analyst_while_the_submitted_book_h
     from icaif.agents.schemas import EventDecision, NameCall
 
     world["bars30"] = _bars30(world["daily"], [DAY1, DAY2], shock=("AAPL", DAY1, 0.8))
-    exits = lambda p: EventDecision(calls=[NameCall(name=t["name"], action="exit", reason="gap")  # noqa: E731
+    exits = lambda p: EventDecision(calls=[NameCall(name=t["name"], action="exit", fraction=None,
+                                                    cause=None, reason="gap")  # noqa: E731
                                            for t in p["triggers"]])
     brain = Scripted(event=exits)
     cfg = _cfg(world)
