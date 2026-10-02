@@ -100,3 +100,36 @@ def test_every_rows_histogram_uses_the_same_bins_and_counts_every_window():
     ra = next(r for r in b["rows"] if r["strategy"] == "a")
     assert ra["hist"]["cumulative_return"][-1] == 1
     assert next(r for r in b["rows"] if r["strategy"] == "cash")["hist"]["turnover"][0] == 3
+
+
+def test_the_non_overlapping_windows_carry_the_boards_own_ranks_and_no_shared_day():
+    """A window sharing days with the one before it would count the same market twice in
+    a table read as independent results. A rank recomputed on the subset alone would
+    disagree with the score it sits beside, against the same field."""
+    wins = [("2026-01-02", "2026-01-23"), ("2026-01-05", "2026-01-26"),
+            ("2026-01-26", "2026-02-13"), ("2026-01-27", "2026-02-17")]
+
+    def entry(name, per_window, kind=lb.SUBMITTED):
+        df = pd.DataFrame([{"window_start": s, "window_end": e, **dict(zip(lb.METRICS, m))}
+                           for (s, e), m in zip(wins, per_window)])
+        return lb.make_entry(name, kind, dict(zip(lb.METRICS, per_window[0])), df, span=SPAN,
+                             sizing="pre_fee", market_snapshot="snap",
+                             submitted_at="" if kind == lb.REFERENCE else "2026-09-30T10:00:00Z")
+
+    cash = entry("cash", [(0, 0, 0, 0)] * 4, lb.REFERENCE)
+    a = entry("a", [(0.02, 2.0, 0.01, 0.05), (-0.01, -1.0, 0.03, 0.05),
+                    (0.03, 3.0, 0.01, 0.05), (-0.02, -2.0, 0.04, 0.05)])
+    b = lb.standings([cash, a])
+    row = next(r for r in b["rows"] if r["strategy"] == "a")
+
+    # Window 3 starts on window 2's last day, so it is not disjoint from it; but window 2
+    # overlaps window 1, so the tiling is windows 1 and 3.
+    assert [w["window_start"] for w in row["disjoint"]] == ["2026-01-02", "2026-01-26"]
+    assert len(row["disjoint"]) == b["independent_windows"]
+    for w, i in zip(row["disjoint"], (0, 2)):
+        m = pd.DataFrame({e["strategy"]: e["windows"][i] for e in (cash, a)}).T
+        want = ranking.rank_window(m[lb.METRICS].astype(float)).loc["a"]
+        assert (w["position"], w["overall_score"]) == (want["position"], want["overall_score"])
+        assert w["cumulative_return"] == a["windows"][i]["cumulative_return"]
+    assert row["mean_disjoint_overall_score"] == pytest.approx(
+        sum(w["overall_score"] for w in row["disjoint"]) / 2)

@@ -32,13 +32,24 @@ REFERENCE = "reference"
 SUBMITTED = "submitted"
 
 
+def disjoint_windows(windows: list[dict]) -> list[int]:
+    """Indices of the windows that tile the span from its first day, no two sharing one.
+
+    Greedy from the start: each window that begins after the last pick ended. These are
+    the windows the board shows one by one, because neighbouring rolling windows share
+    14 of 15 days and a table of all of them reads as ~100 results when it is ~8.
+    """
+    picked, last_end = [], ""
+    for i, w in enumerate(windows):
+        if w["window_start"] > last_end:
+            picked.append(i)
+            last_end = w["window_end"]
+    return picked
+
+
 def independent_windows(windows_df: pd.DataFrame) -> int:
     """How many of the windows could be picked without any two sharing a day."""
-    n, last_end = 0, ""
-    for s, e in zip(windows_df["window_start"], windows_df["window_end"]):
-        if s > last_end:
-            n, last_end = n + 1, e
-    return n
+    return len(disjoint_windows(windows_df[["window_start", "window_end"]].to_dict("records")))
 
 
 HIST_BINS = 16
@@ -112,7 +123,8 @@ def standings(entries: list[dict]) -> dict:
         raise EntryError("no reference entries; the board has nothing to anchor its windows")
     board_span = refs[0]["span"]
     board_windows = [w["window_start"] for w in refs[0]["windows"]]
-    n_independent = max(1, independent_windows(pd.DataFrame(refs[0]["windows"])))
+    disjoint = disjoint_windows(refs[0]["windows"])
+    n_independent = max(1, len(disjoint))
 
     ref_names = {r["strategy"] for r in refs}
     latest, versions, excluded = {}, {}, []
@@ -155,6 +167,7 @@ def standings(entries: list[dict]) -> dict:
         r = ranking.rank_window(m.round(12))
         per_window.append(r[["overall_score", "position"]].assign(window=start))
     ranks = pd.concat(per_window).rename_axis("strategy").reset_index()
+    disjoint_ranks = [per_window[i] for i in disjoint]
     g = ranks.groupby("strategy")
 
     rows = []
@@ -177,6 +190,18 @@ def standings(entries: list[dict]) -> dict:
             **{f"median_window_{k}": float(pd.Series([w[k] for w in e["windows"]]).median())
                for k in METRICS},
         })
+        # The same ranks as the score above, against the whole field, in only the windows
+        # that share no day. Ranked again on that subset alone, each window's field would
+        # be the same but the reader would take it for a second, independent score.
+        rows[-1]["disjoint"] = [
+            {"window_start": e["windows"][i]["window_start"],
+             "window_end": e["windows"][i]["window_end"],
+             "position": int(r.loc[name, "position"]),
+             "overall_score": float(r.loc[name, "overall_score"]),
+             **{k: e["windows"][i][k] for k in METRICS}}
+            for i, r in zip(disjoint, disjoint_ranks)]
+        rows[-1]["mean_disjoint_overall_score"] = float(
+            pd.Series([w["overall_score"] for w in rows[-1]["disjoint"]]).mean())
     edges = histogram_edges(field)
     for r in rows:
         r["hist"] = {k: histogram(field[r["strategy"]], k, edges[k]) for k in METRICS}

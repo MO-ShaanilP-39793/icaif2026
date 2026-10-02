@@ -88,6 +88,13 @@
   #history td, #history th { padding: 7px 12px; font-size: 12.5px; font-variant-numeric: tabular-nums; }
   .how { padding: 16px 18px; color: var(--ink-2); }
   .how p { margin: 0 0 8px; } .how p:last-child { margin: 0; }
+  button.disj { font: inherit; font-size: 12px; color: var(--accent); background: none; border: 0;
+                padding: 0; margin-top: 4px; cursor: pointer; }
+  tr.detail > td { background: var(--bg); padding: 8px 14px 14px; }
+  table.disj th, table.disj td { padding: 5px 10px; font-size: 12.5px; font-variant-numeric: tabular-nums;
+                                 border-bottom: 1px solid var(--line-2); white-space: nowrap; }
+  table.disj thead th { position: static; background: none; }
+  table.disj tr.mean td { font-weight: 600; border-bottom: 0; }
   [hidden] { display: none !important; }
 </style>
 </head>
@@ -229,9 +236,18 @@
         `<td class="name"><span class="sname">${esc(r.strategy)}</span>${ref ? '<span class="chip">reference</span>' : ""}` +
         `<div class="by">${by}</div>${r.note ? `<div class="note">${esc(r.note)}</div>` : ""}${held}</td>` +
         `<td class="score"><span class="big">${r.mean_overall_score.toFixed(2)}</span> <span class="pm">± ${r.se_overall_score.toFixed(2)}</span>` +
-        `<div class="cap"><span>${r.wins} window wins · mean place ${r.mean_position.toFixed(1)}</span></div></td>${metrics}</tr>`;
+        `<div class="cap"><span>${r.wins} window wins · mean place ${r.mean_position.toFixed(1)}</span></div>` +
+        `<div class="cap">${r.mean_disjoint_overall_score.toFixed(2)} <span>on the ${r.disjoint.length} non-overlapping</span></div>` +
+        `<button class="disj" data-i="${i}" aria-expanded="false">Non-overlapping windows ▸</button></td>${metrics}</tr>` +
+        `<tr class="detail" id="disj-${i}" hidden><td colspan="${3 + METRICS.length}">${disjointTable(r)}</td></tr>`;
     }).join("");
     $("board").innerHTML = head + "<tbody>" + body + "</tbody>";
+    $("board").querySelectorAll("button.disj").forEach((btn) => btn.onclick = () => {
+      const row = $("disj-" + btn.dataset.i), open = row.hidden;
+      row.hidden = !open;
+      btn.setAttribute("aria-expanded", String(open));
+      btn.textContent = `Non-overlapping windows ${open ? "▾" : "▸"}`;
+    });
     $("board").hidden = false; $("status").hidden = true; $("legend").hidden = false;
 
     $("excluded").innerHTML = b.excluded.length ? `<div class="note-box"><strong>Not ranked:</strong> ` +
@@ -244,6 +260,22 @@
         METRICS.map((k) => `<td>${fmtFull(k, h["continuous_" + k])}</td>`).join("") +
         `<td class="muted">${h.ranked ? "ranked" : "superseded"}</td></tr>`).join("")
         : `<tr><td colspan="7" class="muted">Nothing submitted yet.</td></tr>`) + "</tbody>";
+  }
+
+  // The windows that share no day, each with its place and score against the whole field
+  // in that window: the same ranks the board's score averages, shown one by one.
+  function disjointTable(r) {
+    const n = r.disjoint.length;
+    const mean = (k) => r.disjoint.reduce((a, w) => a + w[k], 0) / n;
+    const short = (iso) => new Date(iso + "T12:00:00Z").toLocaleDateString(undefined, { day: "numeric", month: "short" });
+    return `<table class="disj"><thead><tr><th>Window</th><th>Place</th><th>Score</th>` +
+      METRICS.map((k) => `<th>${LABELS[k]}</th>`).join("") + `</tr></thead><tbody>` +
+      r.disjoint.map((w) => `<tr><td>${short(w.window_start)} – ${short(w.window_end)}</td>` +
+        `<td>${w.position}</td><td>${w.overall_score.toFixed(2)}</td>` +
+        METRICS.map((k) => `<td>${fmtFull(k, w[k])}</td>`).join("") + `</tr>`).join("") +
+      `<tr class="mean"><td>Mean of ${n}</td><td>${mean("position").toFixed(1)}</td>` +
+      `<td>${r.mean_disjoint_overall_score.toFixed(2)}</td>` +
+      METRICS.map((k) => `<td>${fmtFull(k, mean(k))}</td>`).join("") + `</tr></tbody></table>`;
   }
 
   HIST.installTooltips();
