@@ -89,7 +89,7 @@ def et(value) -> pd.Timestamp:
 class Config:
     phase: str
     submit: str = "rule"          # "rule": the rule's book goes in, the agent shadows
-    shadow: str = "claude"        # the agent desk's brain: "claude" | "rule" | "none"
+    shadow: str = "claude"        # the agent desk's brain: "claude" | "gemma" | "rule" | "none"
     live: bool = False            # read the server's book; upload when armed
     out: Optional[Path] = None
     window_days: int = 15
@@ -104,12 +104,17 @@ class Config:
     shadow_cost_cap: float = 10.0  # USD per phase
     model: str = brains.DEFAULT_MODEL
     effort: str = "high"
+    gemma_model: str = brains.GEMMA_DEFAULT
 
     def __post_init__(self):
         if self.submit not in ("rule", "agent"):
             raise ValueError(f"submit must be 'rule' or 'agent', not {self.submit!r}")
-        if self.shadow not in ("claude", "rule", "none"):
-            raise ValueError(f"shadow must be 'claude', 'rule' or 'none', not {self.shadow!r}")
+        if self.shadow not in ("claude", "gemma", "rule", "none"):
+            raise ValueError(f"shadow must be 'claude', 'gemma', 'rule' or 'none', not {self.shadow!r}")
+        if self.gemma_model not in brains.GEMMA_MODELS:
+            # Caught here, not at the first call: a bad name would otherwise surface as a
+            # fallback in every round, a shadow that reads as the rule.
+            raise ValueError(f"gemma_model must be one of {brains.GEMMA_MODELS}, not {self.gemma_model!r}")
         if self.live and self.phase not in PHASES:
             raise ValueError(f"only {PHASES} can go live; {self.phase!r} is a dry run's")
         self.out = Path(self.out) if self.out else LIVE_OUT / self.phase
@@ -433,7 +438,20 @@ def make_brain(cfg: Config, st: State):
     left = cfg.shadow_cost_cap - float(st.data.get("spent_usd", 0.0))
     if left <= 0:
         return _Spent(cfg.shadow_cost_cap)
+    if cfg.shadow == "gemma":
+        return brains.GemmaBrain(cfg.gemma_model, max_cost=left)
     return brains.ClaudeBrain(cfg.model, cfg.effort, max_cost=left)
+
+
+def _aws_credentials() -> bool:
+    """Whether boto3 can find credentials for Bedrock (an expired SSO login still fails
+    later, at the call, and is recorded there)."""
+    try:
+        import boto3
+
+        return boto3.Session().get_credentials() is not None
+    except Exception:  # noqa: BLE001 - no boto3, or a broken profile: no credentials
+        return False
 
 
 def run_desk(name: str, brain, cfg: Config, st: State, mkt: sim.Market, r: Round,
@@ -829,6 +847,8 @@ def _agent(cfg, r, st, doors, rec, mkt, book, current, *, reserve_s, entered_now
         brain = Recording(doors.brain(cfg, st))
         if cfg.shadow == "claude" and not os.environ.get("ANTHROPIC_API_KEY"):
             rec["warnings"].append(f"{label}: ANTHROPIC_API_KEY is unset; every role falls back to the rule")
+        if cfg.shadow == "gemma" and not _aws_credentials():
+            rec["warnings"].append(f"{label}: no AWS credentials for Bedrock; every role falls back to the rule")
         budget = min(cfg.agent_budget_s, max(left(), 0))
         w, info = run_desk("agent", brain, cfg, st, mkt, r, book, entered_now=entered_now,
                            inputs=inputs, budget_s=budget)
@@ -838,11 +858,17 @@ def _agent(cfg, r, st, doors, rec, mkt, book, current, *, reserve_s, entered_now
         return None, False
     finally:
         if brain is not None:
-            if isinstance(brain.inner, brains.ClaudeBrain):
+            if isinstance(brain.inner, (brains.ClaudeBrain, brains.GemmaBrain)):
                 st.data["spent_usd"] = float(st.data.get("spent_usd", 0.0)) + brain.inner.cost()
             if brain.calls:
                 write_atomic(cfg.out / r.id / f"{label}_calls.json",
                              json.dumps(live._clean(brain.calls), indent=1, default=str))
+            # Gemma's raw replies hold its `analysis` and any reply a repair replaced,
+            # neither of which is in the parsed answer above; the rules want responses
+            # disclosed in full.
+            if isinstance(brain.inner, brains.GemmaBrain) and brain.inner.records:
+                write_atomic(cfg.out / r.id / f"{label}_replies.json",
+                             json.dumps(live._clean(brain.inner.records), indent=1, default=str))
     rec[label] = {**_describe(w, info, current), "inputs": meta, "brain": brain.name,
                   "budget_s": round(budget, 1)}
     return w, True
@@ -916,6 +942,9 @@ def worker_argv(cfg: Config, row: dict, schedule_path: Path, as_of=None) -> list
     argv = [sys.executable, str(TOOL), "round", "--phase", cfg.phase, "--round-id", row["id"],
             "--schedule", str(schedule_path), "--submit", cfg.submit, "--shadow", cfg.shadow,
             "--out", str(cfg.out)]
+    if cfg.shadow == "gemma":
+        # Without it the worker would build the default Gemma, not the one the phase named.
+        argv += ["--gemma-model", cfg.gemma_model]
     if cfg.live:
         argv.append("--live")
     if not cfg.scoring:

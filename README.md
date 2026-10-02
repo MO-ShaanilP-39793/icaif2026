@@ -316,10 +316,30 @@ Roadmap's step-6 gate.
 
 The runner's environment needs `CODABENCH_TOKEN` and `ICAIF_PROFILE` (in
 `starter-kit/.env`). It also needs `SEC_USER_AGENT` for fresh EDGAR events in the
-scores, and `ANTHROPIC_API_KEY` for the shadow. Without the key, every role falls back
-to the rule, and the record says so. Shadow spend is capped at $10 a phase. Each
-round's evidence is kept under `output/live/<phase>/`: the inputs, both desks'
-answers, every LLM call's observation and answer, and the file it wrote.
+scores, and `ANTHROPIC_API_KEY` for the shadow (or AWS credentials, with `--shadow
+gemma`). Without them, every role falls back to the rule, and the record says so.
+Shadow spend is capped at $10 a phase. Each round's evidence is kept under
+`output/live/<phase>/`: the inputs, both desks' answers, every LLM call's observation
+and answer, and the file it wrote.
+
+**Gemma 3 on Bedrock** (`--shadow gemma`, `agent_replay.py --brain gemma`;
+`brains.GemmaBrain`). The kit's LLM list names Gemma 3, and Bedrock serves the 27B (the
+default), 12B and 4B on demand in ap-south-1 (`--gemma-model`; `ICAIF_BEDROCK_REGION`
+for another region). Credentials come from the environment, e.g. `AWS_PROFILE=dev`.
+
+- **Checked, not constrained.** Bedrock offers Gemma no schema-constrained output, so
+  the role's JSON Schema is appended to its system prompt. The reply is read from its
+  first JSON object (Gemma fences it in markdown) and validated. One repair shows the
+  model its reply and the error; a second miss falls back to the rule. Nothing is
+  clamped: a clamped answer runs a book the model did not choose.
+- **Analysis first.** Gemma has no thinking mode, so it answers `{"analysis": ...,
+  "decision": ...}`: about 120 words of reasoning, then the decision. The analysis and
+  the raw reply are kept in `<round>/shadow_replies.json`, beside the calls file.
+- **Temperature 0**, one attempt per request with no SDK retries, and the role's time
+  left as the read timeout.
+- **Cost.** $0.27 / $0.45 per million input / output tokens for the 27B (AWS Price List,
+  2026-10-02). A live entry call, with headlines for all 30 names, read 27,258 tokens
+  and cost $0.0075 on 2026-10-02 (7.3 s). It counts against the same $10 cap.
 
 **Before arming.** The portfolio's format is unpublished. `portfolio.parse` accepts
 one declared shape and raises on anything else, rather than reading an unknown book as

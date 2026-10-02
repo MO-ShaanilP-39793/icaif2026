@@ -3,6 +3,7 @@
     .venv/bin/python tools/agent_replay.py                          # rule brain: free
     .venv/bin/python tools/agent_replay.py --ledgers-only           # the same check, ~3 min
     .venv/bin/python tools/agent_replay.py --brain claude --max-calls 60 --yes
+    AWS_PROFILE=dev .venv/bin/python tools/agent_replay.py --brain gemma --no-review --yes
 
 The rule brain is the sanity check: its desk must tie `q_riskparity_entry_regime` (the quant
 candidate it stands for) in every window, or the desk's plumbing, not its judgement,
@@ -14,8 +15,8 @@ window, not only their scores, and the desk's journal agrees with its own ledger
 every window (`journal.verify`: each fill to the cent, each held name's entry, cost and
 peak), without ranking anything against the field (a fifth of the time).
 
-**Claude replays cost money and need `--yes`.** The tool prints the call and dollar
-estimate first. They are anonymised unless `--real-names` (see `agents.observe`), and
+**LLM replays (Claude, or Gemma 3 on Bedrock) cost money and need `--yes`.** The tool
+prints the call and dollar estimate first. They are anonymised unless `--real-names` (see `agents.observe`), and
 cached under output/agent/cache/, so a rerun with `--offline` repeats every answer and
 calls nothing. Windows default to the confirm era's non-overlapping windows from
 2025, the latest the model is least likely to have memorised; `--start` moves them.
@@ -53,10 +54,12 @@ def load_earnings(market) -> EarningsCalendar:
 
 def main() -> None:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--brain", choices=["rule", "claude"], default="rule")
+    ap.add_argument("--brain", choices=["rule", "claude", "gemma"], default="rule")
     ap.add_argument("--model", default=brains.DEFAULT_MODEL, choices=brains.ALLOWED_MODELS)
+    ap.add_argument("--gemma-model", default=brains.GEMMA_DEFAULT, choices=brains.GEMMA_MODELS,
+                    help="the Gemma 3 model on Bedrock when --brain gemma")
     ap.add_argument("--effort", default="high", choices=["low", "medium", "high", "xhigh", "max"])
-    ap.add_argument("--start", default=None, help="first window start (default: all for rule, 2025-01-01 for claude)")
+    ap.add_argument("--start", default=None, help="first window start (default: all for rule, 2025-01-01 for an LLM)")
     ap.add_argument("--end", default=None)
     ap.add_argument("--windows", type=int, default=None, help="at most this many windows")
     ap.add_argument("--no-review", action="store_true", help="entry and events only (~15x fewer calls)")
@@ -64,17 +67,17 @@ def main() -> None:
     ap.add_argument("--real-names", action="store_true", help="do not anonymise (post-cutoff windows only)")
     ap.add_argument("--max-calls", type=int, default=None)
     ap.add_argument("--offline", action="store_true", help="answer only from the cache")
-    ap.add_argument("--yes", action="store_true", help="confirm spending on a claude replay")
+    ap.add_argument("--yes", action="store_true", help="confirm spending on an LLM replay")
     ap.add_argument("--tag", default=None)
     ap.add_argument("--ledgers-only", action="store_true",
                     help="rule brain: check its ledger equals the candidate's in every window, then stop")
     args = ap.parse_args()
     if args.ledgers_only and args.brain != "rule":
-        raise SystemExit("--ledgers-only checks the rule desk; it takes no --brain claude")
+        raise SystemExit("--ledgers-only checks the rule desk; it takes no LLM brain")
 
     t0 = time.time()
     market = markets.research_market()
-    start = args.start or ("2025-01-01" if args.brain == "claude" else None)
+    start = args.start or ("2025-01-01" if args.brain != "rule" else None)
     starts = [s for s in windows.window_starts(market) if s >= market.days[60]]
     if start:
         starts = [s for s in starts if s >= date.fromisoformat(start)]
@@ -101,14 +104,22 @@ def main() -> None:
         n_calls = per_window * len(starts)
         if args.max_calls:
             n_calls = min(n_calls, args.max_calls)
-        p_in, p_out, _, _ = brains.PRICES[args.model]
+        if args.brain == "gemma":
+            # No thinking tokens, so the output estimate is high for Gemma: an upper bound.
+            p_in, p_out = brains.GEMMA_PRICES[args.gemma_model]
+            what = args.gemma_model
+        else:
+            p_in, p_out, _, _ = brains.PRICES[args.model]
+            what = f"{args.model} at effort {args.effort}"
         est = n_calls * (EST_IN * p_in + EST_OUT * p_out) / 1e6
-        print(f"{len(starts)} windows, ~{n_calls} calls to {args.model} at effort "
-              f"{args.effort}: ~${est:.0f} (cache hits are free)")
+        print(f"{len(starts)} windows, ~{n_calls} calls to {what}: ~${est:.2f} "
+              f"(cache hits are free)")
         if not (args.yes or args.offline):
             print("re-run with --yes to spend it, or --offline to use cached answers only")
             return
-        shared = brains.ClaudeBrain(args.model, args.effort, max_calls=args.max_calls)
+        shared = (brains.GemmaBrain(args.gemma_model, max_calls=args.max_calls)
+                  if args.brain == "gemma" else
+                  brains.ClaudeBrain(args.model, args.effort, max_calls=args.max_calls))
         cache = brains.CachedBrain(shared, OUT / "cache", offline=args.offline)
         make = lambda: cache  # noqa: E731 - one brain across windows, so the budget is global
         live_brains = [shared]

@@ -2,6 +2,7 @@
 
     .venv/bin/python tools/live_runner.py rehearse                      # today's 7 rounds, real time, dry
     .venv/bin/python tools/live_runner.py rehearse --date 2026-09-30 --fast   # a past day, back to back
+    AWS_PROFILE=dev .venv/bin/python tools/live_runner.py rehearse --date 2026-09-30 --fast --shadow gemma
     .venv/bin/python tools/live_runner.py run --phase validation        # dry, on the kit's bundled schedule
     .venv/bin/python tools/live_runner.py run --phase validation --live # the server's schedule and book
     .venv/bin/python tools/live_runner.py status --phase validation
@@ -43,6 +44,7 @@ import pandas as pd  # noqa: E402
 
 from icaif import calendar, live, runner  # noqa: E402
 from icaif import portfolio as P  # noqa: E402
+from icaif.agents import brains  # noqa: E402
 from icaif.agents.journal import Journal  # noqa: E402
 
 
@@ -50,14 +52,18 @@ def _cfg(args, phase=None) -> runner.Config:
     return runner.Config(phase=phase or args.phase, submit=args.submit, shadow=args.shadow,
                          live=getattr(args, "live", False),
                          out=Path(args.out) if getattr(args, "out", None) else None,
-                         scoring=not args.no_scores)
+                         scoring=not args.no_scores,
+                         gemma_model=getattr(args, "gemma_model", brains.GEMMA_DEFAULT))
 
 
 def _common(p):
     p.add_argument("--submit", choices=["rule", "agent"], default="rule",
                    help="whose book is submitted (default rule; the agent shadows)")
-    p.add_argument("--shadow", choices=["claude", "rule", "none"], default="claude",
-                   help="the agent desk's brain (claude spends; capped per phase)")
+    p.add_argument("--shadow", choices=["claude", "gemma", "rule", "none"], default="claude",
+                   help="the agent desk's brain (claude: Opus 5 via the API; gemma: Gemma 3 on "
+                        "Bedrock; both spend, capped per phase)")
+    p.add_argument("--gemma-model", choices=brains.GEMMA_MODELS, default=brains.GEMMA_DEFAULT,
+                   help="the Gemma 3 model when --shadow gemma")
     p.add_argument("--no-scores", action="store_true", help="skip the daily model (shadow only)")
     p.add_argument("--out", default=None, help="phase directory (default output/live/<phase>)")
 
