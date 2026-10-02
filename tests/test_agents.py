@@ -8,7 +8,7 @@ import pytest
 from icaif import calendar, quant_strategies as qs, sim
 from icaif import weights as W
 from icaif.agents import brains
-from icaif.agents.brains import BrainError, CachedBrain, ClaudeBrain, RuleBrain
+from icaif.agents.brains import BrainError, CachedBrain, ClaudeBrain, GemmaBrain, RuleBrain
 from icaif.agents.desk import Desk, DeskConfig
 from icaif.agents.schemas import EntryDecision, EventDecision, Exclusion, NameCall, ReviewDecision
 from tests.test_quant import _bars, _days
@@ -308,6 +308,121 @@ def test_a_refused_or_truncated_answer_is_an_error_the_desk_falls_back_on():
 def test_the_call_budget_stops_spending_and_the_desk_keeps_trading_on_the_rule():
     ans = EntryDecision(shape="risk_parity", views="none", exposure=0.7, avoid=[], rationale="x")
     brain = ClaudeBrain(client=FakeClient(_reply(ans)), max_calls=1)
+    desk, res = _run(brain, n=3)
+    assert [e["source"] for e in desk.log] == ["brain", "fallback", "fallback"]
+    assert res.invalid_rounds == []
+
+
+# ----------------------------------------------------------------------------- GemmaBrain
+
+class FakeBedrock:
+    """Stands in for a bedrock-runtime client: records each request, replays canned replies."""
+
+    def __init__(self, *replies):
+        self.replies, self.requests = list(replies), []
+
+    def converse(self, **kw):
+        self.requests.append(kw)
+        reply = self.replies.pop(0)
+        if isinstance(reply, Exception):
+            raise reply
+        return reply
+
+
+def _bedrock(text, stop="end_turn", tokens=(1000, 200)):
+    return {"output": {"message": {"role": "assistant", "content": [{"text": text}]}},
+            "stopReason": stop, "usage": {"inputTokens": tokens[0], "outputTokens": tokens[1]},
+            "ResponseMetadata": {"RequestId": "req-1"}}
+
+
+def _entry_json(exposure=0.7, analysis="calm market, no reporters"):
+    return json.dumps({"analysis": analysis,
+                       "decision": {"shape": "risk_parity", "views": "none", "exposure": exposure,
+                                    "avoid": [], "rationale": "calm"}})
+
+
+def test_only_gemma_3_models_can_be_asked_on_bedrock():
+    """The kit's list names "Gemma 3"; a round answered by another Gemma (or a Claude ID
+    passed to the wrong brain) would disqualify the entry."""
+    for bad in ("google.gemma-2-27b-it", "google.gemma-4-31b-it", "claude-opus-5"):
+        with pytest.raises(ValueError):
+            GemmaBrain(model=bad)
+    assert brains.GEMMA_DEFAULT in brains.GEMMA_MODELS
+    assert set(brains.GEMMA_PRICES) == set(brains.GEMMA_MODELS)
+
+
+def test_a_reply_is_read_from_its_first_json_object_fenced_wrapped_or_bare():
+    """Gemma fences its JSON. Read as bare JSON, every answer would be the rule's, and the
+    shadow would pass for an LLM that always agrees with the rule."""
+    analysis, d = brains.read_reply("```json\n" + _entry_json() + "\n```\n", EntryDecision)
+    assert analysis == "calm market, no reporters" and d.exposure == 0.7
+    bare = json.loads(_entry_json())["decision"]
+    analysis, d = brains.read_reply("Here is my answer:\n" + json.dumps(bare) + "\nThanks.", EntryDecision)
+    assert analysis is None and d.shape == "risk_parity"
+    for bad in ("no json here", "[1, 2]", '{"decision": {"shape": "risk_parity"}}'):
+        with pytest.raises(ValueError):
+            brains.read_reply(bad, EntryDecision)
+
+
+def test_a_gemma_request_carries_the_schema_at_temperature_zero_and_keeps_the_raw_reply():
+    """The schema has to travel in the prompt (Bedrock enforces none for Gemma), and the
+    analysis exists only in the raw reply, which the rules want disclosed in full."""
+    fake = FakeBedrock(_bedrock("```json\n" + _entry_json() + "\n```\n"))
+    brain = GemmaBrain(client=fake)
+    got = brain.decide("entry", "SYSTEM", {"b": 2, "a": 1}, EntryDecision, timeout=30)
+    assert got == EntryDecision(shape="risk_parity", views="none", exposure=0.7, avoid=[],
+                                rationale="calm")
+    req = fake.requests[0]
+    assert req["modelId"] == "google.gemma-3-27b-it"
+    assert req["inferenceConfig"]["temperature"] == 0.0
+    system = req["system"][0]["text"]
+    assert system.startswith("SYSTEM") and '"exposure"' in system and '"analysis"' in system
+    assert req["messages"] == [{"role": "user",
+                                "content": [{"text": json.dumps({"a": 1, "b": 2}, sort_keys=True)}]}]
+    rec = brain.records[0]
+    assert rec["analysis"] == "calm market, no reporters" and rec["reply"].startswith("```json")
+    assert rec["request_id"] == "req-1" and rec["error"] is None
+    assert brain.cost() == pytest.approx((1000 * 0.27 + 200 * 0.45) / 1e6)
+
+
+def test_an_answer_outside_the_schema_gets_one_repair_and_is_never_clamped():
+    """An exposure of 1.2 clamped to 0.95 would run a book the model did not choose, under
+    its rationale. It is shown its error once; a second miss falls back to the rule."""
+    fake = FakeBedrock(_bedrock(_entry_json(exposure=1.2)), _bedrock(_entry_json(exposure=0.8)))
+    brain = GemmaBrain(client=fake)
+    assert brain.decide("entry", "S", {}, EntryDecision, timeout=30).exposure == 0.8
+    retry = fake.requests[1]["messages"]
+    assert [m["role"] for m in retry] == ["user", "assistant", "user"]
+    assert "exposure" in retry[2]["content"][0]["text"]
+    assert brain.records[0]["error"].startswith("invalid") and brain.records[1]["error"] is None
+    fake = FakeBedrock(_bedrock(_entry_json(exposure=1.2)), _bedrock("no json here"))
+    with pytest.raises(BrainError, match="repair"):
+        GemmaBrain(client=fake).decide("entry", "S", {}, EntryDecision, timeout=30)
+
+
+def test_a_truncated_filtered_or_failed_gemma_call_is_an_error_the_desk_falls_back_on():
+    for stop in ("max_tokens", "content_filtered", "guardrail_intervened"):
+        with pytest.raises(BrainError):
+            GemmaBrain(client=FakeBedrock(_bedrock(_entry_json(), stop))).decide(
+                "entry", "S", {}, EntryDecision, timeout=5)
+    with pytest.raises(BrainError, match="ThrottlingException"):
+        GemmaBrain(client=FakeBedrock(RuntimeError("ThrottlingException"))).decide(
+            "entry", "S", {}, EntryDecision, timeout=5)
+    desk, _ = _run(GemmaBrain(client=FakeBedrock(RuntimeError("AccessDenied"))), n=1)
+    assert desk.log[0]["source"] == "fallback" and "AccessDenied" in desk.log[0]["reason"]
+
+
+def test_a_gemma_call_with_no_time_left_is_never_sent():
+    """A request started with a second to go would answer after the role's timeout, and
+    live after the deadline, for a decision nobody can use."""
+    fake = FakeBedrock(_bedrock(_entry_json()))
+    with pytest.raises(BrainError, match="too little"):
+        GemmaBrain(client=fake).decide("entry", "S", {}, EntryDecision, timeout=1.0)
+    assert fake.requests == []
+
+
+def test_the_gemma_call_budget_stops_spending_and_the_desk_keeps_trading_on_the_rule():
+    brain = GemmaBrain(client=FakeBedrock(_bedrock(_entry_json())), max_calls=1)
     desk, res = _run(brain, n=3)
     assert [e["source"] for e in desk.log] == ["brain", "fallback", "fallback"]
     assert res.invalid_rounds == []

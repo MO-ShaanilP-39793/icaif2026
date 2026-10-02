@@ -14,8 +14,9 @@ import pytest
 from icaif import calendar, data, kit, live, runner, sim
 from icaif import portfolio as P
 from icaif import quant_strategies as qs
+from icaif.agents import brains
 from icaif.agents.schemas import EntryDecision, Exclusion
-from tests.test_agents import Failing, Scripted
+from tests.test_agents import FakeBedrock, Failing, Scripted, _bedrock, _entry_json
 
 TICKERS = sorted(data.load_universe())
 DAY1, DAY2 = date(2026, 10, 8), date(2026, 10, 9)
@@ -363,6 +364,33 @@ def test_a_spent_shadow_budget_stops_calling_the_model(world):
     st.data["spent_usd"] = cfg.shadow_cost_cap
     st.save()
     assert isinstance(runner.make_brain(cfg, runner.State(cfg.out)), runner._Spent)
+
+
+def test_a_gemma_shadow_builds_the_named_bedrock_model_in_every_worker_under_the_cap(world):
+    """A gemma shadow that built Claude, or a worker that built the default Gemma instead
+    of the one the phase named, would answer rounds with a model its record doesn't name."""
+    cfg = _cfg(world, shadow="gemma", gemma_model="google.gemma-3-12b-it")
+    brain = runner.make_brain(cfg, runner.State(cfg.out))
+    assert isinstance(brain, brains.GemmaBrain) and brain.model == "google.gemma-3-12b-it"
+    assert brain.max_cost == pytest.approx(cfg.shadow_cost_cap)
+    argv = runner.worker_argv(cfg, {"id": "r1"}, world["tmp"] / "schedule.json")
+    assert argv[argv.index("--gemma-model") + 1] == "google.gemma-3-12b-it"
+    with pytest.raises(ValueError):
+        _cfg(world, shadow="gemma", gemma_model="google.gemma-2-27b-it")
+
+
+def test_a_gemma_shadow_round_counts_its_spend_and_keeps_its_raw_replies(world):
+    """Gemma's analysis lives only in its raw reply, and its cost only in the brain: a
+    runner that kept neither would disclose half of each answer and never stop spending."""
+    gemma = brains.GemmaBrain(client=FakeBedrock(_bedrock("```json\n" + _entry_json() + "\n```",
+                                                          tokens=(5000, 300))))
+    cfg = _cfg(world, shadow="gemma")
+    rec = _play(world, cfg, _doors(world, brain=gemma), DAY1, 1)
+    assert [x["source"] for x in rec["shadow"]["roles"]] == ["brain"]
+    assert runner.State(cfg.out).data["spent_usd"] == pytest.approx((5000 * 0.27 + 300 * 0.45) / 1e6)
+    saved = json.loads((cfg.out / rec["round_id"] / "shadow_replies.json").read_text())
+    assert saved[0]["analysis"] == "calm market, no reporters"
+    assert saved[0]["reply"].startswith("```json")
 
 
 def test_a_hanging_scorer_is_killed_and_the_submitted_book_is_already_out(world, monkeypatch):
