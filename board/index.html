@@ -254,8 +254,13 @@
     });
     $("board").hidden = false; $("status").hidden = true; $("legend").hidden = false;
 
-    $("excluded").innerHTML = b.excluded.length ? `<div class="note-box"><strong>Not ranked:</strong> ` +
-      b.excluded.map((e) => `${esc(e.strategy)} (${esc(e.reason)})`).join("; ") + "</div>" : "";
+    // Grouped by reason: a format change leaves dozens of entries with the same one, and
+    // repeating it per name buries the rare entry that is off the board for its own reason.
+    const byReason = new Map();
+    for (const e of b.excluded) byReason.set(e.reason, [...(byReason.get(e.reason) || []), e.strategy]);
+    $("excluded").innerHTML = byReason.size ? `<div class="note-box"><strong>Not ranked</strong>` +
+      [...byReason].map(([why, names]) => `<div>${names.length} ${names.length === 1 ? "entry" : "entries"}, ` +
+        `${esc(why)}: ${names.map(esc).join(", ")}</div>`).join("") + "</div>" : "";
 
     $("history").innerHTML = "<thead><tr><th>Submitted (UTC)</th><th>Strategy</th><th>Author</th>" +
       METRICS.map((k) => `<th>${LABELS[k]}, mean window</th>`).join("") + "<th></th></tr></thead><tbody>" +
