@@ -1,0 +1,254 @@
+{
+ "looks": [
+  {
+   "at": "2026-10-03T08:21:46.921747+00:00",
+   "choice_commit": "51127edf321a696ae0ccd1a75d33e382f31e520a",
+   "windows": 109,
+   "n_eff": 8
+  }
+ ],
+ "variants": {
+  "trailing": {
+   "label": "trailing a0.5 b2 f0.25",
+   "holdout": {
+    "inv_vol_hold_75": {
+     "default": {
+      "diff": 0.0,
+      "se": 0.3071297831596664,
+      "score": 3.208715596330275,
+      "se_score": 0.3422238346318767,
+      "top3": 0.7247706422018348
+     },
+     "no_clone": {
+      "diff": 0.10091743119266056,
+      "se": 0.2240977492596514,
+      "score": 2.9426605504587156,
+      "se_score": 0.2680500757363754,
+      "top3": 0.7981651376146789
+     }
+    },
+    "q_riskparity_entry_regime": {
+     "default": {
+      "diff": -0.0045871559633027525,
+      "se": 0.03178170664605743,
+      "score": 3.208715596330275,
+      "se_score": 0.3422238346318767,
+      "top3": 0.7247706422018348
+     },
+     "no_clone": {
+      "diff": 0.0,
+      "se": 0.02689571768199595,
+      "score": 2.9426605504587156,
+      "se_score": 0.2680500757363754,
+      "top3": 0.7981651376146789
+     }
+    }
+   },
+   "wins": false,
+   "checks": {
+    "selection default vs inv_vol_hold_75 < 0": true,
+    "holdout default vs inv_vol_hold_75 < 0": false,
+    "selection no_clone vs inv_vol_hold_75 < 0": true,
+    "holdout no_clone vs inv_vol_hold_75 < 0": false,
+    "selection no_clone vs inv_vol_hold_75 more than 2 SE below 0": false,
+    "selection default vs q_riskparity_entry_regime < 0": true,
+    "holdout default vs q_riskparity_entry_regime < 0": true,
+    "selection no_clone vs q_riskparity_entry_regime < 0": true,
+    "holdout no_clone vs q_riskparity_entry_regime < 0": false,
+    "selection no_clone vs q_riskparity_entry_regime more than 2 SE below 0": true
+   },
+   "trims": 139,
+   "windows_with_a_trim": 73,
+   "windows": 109,
+   "mean_give_back_at_trim": 0.050307384791095554,
+   "mean_expected_give_back": 0.050307384791095554
+  },
+  "expanding": {
+   "label": "expanding a0.5 b1 f0.25",
+   "holdout": {
+    "inv_vol_hold_75": {
+     "default": {
+      "diff": 0.0045871559633027525,
+      "se": 0.3106383556298982,
+      "score": 3.213302752293578,
+      "se_score": 0.3462818560843334,
+      "top3": 0.7247706422018348
+     },
+     "no_clone": {
+      "diff": 0.10091743119266056,
+      "se": 0.22570596104859794,
+      "score": 2.9426605504587156,
+      "se_score": 0.27046797672850276,
+      "top3": 0.7981651376146789
+     }
+    },
+    "q_riskparity_entry_regime": {
+     "default": {
+      "diff": 0.0,
+      "se": 0.0,
+      "score": 3.213302752293578,
+      "se_score": 0.3462818560843334,
+      "top3": 0.7247706422018348
+     },
+     "no_clone": {
+      "diff": 0.0,
+      "se": 0.0,
+      "score": 2.9426605504587156,
+      "se_score": 0.27046797672850276,
+      "top3": 0.7981651376146789
+     }
+    }
+   },
+   "wins": false,
+   "checks": {
+    "selection default vs inv_vol_hold_75 < 0": true,
+    "holdout default vs inv_vol_hold_75 < 0": false,
+    "selection no_clone vs inv_vol_hold_75 < 0": false,
+    "holdout no_clone vs inv_vol_hold_75 < 0": false,
+    "selection no_clone vs inv_vol_hold_75 more than 2 SE below 0": false,
+    "selection default vs q_riskparity_entry_regime < 0": false,
+    "holdout default vs q_riskparity_entry_regime < 0": false,
+    "selection no_clone vs q_riskparity_entry_regime < 0": false,
+    "holdout no_clone vs q_riskparity_entry_regime < 0": false,
+    "selection no_clone vs q_riskparity_entry_regime more than 2 SE below 0": false
+   },
+   "trims": 0,
+   "windows_with_a_trim": 0,
+   "windows": 109,
+   "mean_give_back_at_trim": null,
+   "mean_expected_give_back": null
+  },
+  "rolling3y": {
+   "label": "rolling3y a0.5 b2 f0.5",
+   "holdout": {
+    "inv_vol_hold_75": {
+     "default": {
+      "diff": 0.02522935779816514,
+      "se": 0.301890492597725,
+      "score": 3.2339449541284404,
+      "se_score": 0.34005276631281245,
+      "top3": 0.7155963302752294
+     },
+     "no_clone": {
+      "diff": 0.11926605504587157,
+      "se": 0.22100240195926268,
+      "score": 2.9610091743119265,
+      "se_score": 0.26575754098657944,
+      "top3": 0.7798165137614679
+     }
+    },
+    "q_riskparity_entry_regime": {
+     "default": {
+      "diff": 0.020642201834862386,
+      "se": 0.04678376981290517,
+      "score": 3.2339449541284404,
+      "se_score": 0.34005276631281245,
+      "top3": 0.7155963302752294
+     },
+     "no_clone": {
+      "diff": 0.01834862385321101,
+      "se": 0.03935684843655939,
+      "score": 2.9610091743119265,
+      "se_score": 0.26575754098657944,
+      "top3": 0.7798165137614679
+     }
+    }
+   },
+   "wins": false,
+   "checks": {
+    "selection default vs inv_vol_hold_75 < 0": true,
+    "holdout default vs inv_vol_hold_75 < 0": false,
+    "selection no_clone vs inv_vol_hold_75 < 0": false,
+    "holdout no_clone vs inv_vol_hold_75 < 0": false,
+    "selection no_clone vs inv_vol_hold_75 more than 2 SE below 0": false,
+    "selection default vs q_riskparity_entry_regime < 0": true,
+    "holdout default vs q_riskparity_entry_regime < 0": false,
+    "selection no_clone vs q_riskparity_entry_regime < 0": true,
+    "holdout no_clone vs q_riskparity_entry_regime < 0": false,
+    "selection no_clone vs q_riskparity_entry_regime more than 2 SE below 0": false
+   },
+   "trims": 85,
+   "windows_with_a_trim": 50,
+   "windows": 109,
+   "mean_give_back_at_trim": 0.06164415916297291,
+   "mean_expected_give_back": 0.003159125806870817
+  }
+ },
+ "references": {
+  "inv_vol_hold_75": {
+   "holdout": {
+    "inv_vol_hold_75": {
+     "default": {
+      "diff": 0.0,
+      "se": 0.0,
+      "score": 3.208715596330275,
+      "se_score": 0.195253930650808,
+      "top3": 0.9357798165137615
+     },
+     "no_clone": {
+      "diff": 0.0,
+      "se": 0.0,
+      "score": 2.841743119266055,
+      "se_score": 0.18967128243059117,
+      "top3": 0.944954128440367
+     }
+    },
+    "q_riskparity_entry_regime": {
+     "default": {
+      "diff": -0.0045871559633027525,
+      "se": 0.3106383556298982,
+      "score": 3.208715596330275,
+      "se_score": 0.195253930650808,
+      "top3": 0.9357798165137615
+     },
+     "no_clone": {
+      "diff": -0.10091743119266056,
+      "se": 0.22570596104859794,
+      "score": 2.841743119266055,
+      "se_score": 0.18967128243059117,
+      "top3": 0.944954128440367
+     }
+    }
+   }
+  },
+  "q_riskparity_entry_regime": {
+   "holdout": {
+    "inv_vol_hold_75": {
+     "default": {
+      "diff": 0.0045871559633027525,
+      "se": 0.3106383556298982,
+      "score": 3.213302752293578,
+      "se_score": 0.3462818560843334,
+      "top3": 0.7247706422018348
+     },
+     "no_clone": {
+      "diff": 0.10091743119266056,
+      "se": 0.22570596104859794,
+      "score": 2.9426605504587156,
+      "se_score": 0.27046797672850276,
+      "top3": 0.7981651376146789
+     }
+    },
+    "q_riskparity_entry_regime": {
+     "default": {
+      "diff": 0.0,
+      "se": 0.0,
+      "score": 3.213302752293578,
+      "se_score": 0.3462818560843334,
+      "top3": 0.7247706422018348
+     },
+     "no_clone": {
+      "diff": 0.0,
+      "se": 0.0,
+      "score": 2.9426605504587156,
+      "se_score": 0.27046797672850276,
+      "top3": 0.7981651376146789
+     }
+    }
+   }
+  }
+ },
+ "looks_outside_this_record": [
+  "2026-10-03, before the choice existed: a smoke test of --holdout's code scored three untuned settings (a0.5 b1 f0.25, each estimator) on the first 4 of the 109 windows (2026-01-02 .. 2026-01-07). The choice is an argmin over 2016-25 scores and reads nothing of the holdout."
+ ]
+}

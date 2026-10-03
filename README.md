@@ -560,6 +560,53 @@ window, rule and agent together; an off-grid, causeless or untriggered trim is r
 whole and the rule's answer stands. The journal records which trims traded and checks
 each sold some and kept some.
 
+**The rule's trim does not pay, so the rule desk does not trim** (`icaif/trim.py`,
+`tools/trim_report.py`). At each morning review it sells part of a name still up at least
+a x its HAR vol x sqrt(sessions held), once it has given back b daily HAR vols from its
+high-water mark, when the expected give-back over the sessions left beats 20 bps plus a
+rank hit. The give-back is either assumed to continue (`trailing`, the classic
+profit-take) or estimated from past windows that had ended (`expanding`, `rolling3y`).
+Settings were chosen on the 146 windows of 2016-25 by the no-clone score, the choice
+committed (`51127ed`, `reports/trim_choice.json`), then scored once on the 109 rolling
+Jan-Jun 2026 windows (`reports/trim_holdout.json`). Paired differences on the no-clone
+field, SE in brackets, negative better:
+
+| Variant, chosen settings | 2016-25 vs rule | vs hold | Jan-Jun 2026 vs rule | vs hold | Trims, 2016-25 / 2026 |
+| --- | --- | --- | --- | --- | --- |
+| trailing a0.5 b2 f0.25 | -0.017 (0.008) | -0.009 (0.029) | 0.000 (0.027) | +0.101 (0.224) | 154 in 84 windows / 139 in 73 |
+| expanding a0.5 b1 f0.25 | 0.000 (0.000) | +0.009 (0.031) | 0.000 (0.000) | +0.101 (0.226) | 3 in 1 / none |
+| rolling3y a0.5 b2 f0.5 | -0.003 (0.003) | +0.005 (0.030) | +0.018 (0.039) | +0.119 (0.221) | 5 in 4 / 85 in 50 |
+
+The references score 2.728 (rule) and 2.719 (hold) on 2016-25, and 2.943 and 2.842 on
+the holdout.
+
+- **The win rule was step 3's**, fixed with the grid: more than 2 SE below zero against
+  both references on 2016-25, then negative on both fields on the holdout. The trailing
+  take cleared it against the rule (2.25 SE) but not against the hold (0.3 SE), so
+  nothing could win. On the holdout it tied the rule exactly: 4 windows better, 3 worse,
+  102 the same.
+- **Winners that turn went on to rise.** Over 2016-25 a name still up after giving back at
+  least a daily sigma from its high gained on average to the window's end: +15 to +340
+  bps, depending on how far up and how far off its high it was, and positive in every
+  vol tercile and every horizon left. So the estimated give-back is negative almost
+  everywhere and `expanding` trims 3 times in 146 windows. Only 2022, 2024 and 2025 leaned
+  the other way (within noise), which is what `rolling3y` picked up. It then trimmed 85
+  times in 2026 and lost (+0.018).
+- **The trims cost no turnover rank here, and may in the real field.** A quarter of one
+  name never moves our turnover past a rival's in the modelled field: we sit between cash
+  and the holds. The trailing take's selection gain is return (-0.027) and Sharpe
+  (-0.034) rank, in 14 of 146 windows. A field with rivals just above our turnover would
+  charge for every trim.
+- **One extra look, disclosed.** A smoke test of `--holdout` scored three untuned
+  settings on the first 4 holdout windows before the choice existed. The choice is an
+  argmin over 2016-25 scores and reads nothing of the holdout. The look is recorded in
+  `reports/trim_holdout.json`.
+
+A test holds the scored book (`TrimmedRiskParity`) to the desk that would trade it
+(`Desk(trim=...)`), trade for trade with trims firing, so a winner would have gone into
+the rule desk as scored. None did: the rule's review proposes no trim, and the agent's
+trim lever stands as a lever the paid replay and the live shadow must justify.
+
 **How the news is judged.** The model has read 2016-25, so replays can't score its
 reading of headlines. They score only what anonymises: 8-K item types with codes and day
 numbers, from 2016 (step 6's paid replay). Headline judgement is scored on live rounds

@@ -28,6 +28,11 @@ cash, buy-and-hold, equal-weight, inverse-vol, momentum and churning agents):
   as the best fixed exposure.
 - The ML stock scores carry a small real signal (rank IC about 0.05) that has not
   survived the fee as a tilt.
+- Booking part of a winner after it had given back two daily sigmas from its high gained
+  nothing out of sample (-0.017 score points on 2016-25, 0.000 on Jan-Jun 2026), and
+  changed the rank in about one window in ten. Over 2016-25, names that had turned went
+  on to rise on average to the window's end. A trim needs a reason about the name, not
+  the give-back alone.
 
 Names are codes (S01..S30) and dates are day numbers whenever the desk is replayed on
 history, so that nothing you remember about a real market can leak into a decision.

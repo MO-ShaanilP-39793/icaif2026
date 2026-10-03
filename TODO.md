@@ -145,6 +145,19 @@ tilt loses to the hold after fees, and the GNN failed its stage-1 gate.
       journal agrees with its ledger in all 167 (README "Portfolio memory").
 - [ ] Whether the LLM's stated reasons stay consistent with its memory is step 6's paid
       replay: the journal makes it checkable (`journal.verify` checks levers, not prose).
+- [x] News and profit booking (Roadmap step 5): held names' headlines in the review and the
+      analyst (live only, counted from their first fetch), 8-Ks in every role (EDGAR's
+      newest live, with their text), a new 8-K for a held name as an analyst trigger,
+      external text quoted in `source_text`, cleaned and capped, and a trim lever (a
+      quarter or half, with a cause; 0.5% floor, 3 a window). The rule desk with every
+      input still equals its candidate in 167 of 167. The rule's trim, chosen on 2016-25
+      (51127ed) and scored once on Jan-Jun 2026, does not win: the trailing take was
+      -0.017 (2.25 SE) against the rule on 2016-25 and 0.000 on the holdout. The rule desk
+      does not trim (README "News and profit booking").
+- [ ] What the LLM does with the news and the trim lever is step 6's paid replay for 8-K
+      item types and trims by cause (anonymised), and Validation's live shadow for
+      headlines (`tools/news_shadow_report.py`). The analyst is now asked ~23 times a
+      window, which the replay's estimate counts.
 - [x] Day-1 HAR sizing (Roadmap step 3, `tools/har_sizing_report.py`): HAR weights,
       HAR entry exposure, both, and each inside the rule desk. Chosen on 2016-25 and
       committed before one look at Jan-Jun 2026. Nothing wins. HAR exposure lost to a
