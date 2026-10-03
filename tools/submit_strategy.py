@@ -17,6 +17,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from icaif import compiler, data, holdout, leaderboard, markets, space_hub  # noqa: E402
+from icaif import quant_strategies as qs  # noqa: E402
 from icaif.compiler import Levers  # noqa: E402
 
 
@@ -34,6 +35,11 @@ STRATEGIES = {
         "Inverse-vol book at 75% tilted by the daily 5-day model score (tilt 0.5, "
         "rebalanced weekly, 5% band). Best tilt of the 2023-24 lever sweep. Model "
         "predictions are walk-forward out-of-sample; run fresh in each window."),
+    "q_riskparity_entry_regime": (
+        lambda: qs.CANDIDATES["q_riskparity_entry_regime"],
+        "The rule desk's book: risk-parity weights at 85% gross in calm markets and 30% "
+        "in turbulent ones, blended by a two-state HMM fit on the three years before "
+        "each window. Exposure set at entry, then held. Run fresh in each window."),
 }
 
 
