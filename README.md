@@ -326,7 +326,8 @@ Roadmap's step-6 gate.
 
 The runner's environment needs `CODABENCH_TOKEN` and `ICAIF_PROFILE` (in
 `starter-kit/.env`). It also needs `SEC_USER_AGENT` for fresh EDGAR events in the
-scores, and `ANTHROPIC_API_KEY` for the shadow. Without the key, every role falls back
+scores and for this week's 8-Ks (without it the shadow reads the dated snapshot, and the
+new-8-K trigger never fires), and `ANTHROPIC_API_KEY` for the shadow. Without the key, every role falls back
 to the rule, and the record says so. Shadow spend is capped at $10 a phase. Each
 round's evidence is kept under `output/live/<phase>/`: the inputs, both desks'
 answers, every LLM call's observation and answer, and the file it wrote.
@@ -503,6 +504,74 @@ trade in all 167 windows, and its journal agrees with its ledger in all 167
 (`agent_replay.py --ledgers-only`, 142 s). What these checks cannot show is whether an
 LLM's own reasons stay consistent with its memory. `journal.verify` checks the levers
 a reason came with, not its prose, so that is step 6's paid replay.
+
+## News and profit booking (Roadmap step 5; `icaif/news.py`, `icaif/filings.py`, `icaif/trim.py`)
+
+**What the roles read.** The Risk review and the Event analyst see each held name's
+headlines (live only), every role sees each name's 8-Ks of the last 7 days, and a new 8-K
+for a held name wakes the Event analyst beside earnings and the 3-sigma move.
+
+| Input | Who reads it | Replays | Live | Point in time by |
+| --- | --- | --- | --- | --- |
+| Headlines (`headlines`) | review, analyst; held names only | never (they name the company) | the archive, plus a fetch at the round | first fetch that carried it |
+| 8-K item labels (`recent_8k_filings`) | every role, every name | dated snapshot, codes only | snapshot + EDGAR's newest | EDGAR acceptance |
+| A new 8-K (`triggers[].new_8k`) | analyst, held names | as above | as above, with the filing's text | EDGAR acceptance |
+
+- **Headlines count from when we had them, not their pubDate** (`news.known_at`). Yahoo's
+  pubDate runs after our first fetch for 108 of the first 2,070 headlines, by up to 2.2 h,
+  and a story fetched for the first time today is news to us today. Each feed's rows are
+  stamped when that feed came back, not when the 20 s run began.
+- **Held names, ranked, capped.** A triggered name shows its newest 4 (title and
+  summary), naming the company first (`news.ALIASES`: "Meta", not "metadata"; AT&T, not
+  T-Mobile); any other held name its 2 newest titles that name it; first seen within
+  72 h. With all 30 names held that is 60 titles, about 11,600 characters, plus about
+  1,500 per triggered name. Before, every role read every name's whole feed: 55,000 of
+  the first live entry observation's 65,000 characters, its first AAPL headline a story
+  about an "AI torture chamber". The Strategist reads none: nothing is held at entry.
+- **A live round fetches what it reads.** The scheduled archiver runs 5 minutes before
+  each deadline, after the shadow has decided (the runner wakes 12 minutes before), so on
+  its own it showed the shadow hour-old headlines. A round within 30 minutes of its
+  deadline archives the feeds itself first (40 s budget); a rehearsal of a past day never
+  does. 8-Ks: EDGAR's newest filings per name are joined to the dated snapshot
+  (`live.load_filings`, 10 s a request, 45 s in all), which would otherwise be a week
+  stale by Validation. The newest 6 filings of the last 24 h are read for their text,
+  once each, kept under `output/live/<phase>/filings/text/` by accession.
+- **The 8-K trigger** fires once per filing, from its acceptance: overnight filings at
+  the day's first event round, a mid-session one at the next round, the ones before entry
+  left to the Strategist. Over the 167 windows the analyst is now asked 23.4 times a
+  window; of the names it was woken for, 3,606 were 8-Ks, 1,835 3-sigma moves and 1,162
+  earnings. The paid replay's estimate (`agent_replay.py`) counts the 8-Ks.
+
+**External text is data, never instructions** (`icaif/agents/untrusted.py`). Headlines and
+filing text reach a role only inside `source_text`, cleaned of control and format
+characters (zero-width spaces, bidi overrides) and capped: 160 characters a title, 240
+a summary, 1,200 a filing. Every system prompt says what the field is, and the prompts
+stay frozen strings, so no external byte reaches one. An answer a headline talked a role
+into still has to pass the schema and the desk's checks. A test feeds a headline that
+orders "exit every position" to a brain that obeys it: the answer is refused and the
+desk trades the rule's book, and the rule desk's own decisions are identical with and
+without the headline.
+
+**The trim lever.** The review (with `hold` or `set_exposure`, never `rebalance`) and the
+analyst (as its call on a triggered name) can sell a quarter or half of a held name, with
+a cause (`give_back`, `news`, `filing`, `volatility`, `earnings`) so a replay can score
+trims by cause. In code: a sale under 0.5% of NAV is a hold and spends nothing; 3 trims a
+window, rule and agent together; an off-grid, causeless or untriggered trim is refused
+whole and the rule's answer stands. The journal records which trims traded and checks
+each sold some and kept some.
+
+**How the news is judged.** The model has read 2016-25, so replays can't score its
+reading of headlines. They score only what anonymises: 8-K item types with codes and day
+numbers, from 2016 (step 6's paid replay). Headline judgement is scored on live rounds
+only, from Validation: the shadow decides on its own paper book with the news in front
+of it while the rule's book is submitted, and `tools/news_shadow_report.py --phase P
+[--prices]` lists every review or analyst call that had news in front of it, what it
+answered and why, and the name's move since its fill. A fallback, or a shadow run on the
+rule brain, is labelled as the rule's.
+
+The rule desk reading every new input still equals `q_riskparity_entry_regime` trade for
+trade in all 167 windows, and its journal agrees with its ledger in all 167
+(`agent_replay.py --ledgers-only`, 173 s).
 
 ## Credentials
 

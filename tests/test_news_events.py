@@ -413,3 +413,33 @@ def test_a_live_round_archives_the_feeds_itself_and_a_past_rehearsal_never_does(
         assert len(calls) == want and kw["news_dir"] == news.ARCHIVE
     assert calls == [{"budget_s": 40}]   # bounded: the round has a deadline
     assert meta["filings_source"] == {"source": "snapshot"}
+
+
+def test_the_shadow_report_credits_the_model_only_with_answers_the_model_gave(tmp_path):
+    """Headline judgement is scored on live shadow rounds only. A fallback is the rule's
+    decision; read as the model's, it would hand the model the rule's record."""
+    import sys
+
+    sys.path.insert(0, "tools")
+    import news_shadow_report as R
+
+    head = {"seen_hours_ago": 1.0, "published_hours_ago": 2.0, "names_the_company": True,
+            untrusted.FIELD: {"title": "Apple names a new finance chief"}}
+    names = [{"name": "AAPL", "headlines": [head]}, {"name": "MSFT", "headlines": []}]
+    calls = [
+        {"role": "event", "payload": {"names": names, "triggers": [
+            {"name": "AAPL", "why": "new 8-K: director or officer change",
+             "new_8k": [{"hours_ago": 2.0, "events": ["director or officer change"]}]}]},
+         "answer": {"calls": [{"name": "AAPL", "action": "trim", "fraction": "half",
+                               "cause": "filing", "reason": "CFO left"}]}},
+        {"role": "review", "payload": {"names": names}, "error": "BrainError: timed out"},
+    ]
+    rd = tmp_path / "validation-2026-10-08-r2"
+    rd.mkdir()
+    (rd / "shadow_calls.json").write_text(json.dumps(calls))
+    (rd / "round.json").write_text(json.dumps({"execution": "2026-10-08 10:30:00-04:00",
+                                               "shadow": {"brain": "claude:claude-opus-5:high"}}))
+    df = R.rows(tmp_path)
+    assert list(zip(df["role"], df["name"], df["answer"])) == [
+        ("event", "AAPL", "trim half"), ("review", "AAPL", "fallback (rule)")]
+    assert df["new_8k"].iloc[0] == "director or officer change" and df["headlines"].iloc[0] == 1

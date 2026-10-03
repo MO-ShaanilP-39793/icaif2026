@@ -81,8 +81,9 @@ tilt loses to the hold after fees, and the GNN failed its stage-1 gate.
 - [x] A fast rehearsal: 2026-09-30's 7 rounds as worker processes, in 36 s.
 - [ ] A rehearsal: a full day of dry-run rounds at real times on the chosen machine
       (`tools/live_runner.py rehearse`, 08:58-15:25 ET).
-- [ ] Snapshot the earnings calendar and 8-K filings daily on the runner's machine:
-      the shadow reads the latest snapshot (the calendar's is 2026-09-28).
+- [ ] Snapshot the earnings calendar daily on the runner's machine: the shadow reads the
+      latest snapshot (2026-09-28). 8-Ks no longer need one: each live round reads EDGAR's
+      newest filings itself (step 5), given `SEC_USER_AGENT`.
 - [ ] A standby host (the Deployment tab's hh:23 check) is not built.
 - [x] Restarts (Roadmap step 4): every runner file is written whole (temp, fsync,
       rename), a round commits once (state.json, with both books and both journals),
@@ -103,13 +104,19 @@ tilt loses to the hold after fees, and the GNN failed its stage-1 gate.
       5 minutes before each round's deadline and at 08:00 ET, every day.
 - [ ] Rerun `tools/install_news_launchd.py` after 2026-11-01 (US clocks change; launchd
       runs in local time). Keep the Mac awake and online through US market hours.
-- [ ] Back up `data/external/news/`: it is the only copy and not in git.
+- [ ] Back up `data/external/news/` daily: `tools/install_news_backup_launchd.py`
+      (print-only by default; `aws s3 sync`, never `--delete`). The owner approved
+      installing it after the step5 merge, from the main checkout. It runs on the AWS SSO
+      session, which had lapsed on 2026-10-03: `aws sso login` first, and watch
+      `output/news_backup.log` for FAILED lines.
 - [x] Macro in the observation (`icaif/macro.py`): SPY, VIX, yields, curve, sectors as
       of the prior close; levels become z-scores in replays. FOMC decisions 2021-27
       from the Fed's page (`tools/macro_calendar.py`); next: **2026-10-28**, inside
       the Official phase, statement at 14:00 ET.
 - [x] Fetch 8-K events (`tools/filings_events.py`): 10,411 for the 30 names on 2026-10-01.
-- [ ] Pass `filings=` to the desk in `tools/agent_replay.py`.
+- [x] Pass `filings=` to the desk in `tools/agent_replay.py` (step 5): every 8-K for a held
+      name wakes the analyst, 23.4 calls a window over the 167, and the paid replay's
+      estimate counts them.
 - [ ] CPI and jobs-report dates (BLS schedules), and FOMC before 2021 (the Fed's
       per-year archive pages, a different layout).
 - [ ] First paid replay (owner approves the spend): entry-only (`--no-review`), 2025
@@ -118,7 +125,9 @@ tilt loses to the hold after fees, and the GNN failed its stage-1 gate.
       JSON (`Desk.state`/`restore`), writing decision.json through `live.check_decision`,
       uploading only when armed (`icaif/runner.py`).
 - [ ] Shadow the agent through Validation (Oct 8–9): submit the rule's book, and log
-      what the agent would have done.
+      what the agent would have done. Headline judgement is scored only here:
+      `tools/news_shadow_report.py --phase validation --prices` lists every call that had
+      news in front of it, its answer and the name's move since.
 - [x] Our signals in every role's observation (Roadmap step 2, `icaif/agents/signals.py`):
       HAR 1- and 3-day vol per name and for the basket, the score's rank among the 30,
       sessions to earnings, and their values at entry, each with a no-look-ahead test.
