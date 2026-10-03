@@ -10,8 +10,8 @@ pinned: false
 # ICAIF 2026 holdout scorer (private)
 
 This page scores an agent's `decisions.json` on Jan–Jun 2026 with the icaif2026 simulator
-and the organizers' own metric calculator. You get the four metrics for one continuous
-run from $1M, and for every rolling 15-day window.
+and the organizers' own metric calculator. The file holds one run per rolling 15-day
+window, each from $1M in cash, and you get the four metrics for every window.
 
 Submitting needs no sign-in. It uses the Space variable `SUBMIT_TOKEN`, a fine-grained
 token that can write only to the entry dataset (MO-AI-Inv/icaif2026-holdout-entries,

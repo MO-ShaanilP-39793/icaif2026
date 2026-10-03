@@ -89,31 +89,41 @@ guess at the rivals; every conclusion here is conditional on it.
 
 ## Holdout harness (`tools/holdout_eval.py`)
 
-This scores any agent's decisions on Jan 2 – Jun 30 2026 (`holdout.HOLDOUT_START/END`). The agent writes one JSON file:
+This scores any agent's decisions on Jan 2 – Jun 30 2026 (`holdout.HOLDOUT_START/END`)
+in each of the 109 rolling 15-day windows, which amount to about 8 independent samples.
+The contest starts every entrant from $1M in cash, so the file holds **one run per
+window**: the agent run from cash at that window's first round, for its 15 trading days.
 
 ```json
 {"strategy": "my_agent",
- "decisions": [{"round_id": "holdout-2026-01-02-r1", "cash": 0.25,
-                "weights": {"AAPL": 0.03, "...": "all 30 symbols"}}]}
+ "windows": {"2026-01-02": [{"round_id": "holdout-2026-01-02-r1", "cash": 0.25,
+                             "weights": {"AAPL": 0.03, "...": "all 30 symbols"}}, ...],
+             "2026-01-05": [...], ...}}
 ```
 
-`tools/holdout_template.py` writes an equal-weight file naming every round, 861 in
-all. Half-days have only rounds 1–4. The harness reports the four metrics for one
-continuous run from $1M. It also reports them for a fresh $1M in each of the 109
-rolling 15-day windows, which amount to about 8 independent samples.
+`tools/holdout_template.py` writes an equal-weight file with every window key. With
+`--rebalance once` (the default), each window buys 1/30 each at its first round and
+holds, and scores exactly as the board's `ew_hold` reference. `--rebalance every` names
+every round: 11,445 decisions, 6.6 MB. Half-days have only rounds 1–4. There is no
+six-month continuous run: the contest never scores one.
 
-- **These reject the file:** a round that doesn't exist, a duplicate round, a wrong
-  symbol set, or a cash weight more than 1e-9 away from 1 − Σw.
+- **These reject the file:** a missing window or a key that starts none, a round that
+  doesn't exist or lies outside its window, a duplicate round, a wrong symbol set, or a
+  cash weight more than 1e-9 away from 1 − Σw. So does the old one-run `"decisions"`
+  file, by name.
 - **These hold, as the backend would:** a missing round, or a weight that breaks a rule,
   such as float dust over the 0.30 cap. Both are listed. `--strict` makes them fatal.
-- **Windows replay the continuous-run decisions from cash.** An agent that decides from
-  its own holdings is therefore only approximately scored per window.
+- **Why one run per window.** The old format held one six-month run and replayed it
+  into every window from cash. An equal-weight hold written that way bought, in a March
+  window, the weights that had drifted since 2 Jan, and an agent that decides from its
+  own book saw a book it never had. Both scored as strategies that never existed.
 - **Held out only from here on.** The baseline field's 170 windows run to Sep 2026, so
   choices made from that report (e.g. 75% gross) have already seen this span.
 
 **The same harness as a private web page (the scorer):** https://huggingface.co/spaces/MO-AI-Inv/icaif2026-holdout.
 - **How it runs.** It's a static Space, because Gradio Spaces need a paid HF plan. It runs
-  in the browser on Pyodide 0.29.5 and takes about 3 s per file.
+  in the browser on Pyodide 0.29.5. A full file (every round of every window) scores
+  natively in ~2 s; expect several times that in the browser.
 - **What it ships.** `tools/build_holdout_space.py [--push]` rebuilds it from a fixed list
   of files: the harness modules and 2026 fill prices only. It checks that the page's
   entry point matches the CLI before uploading.
@@ -134,12 +144,12 @@ across windows as a histogram. Bins are shared down a column, so shapes compare 
   board. Or run `tools/holdout_eval.py --decisions F --submit --note "..."`. Only the
   board's span and `pre_fee` sizing are accepted.
 - **In-repo strategies** are submitted with `tools/submit_strategy.py NAME [--dry]`, which
-  runs them fresh in every window as the references are. A decisions-file replay would
-  start each window in cash, and a book that decides from its own holdings would sit
-  there until its next rebalance. First entry: `model_tilt_0.5` ranks 3rd of 4
-  (2.74 ± 0.14), behind cash and inv_vol_hold_75, despite the best full-span Sharpe (1.67).
+  runs them fresh in every window as the references are: the same thing a decisions
+  file now writes down. First entry: `model_tilt_0.5` ranked 3rd of 4 (2.74 ± 0.14),
+  behind cash and inv_vol_hold_75, despite the best six-month Sharpe (1.67).
 - **Versions.** Only the newest version of a name ranks. Older ones are listed, so the
-  number of looks at the holdout stays visible.
+  number of looks at the holdout stays visible. Entries scored under the old one-run
+  format (schema 1) are listed as "old format" and never ranked; resubmit them.
 - **Three repos, fixed visibility** (`icaif/space_hub.py`):
   - the scorer Space is private, because it carries Alpaca prices and the kit;
   - the entry dataset `MO-AI-Inv/icaif2026-holdout-entries` is private and is the record;
@@ -149,9 +159,9 @@ across windows as a histogram. Bins are shared down a column, so shapes compare 
   there: Netskope blocks authenticated HF downloads. If that copy fails, run
   `tools/build_holdout_space.py --sync` off that network.
 
-Equal weight at every round, the sanity baseline, scores return 6.50%, Sharpe 1.05,
-MDD 8.68% and turnover 0.59% continuously on Jan–Jun. In windows, its median return is
-−0.06%.
+Equal weight bought at each window's first round and held (`ew_hold`, the sanity
+baseline) scores a mean window return of 0.67% and a median of −0.11%, with a median
+window drawdown of 2.40% and turnover of 0.95% (one full buy from cash) in every window.
 
 ## Features and labels (`tools/feature_report.py`)
 

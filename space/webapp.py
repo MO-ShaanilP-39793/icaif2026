@@ -59,12 +59,14 @@ def score(path: str, start: str, end: str, strict: bool, sizing: str) -> str:
         # the harness disagrees with would read as a real result.
         return json.dumps({"rejected": str(err)})
 
-    summary, res = holdout.continuous(dec, market, start_d, end_d, sizing)
-    wins, skipped = holdout.rolling(dec, market, start_d, end_d, sizing=sizing)
+    wins, skipped = holdout.rolling(dec, market, sizing=sizing)
     roll = holdout.summarise_rolling(wins)
-    report = {**summary, "strategy": dec.strategy, "sizing": sizing, "fills": "alpaca",
-              "market_snapshot": meta["snapshot"], "missing": dec.missing,
-              "invalid": dec.invalid, "windows": roll.attrs["windows"],
+    days = holdout.span_days(market, start_d, end_d)
+    report = {"strategy": dec.strategy, "sizing": sizing, "fills": "alpaca",
+              "market_snapshot": meta["snapshot"],
+              "first_day": str(days[0]), "last_day": str(days[-1]), "trading_days": len(days),
+              "rounds": sum(len(w) for w in dec.windows.values()),
+              "missing": dec.missing, "invalid": dec.invalid, "windows": roll.attrs["windows"],
               "independent_windows": roll.attrs["independent_windows"],
               "skipped_window_starts": skipped}
     # The entry the page would submit. Only the board's own span and sizing can rank,
@@ -72,23 +74,20 @@ def score(path: str, start: str, end: str, strict: bool, sizing: str) -> str:
     on_board = (start_d, end_d, sizing) == (holdout.HOLDOUT_START, holdout.HOLDOUT_END,
                                             leaderboard.BOARD_SIZING)
     entry = leaderboard.make_entry(
-        dec.strategy, leaderboard.SUBMITTED, summary, wins, span=(start_d, end_d),
+        dec.strategy, leaderboard.SUBMITTED, wins, span=(start_d, end_d),
         sizing=sizing, market_snapshot=meta["snapshot"],
         decisions_sha256=hashlib.sha256(Path(path).read_bytes()).hexdigest())
     return json.dumps({
         "entry": entry if on_board else None,
         "report": report,
-        "continuous": {k: summary[k] for k in holdout.METRICS},
         "rolling": roll.reset_index(names="metric").to_dict(orient="records"),
         "windows": wins.to_dict(orient="records"),
         "files": {
-            "continuous.json": json.dumps(report, indent=1),
-            "equity.csv": holdout.equity_curve(res).to_csv(index=False),
+            "report.json": json.dumps(report, indent=1),
             "windows.csv": wins.to_csv(index=False),
             "rolling_summary.csv": roll.to_csv(),
         },
     })
-
 
 
 def boot() -> None:

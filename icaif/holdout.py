@@ -1,27 +1,30 @@
 """Score an agent's decisions, handed over as one JSON file, on a held-out span.
 
-The agent runs somewhere else and writes, for every round, a cash weight and all 30
-stock weights. The file goes through the same ledger (`sim.run`) and the same kit
-metrics as every backtest in this repo. It is scored two ways:
-
-- one continuous run from $1M across the whole span, and
-- a fresh $1M in every 15-day window starting on each trading day, because the
-  official phase is one such window, and a long equity curve says little about a
-  15-day rank (`windows.py`).
-
-Input shape:
+The official phase is one 15-day window that every entrant starts from $1M in cash. So
+the harness scores a fresh $1M in every 15-day window starting on each trading day of
+the span (`windows.py`), and the file carries one decision sequence per window: the
+agent run as itself from that window's first round, as it would be in the contest.
 
     {"strategy": "my_agent",
-     "decisions": [{"round_id": "holdout-2026-01-02-r1", "cash": 0.25,
-                    "weights": {<all 30 symbols>: number}}, ...]}
+     "windows": {"2026-01-02": [{"round_id": "holdout-2026-01-02-r1", "cash": 0.25,
+                                 "weights": {<all 30 symbols>: number}}, ...],
+                 "2026-01-05": [...], ...}}
+
+The file used to hold one continuous run, replayed into every window from cash. That
+scored a different strategy from the one the agent is. An equal-weight buy-and-hold
+written that way bought, in a March window, the weights that had drifted since 2 Jan,
+not 1/30 each; and an agent that decides from its own book (a drawdown stop, profit
+booking, a band around its holdings) saw a book it never had. The old shape is rejected
+by name, not accepted alongside: both would rank side by side with nothing to tell
+them apart.
 
 Two kinds of error are treated differently, as the backend treats them:
 
-- **Structural errors reject the file before anything runs**: a malformed, duplicate
-  or non-existent round, a wrong symbol set, or a cash weight that disagrees with the
-  stock weights. Each is a sign the agent and the harness disagree about what a round
-  is. Scoring the file anyway would produce a clean number for a run that never
-  happened.
+- **Structural errors reject the file before anything runs**: a window that is missing
+  or does not exist, a malformed, duplicate or out-of-window round, a wrong symbol set,
+  or a cash weight that disagrees with the stock weights. Each is a sign the agent and
+  the harness disagree about what a window or round is. Scoring the file anyway would
+  produce a clean number for a run that never happened.
 - **Weight-rule failures and missing rounds hold**, exactly as the backend holds
   them: over the cap, negative, a total over 1, or float dust like 0.1 + 0.2. They
   are scored as holds and listed, because the same file uploaded live would hold
@@ -49,27 +52,31 @@ HOLDOUT_START = date(2026, 1, 2)
 HOLDOUT_END = date(2026, 6, 30)
 CASH_TOLERANCE = Decimal("1e-9")
 METRICS = ("cumulative_return", "sharpe_ratio", "maximum_drawdown", "turnover")
+# A systematic mistake repeats in every window; 11,000 identical lines bury the first.
+MAX_LISTED_ERRORS = 25
 
 _ROUND_ID = re.compile(r"^[a-z]+-(\d{4}-\d{2}-\d{2})-r(\d+)$")
 
 
 class DecisionFileError(ValueError):
-    """The file cannot be scored; every offending round is named in the message."""
+    """The file cannot be scored; the offending windows and rounds are named."""
 
 
 @dataclass
 class Decisions:
     strategy: str
-    weights: dict                     # (day, round) -> {ticker: Decimal}
-    expected: list                    # every (day, round) in the span, in order
-    missing: list = field(default_factory=list)   # rounds the file leaves out
-    invalid: list = field(default_factory=list)   # rounds that break a weight rule
+    windows: dict                     # window start -> {(day, round): {ticker: Decimal}}
+    spans: dict                       # window start -> its trading days, scored windows only
+    skipped: list = field(default_factory=list)   # starts of windows on a degraded day
+    missing: list = field(default_factory=list)   # "<window start> <round_id>", held
+    invalid: list = field(default_factory=list)   # rounds that break a weight rule, held
 
-    def strategy_fn(self):
+    def strategy_fn(self, start: date):
         # A missing round returns None, which `sim.run` holds, as the backend does.
         # Defined here rather than borrowing `rankplay._Replay`: that module pulls in the
         # strategy code, and the hosted harness must ship without it.
-        return lambda ctx: self.weights.get((ctx.day, ctx.round))
+        plan = self.windows[start]
+        return lambda ctx: plan.get((ctx.day, ctx.round))
 
 
 def span_days(market: sim.Market, start: date, end: date) -> list[date]:
@@ -82,37 +89,104 @@ def span_days(market: sim.Market, start: date, end: date) -> list[date]:
     return days
 
 
+def window_spans(market: sim.Market, start: date, end: date, n_days: int = WINDOW_DAYS):
+    """Every n_days window starting on a trading day of the span: (scored, skipped starts).
+
+    A window touching a degraded day is skipped and named: its stand-in prices make it
+    look calmer than the market was.
+    """
+    days = span_days(market, start, end)
+    degraded = set(market.issues.get("degraded_days", []))
+    scored, skipped = {}, []
+    for i in range(len(days) - n_days + 1):
+        span = days[i:i + n_days]
+        if degraded & {str(d) for d in span}:
+            skipped.append(str(span[0]))
+        else:
+            scored[span[0]] = span
+    return scored, skipped
+
+
 def round_id(day: date, round_no: int, phase: str = "holdout") -> str:
     return f"{phase}-{day.isoformat()}-r{round_no}"
 
 
 def load_decisions(path, market: sim.Market, start: date = HOLDOUT_START,
-                   end: date = HOLDOUT_END, strict: bool = False) -> Decisions:
+                   end: date = HOLDOUT_END, strict: bool = False,
+                   n_days: int = WINDOW_DAYS) -> Decisions:
     """Parse and check a decisions file against the market's calendar for the span."""
     raw = Path(path).read_text()
     doc = json.loads(raw, parse_float=Decimal, parse_constant=_reject_constant)
-    if not isinstance(doc, dict) or not isinstance(doc.get("decisions"), list):
-        raise DecisionFileError('expected {"strategy": ..., "decisions": [...]}')
+    if isinstance(doc, dict) and "decisions" in doc and "windows" not in doc:
+        raise DecisionFileError(
+            'this is the old one-run format ("decisions": [...]). Each 15-day window now '
+            'has its own decisions, the agent run from cash at that window\'s first round: '
+            '{"strategy": ..., "windows": {"YYYY-MM-DD": [...], ...}}. '
+            "tools/holdout_template.py writes the new shape.")
+    if not isinstance(doc, dict) or not isinstance(doc.get("windows"), dict):
+        raise DecisionFileError('expected {"strategy": ..., "windows": {"YYYY-MM-DD": [...]}}')
     strategy = str(doc.get("strategy") or Path(path).stem)
 
-    days = span_days(market, start, end)
-    expected = [(d, r["round"]) for d in days for r in calendar.rounds_for(d)]
-    valid = set(expected)
+    spans, skipped = window_spans(market, start, end, n_days)
     tickers = set(market.tickers)
+    errors, windows, missing, invalid = [], {}, [], []
+    given = {}
+    for key, entries in doc["windows"].items():
+        try:
+            ws = date.fromisoformat(key)
+        except ValueError:
+            errors.append(f"window {key!r}: not a YYYY-MM-DD start day")
+            continue
+        if key in skipped:
+            continue   # touches a degraded day; not scored, so not checked
+        if ws not in spans:
+            errors.append(f"window {key}: no {n_days}-day window starts there in {start}..{end} "
+                          "(not a trading day, or too close to the end)")
+            continue
+        if not isinstance(entries, list):
+            errors.append(f"window {key}: expected a list of decisions")
+            continue
+        given[ws] = entries
+    for ws in spans:
+        if ws not in given and not any(e.startswith(f"window {ws}") for e in errors):
+            errors.append(f"window {ws}: no decisions. Every window is scored, each from "
+                          "cash by its own run")
 
+    for ws, entries in given.items():
+        expected = [(d, r["round"]) for d in spans[ws] for r in calendar.rounds_for(d)]
+        weights, errs, bad = _parse_rounds(entries, set(expected), tickers, f"window {ws}")
+        errors.extend(errs)
+        windows[ws] = weights
+        invalid.extend({"window": str(ws), **b} for b in bad)
+        missing.extend(f"{ws} {round_id(d, r)}" for d, r in expected if (d, r) not in weights)
+
+    if errors:
+        listed = "\n  ".join(errors[:MAX_LISTED_ERRORS])
+        more = f"\n  ... and {len(errors) - MAX_LISTED_ERRORS} more" if len(errors) > MAX_LISTED_ERRORS else ""
+        raise DecisionFileError(f"{len(errors)} problem(s) in {path}:\n  {listed}{more}")
+    if strict and (missing or invalid):
+        raise DecisionFileError(
+            f"strict: {len(missing)} missing round(s), {len(invalid)} invalid round(s); "
+            f"first missing {missing[:5]}, first invalid {invalid[:5]}")
+    ordered = {ws: windows[ws] for ws in spans}
+    return Decisions(strategy, ordered, spans, skipped, missing, invalid)
+
+
+def _parse_rounds(entries: list, valid: set, tickers: set, where_window: str):
+    """One window's decisions: (weights by (day, round), structural errors, held rounds)."""
     errors, weights, invalid = [], {}, []
-    for i, entry in enumerate(doc["decisions"]):
+    for i, entry in enumerate(entries):
         rid = entry.get("round_id") if isinstance(entry, dict) else None
-        where = f"decision {i} ({rid!r})"
+        where = f"{where_window} decision {i} ({rid!r})"
         m = _ROUND_ID.match(rid) if isinstance(rid, str) else None
         if m is None:
             errors.append(f"{where}: round_id is not <phase>-YYYY-MM-DD-r<n>")
             continue
         key = (date.fromisoformat(m.group(1)), int(m.group(2)))
         if key not in valid:
-            errors.append(f"{where}: no such round in {start}..{end} "
+            errors.append(f"{where}: no such round in this window "
                           "(weekend, holiday, a round cancelled by an early close, "
-                          "or outside the span)")
+                          "or outside the window's 15 days)")
             continue
         if key in weights:
             errors.append(f"{where}: a second decision for the same round")
@@ -139,40 +213,11 @@ def load_decisions(path, market: sim.Market, start: date = HOLDOUT_START,
         implied = Decimal(1) - sum(Decimal(v) for v in w.values())
         if abs(Decimal(cash) - implied) > CASH_TOLERANCE:
             errors.append(f"{where}: cash {cash} but the stock weights leave {implied}")
-
-    if errors:
-        raise DecisionFileError(f"{len(errors)} problem(s) in {path}:\n  " + "\n  ".join(errors))
-
-    missing = [round_id(d, r) for d, r in expected if (d, r) not in weights]
-    if strict and (missing or invalid):
-        raise DecisionFileError(
-            f"strict: {len(missing)} missing round(s), {len(invalid)} invalid round(s); "
-            f"first missing {missing[:5]}, first invalid {invalid[:5]}")
-    return Decisions(strategy, weights, expected, missing, invalid)
+    return weights, errors, invalid
 
 
 def _reject_constant(name):
     raise DecisionFileError(f"{name} is not a JSON number the backend accepts")
-
-
-def continuous(decisions: Decisions, market: sim.Market, start: date = HOLDOUT_START,
-               end: date = HOLDOUT_END, sizing: str = "pre_fee"):
-    """One run from $1M over every trading day in the span. Returns (summary, Result)."""
-    days = span_days(market, start, end)
-    res = sim.run(decisions.strategy_fn(), market, days[0], len(days), sizing=sizing)
-    degraded = [d for d in market.issues.get("degraded_days", [])
-                if str(days[0]) <= d <= str(days[-1])]
-    summary = {
-        **res.metrics(),
-        "first_day": str(days[0]), "last_day": str(days[-1]), "trading_days": len(days),
-        "rounds": len(res.periods),
-        "missing_rounds": len(decisions.missing),
-        "invalid_rounds": len(res.invalid_rounds),
-        # A stand-in price inside the run is a zero return that never happened; the
-        # continuous run cannot skip it, so it is named instead.
-        "degraded_days": degraded,
-    }
-    return summary, res
 
 
 def market_from_frames(exec_prices: pd.DataFrame, closes: pd.DataFrame,
@@ -187,48 +232,38 @@ def market_from_frames(exec_prices: pd.DataFrame, closes: pd.DataFrame,
     return sim.Market(exec_prices, closes, info, issues={"degraded_days": list(degraded_days)})
 
 
-def equity_curve(res: sim.Result) -> pd.DataFrame:
-    times = ["initial"] + [str(t) for t in res.valuation_times[1:]]
-    return pd.DataFrame({"time": times, "nav": res.valuation_points})
+def _window_row(res: sim.Result, span: list, n_missing: int) -> dict:
+    return {"window_start": str(span[0]), "window_end": str(span[-1]), **res.metrics(),
+            "missing_rounds": n_missing, "invalid_rounds": len(res.invalid_rounds)}
 
 
-def rolling(decisions: Decisions, market: sim.Market, start: date = HOLDOUT_START,
-            end: date = HOLDOUT_END, n_days: int = WINDOW_DAYS, sizing: str = "pre_fee"):
-    """A fresh $1M in every `n_days` window starting on each trading day of the span.
+def rolling(decisions: Decisions, market: sim.Market, sizing: str = "pre_fee"):
+    """A fresh $1M in every window, each running that window's own decisions.
 
-    Returns (per-window DataFrame, skipped starts). A window touching a degraded day is
-    skipped and named: its stand-in prices make it look calmer than the market was.
-
-    Each window replays the same decisions as the continuous run. Weights resize off
-    the window's own NAV, so the ledger is right, but an agent whose choices depend on
-    its own holdings would have chosen differently starting from cash.
+    Returns (per-window DataFrame, skipped starts), in the shape of `rolling_runs`.
     """
-    return rolling_runs(decisions.strategy_fn, market, start, end, n_days, sizing,
-                        missing=set(decisions.missing))
+    n_missing = {}
+    for m in decisions.missing:
+        n_missing[m.split(" ", 1)[0]] = n_missing.get(m.split(" ", 1)[0], 0) + 1
+    rows = []
+    for ws, span in decisions.spans.items():
+        res = sim.run(decisions.strategy_fn(ws), market, span[0], len(span), sizing=sizing)
+        rows.append(_window_row(res, span, n_missing.get(str(ws), 0)))
+    return pd.DataFrame(rows), list(decisions.skipped)
 
 
 def rolling_runs(factory, market: sim.Market, start: date = HOLDOUT_START,
                  end: date = HOLDOUT_END, n_days: int = WINDOW_DAYS,
-                 sizing: str = "pre_fee", missing=frozenset()):
+                 sizing: str = "pre_fee"):
     """`rolling` for any strategy factory, one fresh instance per window.
 
     The leaderboard's reference strategies run here as themselves, so a stateful one
-    such as a buy-and-hold starts each window in cash, as it would in the contest.
+    such as a buy-and-hold starts each window in cash, as it would in the contest. A
+    decisions file holds the same thing written down: one run per window.
     """
-    days = span_days(market, start, end)
-    degraded = set(market.issues.get("degraded_days", []))
-    rows, skipped = [], []
-    for i in range(len(days) - n_days + 1):
-        span = days[i:i + n_days]
-        if degraded & {str(d) for d in span}:
-            skipped.append(str(span[0]))
-            continue
-        res = sim.run(factory(), market, span[0], n_days, sizing=sizing)
-        n_missing = sum(round_id(d, r["round"]) in missing
-                        for d in span for r in calendar.rounds_for(d))
-        rows.append({"window_start": str(span[0]), "window_end": str(span[-1]),
-                     **res.metrics(), "missing_rounds": n_missing,
-                     "invalid_rounds": len(res.invalid_rounds)})
+    spans, skipped = window_spans(market, start, end, n_days)
+    rows = [_window_row(sim.run(factory(), market, span[0], n_days, sizing=sizing), span, 0)
+            for span in spans.values()]
     return pd.DataFrame(rows), skipped
 
 

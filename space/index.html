@@ -103,7 +103,7 @@
 
   <section id="results" hidden>
     <div id="notes"></div>
-    <h2>Continuous run from $1M</h2>
+    <h2>Mean across windows</h2>
     <div class="tiles" id="tiles"></div>
     <h2>Rolling 15-day windows</h2>
     <p class="muted" id="rollnote"></p>
@@ -135,8 +135,18 @@
   <h2>File format</h2>
   <div class="panel">
     <pre style="margin:0;overflow-x:auto"><code>{"strategy": "my_agent",
- "decisions": [{"round_id": "holdout-2026-01-02-r1", "cash": 0.25,
-                "weights": {"AAPL": 0.03, "...": "all 30 symbols"}}]}</code></pre>
+ "windows": {
+   "2026-01-02": [{"round_id": "holdout-2026-01-02-r1", "cash": 0.25,
+                   "weights": {"AAPL": 0.03, "...": "all 30 symbols"}}, ...],
+   "2026-01-05": [...],
+   "...": "one key per window: every trading day that starts a full 15-day window"}}</code></pre>
+    <p class="muted"><strong>One run per window.</strong> The contest starts every entrant
+      from $1M in cash, so each window's list is your agent run from cash at that window's
+      first round, for its 15 trading days (~105 rounds). An equal-weight buy-and-hold buys
+      1/30 each at the first round of <em>every</em> window. The old one-run
+      <code>"decisions"</code> file is rejected: replayed into each window, it scored a
+      different strategy from the one your agent is. <code>tools/holdout_template.py</code>
+      writes an example in this shape.</p>
     <p class="muted"><strong>Sizing.</strong> <code>pre_fee</code> (default) sizes each target
       on NAV before the 0.1% fee and takes the fee from cash, so a fully invested book ends
       the round with slightly negative cash. <code>post_fee</code> shrinks the targets so the
@@ -147,8 +157,8 @@
       1–4 only. <code>cash</code> must equal 1 − Σweights to within 1e-9. The file is
       rejected for a round that doesn't exist, a duplicate round or a wrong symbol set.
       A missing round, or a weight that breaks a rule (over 0.30, a total over 1, float
-      dust), holds the round the way the backend would, and is listed. Every window
-      restarts from $1M in cash and replays the same decisions.</p>
+      dust), holds the round the way the backend would, and is listed. A missing window,
+      or a key that doesn't start one, rejects the file.</p>
   </div>
 </main>
 
@@ -342,7 +352,7 @@
     $("go").disabled = true;
     $("results").hidden = true;
     $("rejected").hidden = true;
-    $("status").textContent = "Scoring… (the rolling windows take a little while)";
+    $("status").textContent = "Scoring… (each window is its own run; this takes a little while)";
     started = performance.now();
     worker.postMessage({ name: f.name, text: await f.text(), start: $("start").value,
                          end: $("end").value, strict: $("strict").checked, sizing: $("sizing").value });
@@ -361,17 +371,16 @@
     }
     const r = out.report;
     const notes = [`<p><strong>${esc(r.strategy)}</strong>: ${r.first_day} to ${r.last_day},
-      ${r.trading_days} trading days, ${r.rounds} rounds, <code>${esc(r.sizing)}</code> sizing.</p>`];
+      ${r.trading_days} trading days, ${r.windows} windows of 15 days, ${r.rounds} decisions in all,
+      <code>${esc(r.sizing)}</code> sizing.</p>`];
     if (r.missing.length || r.invalid.length)
       notes.push(`<div class="note warn"><strong>Held:</strong> ${r.missing.length} missing and
         ${r.invalid.length} invalid round(s) were scored as holds, the way the backend would.
-        They are listed in continuous.json.</div>`);
-    if (r.degraded_days.length)
-      notes.push(`<div class="note warn">Stand-in prices inside the continuous run on ${esc(r.degraded_days.join(", "))}.</div>`);
+        They are listed in report.json.</div>`);
     $("notes").innerHTML = notes.join("");
 
     $("tiles").innerHTML = METRICS.map((k) =>
-      `<div class="panel tile"><div class="k">${LABELS[k]}</div><div class="v">${fmt(k, out.continuous[k])}</div></div>`).join("");
+      `<div class="panel tile"><div class="k">${LABELS[k]}</div><div class="v">${fmt(k, out.rolling.find((x) => x.metric === k).mean)}</div></div>`).join("");
 
     $("rollnote").textContent = `${r.windows} windows, about ${r.independent_windows} independent
       (neighbours share 14 of 15 days); ${r.skipped_window_starts.length} skipped for degraded days.`;

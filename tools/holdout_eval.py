@@ -5,18 +5,16 @@
         [--out output/holdout/<strategy>/<ts>/]
         [--submit [--name NAME] [--author WHO] [--note TEXT]]
 
-Two views, both on Alpaca :30 fills (markets.research_market):
-- one continuous run from $1M over the span: continuous.json, equity.csv;
-- a fresh $1M in every 15-day window starting on each trading day: windows.csv,
-  rolling_summary.csv.
+On Alpaca :30 fills (markets.research_market), a fresh $1M in every 15-day window
+starting on each trading day, each running that window's own decisions: report.json,
+windows.csv, rolling_summary.csv.
 
 --submit also posts the result (metrics and window table, never the decisions file) to
 the public leaderboard, recorded first in the private entry dataset (icaif/space_hub.py). It only accepts the board's
 own span and sizing, since an entry scored on other windows cannot be ranked against it.
 
-The file format and which errors reject it are in icaif/holdout.py. Each window replays
-the same decisions from cash, so an agent that decides from its own holdings is only
-approximately scored per window.
+The file format (one decision sequence per window) and which errors reject it are in
+icaif/holdout.py; tools/holdout_template.py writes an example.
 """
 
 import argparse
@@ -58,35 +56,30 @@ def main() -> None:
     except holdout.DecisionFileError as err:
         sys.exit(f"rejected: {err}")
 
-    summary, res = holdout.continuous(dec, market, args.start, args.end, args.sizing)
-    wins, skipped = holdout.rolling(dec, market, args.start, args.end, sizing=args.sizing)
+    wins, skipped = holdout.rolling(dec, market, sizing=args.sizing)
     roll = holdout.summarise_rolling(wins)
+    days = holdout.span_days(market, args.start, args.end)
 
     out = args.out or (data.ROOT / "output" / "holdout" / dec.strategy
                        / datetime.now().strftime("%Y%m%d-%H%M%S"))
     out.mkdir(parents=True, exist_ok=True)
     report = {"strategy": dec.strategy, "decisions_file": str(args.decisions),
-              "sizing": args.sizing, "fills": "alpaca", **summary,
+              "sizing": args.sizing, "fills": "alpaca",
+              "first_day": str(days[0]), "last_day": str(days[-1]), "trading_days": len(days),
               "missing": dec.missing, "invalid": dec.invalid,
               "windows": roll.attrs["windows"],
               "independent_windows": roll.attrs["independent_windows"],
               "skipped_window_starts": skipped}
-    (out / "continuous.json").write_text(json.dumps(report, indent=1))
-    holdout.equity_curve(res).to_csv(out / "equity.csv", index=False)
+    (out / "report.json").write_text(json.dumps(report, indent=1))
     wins.to_csv(out / "windows.csv", index=False)
     roll.to_csv(out / "rolling_summary.csv")
 
-    print(f"{dec.strategy}: {summary['first_day']}..{summary['last_day']}, "
-          f"{summary['trading_days']} days, {summary['rounds']} rounds")
+    print(f"{dec.strategy}: {days[0]}..{days[-1]}, {len(days)} days, "
+          f"{sum(len(w) for w in dec.windows.values())} decisions")
     if dec.missing or dec.invalid:
         print(f"  HELD: {len(dec.missing)} missing round(s), {len(dec.invalid)} invalid "
-              f"round(s); listed in continuous.json")
-    if summary["degraded_days"]:
-        print(f"  stand-in prices on {summary['degraded_days']} (inside the continuous run)")
-    print("\ncontinuous run")
-    for k in holdout.METRICS:
-        print(f"  {k:<18} {summary[k]: .4f}")
-    print(f"\n{roll.attrs['windows']} rolling 15-day windows "
+              f"round(s) across all windows; listed in report.json")
+    print(f"\n{roll.attrs['windows']} rolling 15-day windows, each its own run from cash "
           f"(~{roll.attrs['independent_windows']} independent; "
           f"{len(skipped)} skipped for degraded days)")
     print(roll.round(4).to_string())
@@ -95,7 +88,7 @@ def main() -> None:
     if args.submit:
         snapshot = sorted((data.ROOT / "data" / "public").glob("alpaca_30m_2*.parquet"))[-1].name
         entry = leaderboard.make_entry(
-            args.name or dec.strategy, leaderboard.SUBMITTED, summary, wins,
+            args.name or dec.strategy, leaderboard.SUBMITTED, wins,
             span=(args.start, args.end), sizing=args.sizing, market_snapshot=snapshot,
             author=args.author or space_hub.whoami(), note=args.note,
             decisions_sha256=hashlib.sha256(args.decisions.read_bytes()).hexdigest())

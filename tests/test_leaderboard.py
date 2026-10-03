@@ -12,11 +12,10 @@ def _entry(name, per_window, kind=lb.SUBMITTED, at="2026-09-30T10:00:00Z", **kw)
     """`per_window`: one (return, sharpe, mdd, turnover) tuple per window."""
     wins = pd.DataFrame([{"window_start": s, "window_end": e,
                           **dict(zip(lb.METRICS, m))} for (s, e), m in zip(WINDOWS, per_window)])
-    cont = dict(zip(lb.METRICS, per_window[0]))
     args = dict(span=SPAN, sizing="pre_fee", market_snapshot="snap", author="a",
                 submitted_at=at)
     args.update(kw)
-    return lb.make_entry(name, kind, cont, wins, **args)
+    return lb.make_entry(name, kind, wins, **args)
 
 
 CASH = _entry("cash", [(0, 0, 0, 0)] * 3, kind=lb.REFERENCE, submitted_at="")
@@ -48,8 +47,8 @@ def test_only_the_newest_version_ranks_and_every_version_is_counted():
 
     assert [r["strategy"] for r in b["rows"]].count("a") == 1
     assert row["versions"] == 2
-    assert row["continuous_cumulative_return"] == 0.0
-    assert [h["ranked"] for h in b["history"]] == [True, False]
+    assert row["mean_window_cumulative_return"] == 0.0
+    assert [h["status"] for h in b["history"]] == ["ranked", "superseded"]
 
 
 def test_an_entry_on_different_windows_is_left_off_and_named_not_ranked_on_a_subset():
@@ -112,7 +111,7 @@ def test_the_non_overlapping_windows_carry_the_boards_own_ranks_and_no_shared_da
     def entry(name, per_window, kind=lb.SUBMITTED):
         df = pd.DataFrame([{"window_start": s, "window_end": e, **dict(zip(lb.METRICS, m))}
                            for (s, e), m in zip(wins, per_window)])
-        return lb.make_entry(name, kind, dict(zip(lb.METRICS, per_window[0])), df, span=SPAN,
+        return lb.make_entry(name, kind, df, span=SPAN,
                              sizing="pre_fee", market_snapshot="snap",
                              submitted_at="" if kind == lb.REFERENCE else "2026-09-30T10:00:00Z")
 
@@ -133,3 +132,33 @@ def test_the_non_overlapping_windows_carry_the_boards_own_ranks_and_no_shared_da
         assert w["cumulative_return"] == a["windows"][i]["cumulative_return"]
     assert row["mean_disjoint_overall_score"] == pytest.approx(
         sum(w["overall_score"] for w in row["disjoint"]) / 2)
+
+
+def _old_format(entry):
+    """A schema-1 entry as the board holds them: a six-month run replayed into windows."""
+    return {**entry, "schema": 1, "continuous": dict.fromkeys(lb.METRICS, 0.0)}
+
+
+def test_an_entry_scored_by_replaying_one_run_is_listed_but_never_ranked():
+    """A replayed run scored a different strategy from the agent for anything that decides
+    from its own book. Ranked beside per-window entries, the two would look alike."""
+    old = _old_format(_entry("a", [(0.05, 5.0, 0.0, 0.0)] * 3))
+    b = lb.standings([CASH, EW, old])
+
+    assert {r["strategy"] for r in b["rows"]} == {"cash", "ew_hold"}
+    assert [e["strategy"] for e in b["excluded"]] == ["a"]
+    assert "resubmit" in b["excluded"][0]["reason"]
+    assert [h["status"] for h in b["history"]] == ["old format"]
+
+
+def test_a_resubmission_ranks_and_its_old_format_versions_still_count_as_looks():
+    """Dropping old versions from the count would hide how often the holdout was looked
+    at; still naming them as excluded would say the strategy is off the board when it is on it."""
+    old = _old_format(_entry("a", [(0.05, 5.0, 0.0, 0.0)] * 3, at="2026-09-29T10:00:00Z"))
+    new = _entry("a", [(0.01, 1.0, 0.01, 0.01)] * 3, at="2026-10-03T10:00:00Z")
+    b = lb.standings([CASH, EW, old, new])
+    row = next(r for r in b["rows"] if r["strategy"] == "a")
+
+    assert row["versions"] == 2 and row["mean_window_cumulative_return"] == 0.01
+    assert b["excluded"] == []
+    assert [h["status"] for h in b["history"]] == ["ranked", "old format"]

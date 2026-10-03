@@ -41,7 +41,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "space"))
 
 import webapp  # noqa: E402
-from icaif import baselines, calendar, data, holdout, leaderboard, markets, sim, space_hub  # noqa: E402
+from icaif import baselines, calendar, data, holdout, leaderboard, markets, space_hub  # noqa: E402
 
 REPO_ID = space_hub.REPO_ID
 # Static because a Gradio Space needs a paid plan: Team/Enterprise for the org, PRO for
@@ -146,14 +146,11 @@ REFERENCES = {
 def write_references(out: Path, market, snapshot: str) -> list[str]:
     (out / "references").mkdir()
     start, end = holdout.HOLDOUT_START, holdout.HOLDOUT_END
-    days = holdout.span_days(market, start, end)
     paths = []
     for name, (factory, note) in REFERENCES.items():
-        res = sim.run(factory(), market, days[0], len(days))
         wins, _ = holdout.rolling_runs(factory, market, start, end)
         entry = leaderboard.make_entry(
-            name, leaderboard.REFERENCE, {**res.metrics(), "invalid_rounds": len(res.invalid_rounds)},
-            wins, span=(start, end), sizing=leaderboard.BOARD_SIZING,
+            name, leaderboard.REFERENCE, wins, span=(start, end), sizing=leaderboard.BOARD_SIZING,
             market_snapshot=snapshot, author="baseline", note=note, submitted_at="")
         path = f"references/{name}.json"
         (out / path).write_text(json.dumps(entry))
@@ -217,7 +214,8 @@ print(json.dumps(loaded))
 def parity(out: Path) -> None:
     """The page's entry point, on the shipped CSVs, must score a file as the CLI does.
 
-    A file that rebalances only at rounds 1 and 4 exercises holds as well as trades.
+    A file that rebalances only at rounds 1 and 4 exercises holds as well as trades,
+    and its weights differ by window, so a window scored with another's decisions shows.
     """
     full = markets.research_market("alpaca")
     webapp._MARKET = webapp.load_market(out)
@@ -225,15 +223,16 @@ def parity(out: Path) -> None:
     if not (trimmed.exec_prices.equals(full.exec_prices.loc[trimmed.exec_prices.index])
             and trimmed.closes.equals(full.closes.loc[trimmed.closes.index])):
         sys.exit("shipped prices are not bit-identical to the full market's")
-    w = {t: 1 / 40 for t in full.tickers}
-    cash = 1 - sum(w.values())
-    days = holdout.span_days(full, holdout.HOLDOUT_START, holdout.HOLDOUT_END)
-    rows = [{"round_id": holdout.round_id(d, r["round"]), "cash": cash, "weights": w}
-            for d in days for r in calendar.rounds_for(d) if r["round"] in (1, 4)]
+    spans, _ = holdout.window_spans(full, holdout.HOLDOUT_START, holdout.HOLDOUT_END)
+    windows = {}
+    for i, (ws, span) in enumerate(spans.items()):
+        w = {t: (1 / 40 if (j + i) % 3 else 1 / 50) for j, t in enumerate(full.tickers)}
+        cash = 1 - sum(w.values())
+        windows[str(ws)] = [{"round_id": holdout.round_id(d, r["round"]), "cash": cash, "weights": w}
+                            for d in span for r in calendar.rounds_for(d) if r["round"] in (1, 4)]
     probe = out.parent / "space_parity.json"
-    probe.write_text(json.dumps({"strategy": "parity", "decisions": rows}))
+    probe.write_text(json.dumps({"strategy": "parity", "windows": windows}))
     dec = holdout.load_decisions(probe, full)
-    a, _ = holdout.continuous(dec, full)
     a_roll, _ = holdout.rolling(dec, full)
     page = json.loads(webapp.score(str(probe), str(holdout.HOLDOUT_START),
                                    str(holdout.HOLDOUT_END), False, "pre_fee"))
@@ -242,8 +241,7 @@ def parity(out: Path) -> None:
     # Prices are bitwise equal; the last digits differ only because numpy's dot product
     # sums in an order that depends on memory layout. Anything above 1e-12 is data.
     close = lambda x, y: abs(x - y) <= 1e-12 * max(1.0, abs(x))  # noqa: E731
-    diff = {k: (a[k], page["continuous"][k]) for k in holdout.METRICS
-            if not close(a[k], page["continuous"][k])}
+    diff = {}
     if len(b_roll) != len(a_roll):
         diff["windows"] = (len(a_roll), len(b_roll))
     else:
@@ -252,7 +250,7 @@ def parity(out: Path) -> None:
                      for k in holdout.METRICS if not close(row[k], w[k])})
     if diff:
         sys.exit(f"the page's entry point scores differently from the CLI: {diff}")
-    print(f"page entry point matches the CLI: continuous run and {len(b_roll)} windows (to 1e-12)")
+    print(f"page entry point matches the CLI: {len(b_roll)} windows (to 1e-12)")
 
 
 def main() -> None:

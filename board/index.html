@@ -137,9 +137,13 @@
     <p>Neighbouring windows share 14 of 15 days, so the ± is a standard error on the number of
       windows that share no day. Two entrants within about two of it are not ordered. Ranks are
       relative to the board: a new entrant can reorder the rest, as a real field would.</p>
-    <p>The references are fixed strategies run fresh in every window: cash, equal-weight
-      buy-and-hold, and inverse-volatility at 75% gross. Only each strategy's newest version is
-      ranked; every version is listed above.</p>
+    <p>Every entrant starts every window from $1M in cash and runs as itself, as in the
+      contest: a submission carries one run per window, and the references are run fresh in
+      each. So equal-weight buy-and-hold buys 1/30 of each stock at the first round of every
+      window. The references are cash, that buy-and-hold, and inverse-volatility at 75% gross.
+      Only each strategy's newest version is ranked; every version is listed above.
+      Submissions scored under the earlier format, one six-month run replayed into every
+      window, are listed but not ranked.</p>
   </div>
 </main>
 
@@ -230,7 +234,7 @@
         const zero = k === "cumulative_return" || k === "sharpe_ratio" ? 0 : null;
         return `<td class="metric">${HIST.svg({ counts: r.hist[k], edges: b.bins[k], metric: k,
           median: r["median_window_" + k], zero, muted: ref, w: 116, h: 36 })}` +
-          `<div class="cap">${fmtFull(k, r["median_window_" + k])} <span>median · ${fmtFull(k, r["continuous_" + k])} full span</span></div></td>`;
+          `<div class="cap">${fmtFull(k, r["median_window_" + k])} <span>median · ${fmtFull(k, r["mean_window_" + k])} mean</span></div></td>`;
       }).join("");
       return `<tr class="${r.kind}${i === 0 ? " top" : ""}"><td class="rank">${r.rank}</td>` +
         `<td class="name"><span class="sname">${esc(r.strategy)}</span>${ref ? '<span class="chip">reference</span>' : ""}` +
@@ -254,11 +258,11 @@
       b.excluded.map((e) => `${esc(e.strategy)} (${esc(e.reason)})`).join("; ") + "</div>" : "";
 
     $("history").innerHTML = "<thead><tr><th>Submitted (UTC)</th><th>Strategy</th><th>Author</th>" +
-      METRICS.map((k) => `<th>${LABELS[k]}, full span</th>`).join("") + "<th></th></tr></thead><tbody>" +
+      METRICS.map((k) => `<th>${LABELS[k]}, mean window</th>`).join("") + "<th></th></tr></thead><tbody>" +
       (b.history.length ? b.history.map((h) => `<tr><td>${esc(h.submitted_at.replace("T", " ").replace("Z", ""))}</td>` +
         `<td>${esc(h.strategy)}</td><td>${esc(h.author)}</td>` +
-        METRICS.map((k) => `<td>${fmtFull(k, h["continuous_" + k])}</td>`).join("") +
-        `<td class="muted">${h.ranked ? "ranked" : "superseded"}</td></tr>`).join("")
+        METRICS.map((k) => `<td>${fmtFull(k, h["mean_window_" + k])}</td>`).join("") +
+        `<td class="muted">${esc(h.status)}</td></tr>`).join("")
         : `<tr><td colspan="7" class="muted">Nothing submitted yet.</td></tr>`) + "</tbody>";
   }
 

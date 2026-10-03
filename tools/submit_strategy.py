@@ -3,14 +3,9 @@
     .venv/bin/python tools/submit_strategy.py model_tilt_0.5 [--dry] [--author WHO]
 
 For strategies that live here as code, not as an agent's decisions file. Each one runs
-the way the references do: one continuous run from $1M for the full-span metrics, and a
-fresh instance in every 15-day window.
-
-A decisions file can't score these strategies fairly. Replayed into a window, a
-continuous run's decisions start that window from cash, and a strategy that decides
-from its own holdings would sit in cash until its next full rebalance. The compiler's
-band keeps a name unless it drifts more than 5% off target, so that could be weeks.
-The window scores would then describe a strategy that never existed.
+the way the references do: a fresh instance from $1M in cash in every 15-day window.
+A decisions file holds the same thing written down, one run per window, so this is a
+shortcut for code we already have, not a different way of scoring.
 
 --dry scores and prints without writing anything.
 """
@@ -21,7 +16,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from icaif import compiler, data, holdout, leaderboard, markets, sim, space_hub  # noqa: E402
+from icaif import compiler, data, holdout, leaderboard, markets, space_hub  # noqa: E402
 from icaif.compiler import Levers  # noqa: E402
 
 
@@ -53,24 +48,21 @@ def main() -> None:
     factory = build()
     market = markets.research_market("alpaca")
     start, end = holdout.HOLDOUT_START, holdout.HOLDOUT_END
-    days = holdout.span_days(market, start, end)
-    res = sim.run(factory(), market, days[0], len(days))
-    summary = {**res.metrics(), "invalid_rounds": len(res.invalid_rounds)}
     wins, skipped = holdout.rolling_runs(factory, market, start, end)
     if skipped:
         print(f"skipped windows touching degraded days: {skipped}")
 
     roll = holdout.summarise_rolling(wins)
-    print(f"{args.name}: {days[0]}..{days[-1]}, {len(wins)} windows, "
-          f"{summary['invalid_rounds']} invalid rounds")
+    print(f"{args.name}: {start}..{end}, {len(wins)} windows, "
+          f"{int(wins['invalid_rounds'].sum())} invalid rounds")
     for k in holdout.METRICS:
-        print(f"  {k:<18} full span {summary[k]: .4f}   median window {roll.loc[k, 'median']: .4f}")
+        print(f"  {k:<18} mean window {roll.loc[k, 'mean']: .4f}   median window {roll.loc[k, 'median']: .4f}")
     if args.dry:
         return
 
     snapshot = sorted((data.ROOT / "data" / "public").glob("alpaca_30m_2*.parquet"))[-1].name
     entry = leaderboard.make_entry(
-        args.name, leaderboard.SUBMITTED, summary, wins, span=(start, end),
+        args.name, leaderboard.SUBMITTED, wins, span=(start, end),
         sizing=leaderboard.BOARD_SIZING, market_snapshot=snapshot,
         author=args.author or space_hub.whoami(), note=note)
     path = space_hub.submit(entry)
