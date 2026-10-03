@@ -1,0 +1,259 @@
+{
+ "made": "2026-10-03",
+ "objective": "lowest mean score, no_clone field",
+ "selection_windows": {
+  "n": 146,
+  "first": "2016-10-11",
+  "last": "2025-11-26"
+ },
+ "grid": {
+  "a": [
+   0.5,
+   1.0
+  ],
+  "b": [
+   1.0,
+   2.0
+  ],
+  "fraction": [
+   0.25,
+   0.5
+  ],
+  "rank_hit": [
+   0.0,
+   0.002
+  ],
+  "trailing_rank_hit": [
+   0.0
+  ],
+  "cost": 0.002,
+  "horizon": 3,
+  "min_trim": 0.005,
+  "max_trims": 3,
+  "min_states": 30
+ },
+ "win": "against both references: paired diff < 0 on both fields in both splits, and > 2 SE below 0 on the no_clone field in the selection windows",
+ "variants": {
+  "trailing": {
+   "settings": {
+    "a": 0.5,
+    "b": 2.0,
+    "fraction": 0.25,
+    "estimator": "trailing",
+    "rank_hit": 0.0
+   },
+   "label": "trailing a0.5 b2 f0.25",
+   "selection": {
+    "inv_vol_hold_75": {
+     "default": {
+      "diff": -0.1284246575342466,
+      "se": 0.03919931847953403,
+      "score": 2.981164383561644,
+      "se_score": 0.05647105263141191,
+      "top3": 0.8767123287671232
+     },
+     "no_clone": {
+      "diff": -0.008561643835616438,
+      "se": 0.029302067252370136,
+      "score": 2.710616438356164,
+      "se_score": 0.04912365920074604,
+      "top3": 0.9041095890410958
+     }
+    },
+    "q_riskparity_entry_regime": {
+     "default": {
+      "diff": -0.02054794520547945,
+      "se": 0.008930414253702258,
+      "score": 2.981164383561644,
+      "se_score": 0.05647105263141191,
+      "top3": 0.8767123287671232
+     },
+     "no_clone": {
+      "diff": -0.017123287671232876,
+      "se": 0.0075514040050770745,
+      "score": 2.710616438356164,
+      "se_score": 0.04912365920074604,
+      "top3": 0.9041095890410958
+     }
+    }
+   },
+   "trims": 154,
+   "windows_with_a_trim": 84,
+   "windows": 146,
+   "mean_give_back_at_trim": 0.04290882577690926,
+   "mean_expected_give_back": 0.04290882577690926
+  },
+  "expanding": {
+   "settings": {
+    "a": 0.5,
+    "b": 1.0,
+    "fraction": 0.25,
+    "estimator": "expanding",
+    "rank_hit": 0.0
+   },
+   "label": "expanding a0.5 b1 f0.25",
+   "selection": {
+    "inv_vol_hold_75": {
+     "default": {
+      "diff": -0.10616438356164383,
+      "se": 0.04021050658250711,
+      "score": 3.0034246575342465,
+      "se_score": 0.05636119416253665,
+      "top3": 0.8767123287671232
+     },
+     "no_clone": {
+      "diff": 0.008561643835616438,
+      "se": 0.030583830870006955,
+      "score": 2.7277397260273974,
+      "se_score": 0.04925767043634658,
+      "top3": 0.8904109589041096
+     }
+    },
+    "q_riskparity_entry_regime": {
+     "default": {
+      "diff": 0.0017123287671232876,
+      "se": 0.001712328767123288,
+      "score": 3.0034246575342465,
+      "se_score": 0.05636119416253665,
+      "top3": 0.8767123287671232
+     },
+     "no_clone": {
+      "diff": 0.0,
+      "se": 0.0,
+      "score": 2.7277397260273974,
+      "se_score": 0.04925767043634658,
+      "top3": 0.8904109589041096
+     }
+    }
+   },
+   "trims": 3,
+   "windows_with_a_trim": 1,
+   "windows": 146,
+   "mean_give_back_at_trim": 0.015771375884371164,
+   "mean_expected_give_back": 0.004046422646462354
+  },
+  "rolling3y": {
+   "settings": {
+    "a": 0.5,
+    "b": 2.0,
+    "fraction": 0.5,
+    "estimator": "rolling3y",
+    "rank_hit": 0.0
+   },
+   "label": "rolling3y a0.5 b2 f0.5",
+   "selection": {
+    "inv_vol_hold_75": {
+     "default": {
+      "diff": -0.11472602739726027,
+      "se": 0.040158424486128934,
+      "score": 2.9948630136986303,
+      "se_score": 0.05675180584121295,
+      "top3": 0.8767123287671232
+     },
+     "no_clone": {
+      "diff": 0.005136986301369863,
+      "se": 0.030395478043802635,
+      "score": 2.7243150684931505,
+      "se_score": 0.0493659282820287,
+      "top3": 0.8904109589041096
+     }
+    },
+    "q_riskparity_entry_regime": {
+     "default": {
+      "diff": -0.00684931506849315,
+      "se": 0.005403644237058423,
+      "score": 2.9948630136986303,
+      "se_score": 0.05675180584121295,
+      "top3": 0.8767123287671232
+     },
+     "no_clone": {
+      "diff": -0.003424657534246575,
+      "se": 0.003424657534246575,
+      "score": 2.7243150684931505,
+      "se_score": 0.0493659282820287,
+      "top3": 0.8904109589041096
+     }
+    }
+   },
+   "trims": 5,
+   "windows_with_a_trim": 4,
+   "windows": 146,
+   "mean_give_back_at_trim": 0.05769866059350241,
+   "mean_expected_give_back": 0.003026289945708434
+  }
+ },
+ "references": {
+  "inv_vol_hold_75": {
+   "selection": {
+    "inv_vol_hold_75": {
+     "default": {
+      "diff": 0.0,
+      "se": 0.0,
+      "score": 3.1095890410958904,
+      "se_score": 0.048899835609625096,
+      "top3": 0.9178082191780822
+     },
+     "no_clone": {
+      "diff": 0.0,
+      "se": 0.0,
+      "score": 2.719178082191781,
+      "se_score": 0.04810352429001071,
+      "top3": 0.9246575342465754
+     }
+    },
+    "q_riskparity_entry_regime": {
+     "default": {
+      "diff": 0.10787671232876712,
+      "se": 0.04014230813317724,
+      "score": 3.1095890410958904,
+      "se_score": 0.048899835609625096,
+      "top3": 0.9178082191780822
+     },
+     "no_clone": {
+      "diff": -0.008561643835616438,
+      "se": 0.030583830870006955,
+      "score": 2.719178082191781,
+      "se_score": 0.04810352429001071,
+      "top3": 0.9246575342465754
+     }
+    }
+   }
+  },
+  "q_riskparity_entry_regime": {
+   "selection": {
+    "inv_vol_hold_75": {
+     "default": {
+      "diff": -0.10787671232876712,
+      "se": 0.04014230813317724,
+      "score": 3.0017123287671232,
+      "se_score": 0.056492533363528594,
+      "top3": 0.8767123287671232
+     },
+     "no_clone": {
+      "diff": 0.008561643835616438,
+      "se": 0.030583830870006955,
+      "score": 2.7277397260273974,
+      "se_score": 0.04925767043634658,
+      "top3": 0.8904109589041096
+     }
+    },
+    "q_riskparity_entry_regime": {
+     "default": {
+      "diff": 0.0,
+      "se": 0.0,
+      "score": 3.0017123287671232,
+      "se_score": 0.056492533363528594,
+      "top3": 0.8767123287671232
+     },
+     "no_clone": {
+      "diff": 0.0,
+      "se": 0.0,
+      "score": 2.7277397260273974,
+      "se_score": 0.04925767043634658,
+      "top3": 0.8904109589041096
+     }
+    }
+   }
+  }
+ }
+}
