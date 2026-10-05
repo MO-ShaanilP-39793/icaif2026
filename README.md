@@ -370,8 +370,25 @@ only (`compiler.DailyPanel`'s door raises on any other day):
 | --- | --- | --- | --- |
 | `vol_ann_har_1d`, `_3d` | HAR forecast per name, and the basket's in `market` | `vol.walk_forward` from 2016-07 | `vol.forecast_next`, once a day |
 | `model_score_rank` | daily model's rank among the 30 (1 = best) | walk-forward predictions, 2023 on | frozen 2026 model |
+| `universe_context` | the same model's rank and percentile for every universe name (~100), the 30 flagged tradeable | the same predictions, other names coded U01-U99 | the scorer's universe row, real tickers |
 | `earnings_in_sessions` | sessions to the open that reflects the next release | EDGAR releases within 10 sessions | Yahoo calendar |
 | `*_at_entry` | the rank and 3-day vol on the entry day, after entry | | |
+
+**The universe ranking is context, not a menu.** The rank among the 30 stays the primary
+signal: it is the measured one (mean daily rank IC 0.051 over 2023 to Sep 2026), and the
+prompt says the universe ranking's value is unmeasured. Rows are `[name, rank,
+percentile, tradeable]`, best first. In replays each of the other names gets a code drawn
+at random when the window first shows it, kept for the window. No ticker, sector, index
+membership or entry date appears, so a later joiner shifts no earlier code. The
+Strategist, the Risk review and the Event analyst read it; the free desk's arms do not.
+Every answer passes one check before its role's own: a lever (`avoid`, `exit`, `trim`, an
+event call, a free book) naming anything but the 30 is refused whole and the rule's
+answer stands. The block adds about 2,800 characters to every observation (median 2,791,
+at most 2,973 over the 931 scored days; 2,947 live on 2026-10-01), about 17% of the rule
+desk's median observation of 16,600. Live, a universe name without the latest bar is
+scored NaN, as one of the 30 already was. The rule desk reading it still equals
+`q_riskparity_entry_regime` trade for trade in all 167 windows, and its journal agrees
+with its ledger in all 167 (`agent_replay.py --ledgers-only`, 185 s).
 
 The levers built on them, all checked by code rather than asked for in the prompt:
 

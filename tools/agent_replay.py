@@ -7,7 +7,8 @@
 The rule brain is the sanity check: its desk must tie `q_riskparity_entry_regime` (the quant
 candidate it stands for) in every window, or the desk's plumbing, not its judgement,
 is what any LLM result would measure. The run stops if it doesn't. The desk reads every
-signal an LLM desk would (walk-forward scores, HAR vol, earnings) and its own journal,
+signal an LLM desk would (walk-forward scores, the universe's ranking, HAR vol, earnings)
+and its own journal,
 so the check covers the plumbing those inputs added too. Since step 5 it reads the 8-K
 snapshot as well, so every filing for a held name wakes its analyst (the rule holds).
 `--ledgers-only` runs just
@@ -115,6 +116,7 @@ def main() -> None:
     earnings = load_earnings(market)
     filings = load_filings(market)
     scores = compiler.load_daily_scores()
+    universe_scores = signals.UniverseScores.load()
     # The walk-forward over the bars the windows trade on: forecasts from its first
     # fittable quarter (2016-07), each made before its session opened.
     har = signals.VolForecasts.from_bars(market.info_bars, market.tickers)
@@ -148,7 +150,8 @@ def main() -> None:
         bad, wrong, woken = [], [], []
         closes = market.recent_closes(pd.Timestamp("2100-01-01", tz="America/New_York"), 10 ** 7)
         for s in starts:
-            d = desk(make, cfg, scores=scores, earnings=earnings, vol=har, filings=filings)()
+            d = desk(make, cfg, scores=scores, earnings=earnings, vol=har, filings=filings,
+                     universe_scores=universe_scores)()
             got = sim.run(d, market, s, windows.WINDOW_DAYS)
             want = sim.run(qs.CANDIDATES["q_riskparity_entry_regime"](), market, s, windows.WINDOW_DAYS)
             if not got.ledger.equals(want.ledger):
@@ -177,7 +180,8 @@ def main() -> None:
     desks = []
 
     def factory():
-        d = desk(make, cfg, scores=scores, earnings=earnings, vol=har, filings=filings)()
+        d = desk(make, cfg, scores=scores, earnings=earnings, vol=har, filings=filings,
+                 universe_scores=universe_scores)()
         desks.append(d)
         return d
 

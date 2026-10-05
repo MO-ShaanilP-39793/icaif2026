@@ -78,6 +78,9 @@ class DeskConfig:
     max_trims: int = TR.MAX_TRIMS
     # The roles that read held names' headlines: the two that can act on a held name.
     headline_roles: tuple = ("review", "event")
+    # The roles shown the whole universe's ranking as context. The free desk's arms are
+    # an experiment on what each prompt is given, so they are not.
+    universe_roles: tuple = ("entry", "review", "event")
 
 
 def rule_exposure(p_turbulent: float) -> float:
@@ -124,17 +127,20 @@ class Desk:
                  context: Optional[pd.DataFrame] = None,
                  fomc=None, filings: Optional[pd.DataFrame] = None,
                  news_dir=None, vol: Optional[signals.VolForecasts] = None,
-                 trim: Optional[TR.TrimRule] = None):
+                 trim: Optional[TR.TrimRule] = None,
+                 universe_scores: Optional[signals.UniverseScores] = None):
         """`context`: `macro.wide(...)` closes; `fomc`: a `macro.FomcCalendar`;
         `filings`: `filings.fetch(...)` events (a `text` column, live); `news_dir`: the
         headline archive, read only with real names (headlines name companies); `vol`:
         HAR forecasts; `trim`: the rule's own trim, once it has won its gate (it reads
-        `vol`)."""
+        `vol`); `universe_scores`: every universe name's score, shown as context."""
         self.brain = brain
         self.cfg = config or DeskConfig()
         self.scores, self.earnings, self.vol = scores, earnings, vol
         self.context, self.fomc, self.filings, self.news_dir = context, fomc, filings, news_dir
         self.trim_rule = trim
+        self.universe_scores = universe_scores
+        self.ucodes: Optional[observe.UniverseCodes] = None
         # Trims spent this window, each {ticker, day, round, fraction, role}; the window's
         # first day; and the acceptance time up to which 8-Ks have been triggered on. A
         # desk rebuilt without the last would wake the analyst on the same filing again.
@@ -181,6 +187,7 @@ class Desk:
         else:
             try:
                 decision = self.brain.decide(role, prompts.SYSTEM[role], payload, schema, timeout)
+                self._only_tradeable(decision)
                 check(decision)
             except (BrainError, ValueError, KeyError, TypeError) as err:
                 source, reason = "fallback", f"{type(err).__name__}: {err}"
@@ -197,6 +204,32 @@ class Desk:
                  "latency_s": round(time.perf_counter() - t0, 3)}
         self.log.append(entry)
         return decision, source
+
+    def _only_tradeable(self, decision) -> None:
+        """Refuse an answer whose levers name anything but the 30.
+
+        The universe block shows about 70 names the desk cannot trade. A role that
+        avoided, exited, trimmed or weighted one of them would otherwise reach a KeyError
+        deep in a lever, or, where a lever reads names leniently, a decision about a book
+        that does not exist. Checked once here for every lever and role, so a lever added
+        later is covered without its own check remembering to be.
+        """
+        names = list(getattr(decision, "exit", []) or [])
+        for field_ in ("avoid", "trim", "calls", "weights"):
+            names += [x.name for x in getattr(decision, field_, []) or []]
+        for n in names:
+            if n in self.anon.to_ticker:
+                continue
+            if self.ucodes is not None and self.ucodes.is_universe_name(n):
+                raise ValueError(f"{n} is in universe_context only and is not tradeable; "
+                                 f"levers name only the 30 in `names`")
+            raise ValueError(f"{n} is not one of the 30 tradeable names")
+
+    def _universe(self, ctx, role: str) -> Optional[dict]:
+        if self.universe_scores is None or role not in self.cfg.universe_roles:
+            return None
+        ranks = self.universe_scores.for_day(ctx.day, ctx.deadline)
+        return observe.universe_block(ranks, self.anon, self.ucodes) if len(ranks) else None
 
     def _value(self, ctx, tickers):
         shares = pd.Series(ctx.shares, dtype=float).reindex(tickers).fillna(0.0)
@@ -252,7 +285,8 @@ class Desk:
             filings=(F.recent(self.filings, ctx.deadline)
                      if self.filings is not None else None),
             news=self._headlines(ctx, role, held, triggered),
-            calendar_date=str(ctx.day), positions=self._name_fields())
+            calendar_date=str(ctx.day), positions=self._name_fields(),
+            universe=self._universe(ctx, role))
         obs["memory"] = self._memory()
         obs.update(extra)
         return obs
@@ -347,6 +381,7 @@ class Desk:
         return {"day_no": self.day_no, "day": None if self._day is None else self._day.isoformat(),
                 "fired": sorted(self._fired), "hmm": hmm, "book": book,
                 "anon": None if self.anon is None else dict(self.anon.to_code),
+                "universe_codes": None if self.ucodes is None else self.ucodes.state(),
                 "recipe": self.recipe, "at_entry": self.at_entry, "rebalances": self.rebalances,
                 "trims": self.trims, "start": None if self._start is None else self._start.isoformat(),
                 "filings_to": None if self._filings_to is None else self._filings_to.isoformat(),
@@ -376,6 +411,21 @@ class Desk:
         self.hmm = None if h is None else quant.HMM2(**{k: np.asarray(v, dtype=float)
                                                         for k, v in h.items()})
         anon = state.get("anon")
+        uc = state.get("universe_codes")
+        if uc is not None:
+            self.ucodes = observe.UniverseCodes.from_state(uc, tickers)
+        elif not self.cfg.anonymize:
+            self.ucodes = observe.UniverseCodes(None, tickers)
+        elif anon is not None:
+            # An anonymised state from before the universe block. Disabled codes here
+            # would put real tickers into a replay; the window's own seed draws them.
+            start = date.fromisoformat(state["start"]) if state.get("start") else None
+            if start is None:
+                raise ValueError("an anonymised desk state with no start day cannot code "
+                                 "its universe names")
+            self.ucodes = observe.UniverseCodes(self.cfg.seed * 1_000_003 + start.toordinal(), tickers)
+        else:
+            self.ucodes = None
         if anon is not None:
             self.anon = observe.Anonymizer.from_mapping(anon)
         elif not self.cfg.anonymize:
@@ -397,6 +447,7 @@ class Desk:
         if self.anon is None:
             seed = (self.cfg.seed * 1_000_003 + ctx.day.toordinal()) if self.cfg.anonymize else None
             self.anon = observe.Anonymizer(tickers, seed)
+            self.ucodes = observe.UniverseCodes(seed, tickers)
             self.book = observe.BookState(pd.Series(0.0, index=tickers), [])
         if ctx.day != self._day:
             self._day, self._fired = ctx.day, set()

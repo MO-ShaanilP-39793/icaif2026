@@ -17,6 +17,14 @@ model's training cutoff can be replayed with real names and still count. Our own
 signals (HAR vols, the score's rank, sessions to earnings) are numbers about a code and
 stay too.
 
+**The universe ranking is context** (`universe_context`): the daily model's rank and
+percentile for every name in its training universe that day, the 30 among them under
+their own codes and flagged tradeable. In replays the other ~70 names get codes of their
+own (`UniverseCodes`, U01-U99): drawn at random when a name is first seen in the window
+and kept for the rest of it, so a code says nothing about the ticker, its alphabetical
+place, or which names will join the universe later in the window. No sector, index
+membership or entry date is shown for any of them: those would date the window.
+
 **Headlines are for held names, in the roles that act on them** (the Risk review and the
 Event analyst), and capped: a triggered name's newest few in full, any other held name's
 titles that name the company. Every name's whole feed went into every role before:
@@ -71,6 +79,71 @@ class Anonymizer:
         """Raises KeyError on a code the agent invented, which the desk treats as an
         invalid answer: a guessed mapping would sell a name the agent never named."""
         return self.to_ticker[code]
+
+
+class UniverseCodes:
+    """Codes for the universe names outside the tradeable 30; real tickers when disabled.
+
+    A name's code is drawn from a shuffled pool the first time the window shows it, so it
+    is stable for the window and carries nothing from the ticker. Codes were not assigned
+    up front for every name of the window: that would need the window's later universes,
+    and the number of codes would say how many names join before it ends.
+    """
+
+    POOL = 99
+
+    def __init__(self, seed: Optional[int], tradeable: list[str]):
+        self.enabled = seed is not None
+        self.tradeable = set(tradeable)
+        self.pool = ([f"U{i:02d}" for i in np.random.default_rng([seed, 1]).permutation(
+            np.arange(1, self.POOL + 1))] if self.enabled else [])
+        self.to_code: dict = {}
+
+    def code(self, ticker: str) -> str:
+        if not self.enabled:
+            return ticker
+        if ticker not in self.to_code:
+            n = len(self.to_code)
+            # Past the pool (more than 99 names in one window; the most seen is 80), the
+            # codes run on in order rather than reusing one.
+            self.to_code[ticker] = self.pool[n] if n < len(self.pool) else f"U{n + 1}"
+        return self.to_code[ticker]
+
+    def is_universe_name(self, name: str) -> bool:
+        """A name the universe block has shown that is not one of the 30."""
+        return name in self.to_code.values() if self.enabled else name in self.to_code
+
+    def state(self) -> dict:
+        return {"enabled": self.enabled, "pool": self.pool, "to_code": dict(self.to_code)}
+
+    @classmethod
+    def from_state(cls, state: dict, tradeable: list[str]) -> "UniverseCodes":
+        u = cls(None, tradeable)
+        u.enabled, u.pool, u.to_code = bool(state["enabled"]), list(state["pool"]), dict(state["to_code"])
+        return u
+
+
+def universe_block(ranks, anon: "Anonymizer", ucodes: UniverseCodes) -> dict:
+    """`UniverseScores.for_day` as a role reads it: one row per name, best first.
+
+    Rows are lists under `columns` rather than one object each: about 100 rows a day, and
+    keys repeated 100 times would double the block. Live, `ucodes` is disabled and keeps
+    the real tickers it showed, so the desk can still refuse a lever naming one.
+    """
+    rows = []
+    for t, r in ranks.iterrows():
+        if r["tradeable"]:
+            name = anon.code(t)
+        else:
+            name = ucodes.code(t)
+            if not ucodes.enabled:
+                ucodes.to_code[t] = t
+        rows.append([name, int(r["rank"]), round(float(r["percentile"]), 3), bool(r["tradeable"])])
+    return {"note": "Context only: the daily model's ranking of its whole training universe "
+                    "today. Only the names in `names` can be traded.",
+            "names_ranked": len(rows),
+            "columns": ["name", "rank", "percentile", "tradeable"],
+            "rows": rows}
 
 
 @dataclass
@@ -165,13 +238,15 @@ def observation(closes: pd.DataFrame, rd: Readings, book: BookState, anon: Anony
                 macro: Optional[dict] = None,
                 filings: Optional[dict] = None,
                 calendar_date: Optional[str] = None,
-                positions: Optional[dict] = None) -> dict:
+                positions: Optional[dict] = None,
+                universe: Optional[dict] = None) -> dict:
     """`signals`: today's {"names": {ticker: {field: value}}, "market": {...}} from
     `Desk._signals`; `at_entry`: the same fields as they stood on the entry day, shown
     with an `_at_entry` suffix so a change since entry is a comparison the agent reads,
     not one it must remember; `previews`: {key: weights} shown as `weight_if_<key>`,
     the exact books a decision would buy; `positions`: the journal's fields for each
     held name (`Journal.name_fields`: entry day, gain since entry and its peak);
+    `universe`: `universe_block`, the whole universe's ranking, shown as context;
     `news`: {ticker: `headline_rows`} for the names whose headlines this role reads
     (never shown anonymised); `filings`: `filings.recent` per name."""
     tickers = list(closes.columns)
@@ -253,6 +328,8 @@ def observation(closes: pd.DataFrame, rd: Readings, book: BookState, anon: Anony
     }
     if macro is not None:
         obs["macro"] = macro
+    if universe is not None:
+        obs["universe_context"] = universe
     if calendar_date and not anon.enabled:
         obs["clock"]["date"] = calendar_date
     return obs

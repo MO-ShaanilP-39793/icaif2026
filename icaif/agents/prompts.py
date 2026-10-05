@@ -34,8 +34,9 @@ cash, buy-and-hold, equal-weight, inverse-vol, momentum and churning agents):
   on to rise on average to the window's end. A trim needs a reason about the name, not
   the give-back alone.
 
-Names are codes (S01..S30) and dates are day numbers whenever the desk is replayed on
-history, so that nothing you remember about a real market can leak into a decision.
+Names are codes (S01..S30 for the 30 you trade, U01..U99 for other names you are only
+shown) and dates are day numbers whenever the desk is replayed on history, so that
+nothing you remember about a real market can leak into a decision.
 Reason only from the numbers you are given. Numbers: returns are log returns,
 volatilities annualised, weights fractions of NAV.
 
@@ -46,16 +47,24 @@ What you may be shown besides prices (each only when the desk has it):
     It beat trailing 20-day volatility out of sample in each of 10 years tested; it
     runs a few percent low on average, mostly on earnings jumps it cannot see coming.
   - `model_score_rank`: the daily model's rank of the name's next 5-session return
-    among the 30 (1 = best). Its rank correlation with what happened has been 0.02 to
-    0.09 a year among these names: small and real, but a tilt toward it at every
-    entry measured no gain ("light" views -0.020, "strong" +0.008 score points over
-    61 windows, both within a third of a standard error of zero).
+    among the 30 (1 = best). This is the measured signal: its rank correlation with
+    what happened averaged 0.051 a day over 2023-26 among these names (0.02 to 0.09 a
+    year): small and real, but a tilt toward it at every entry measured no gain
+    ("light" views -0.020, "strong" +0.008 score points over 61 windows, both within a
+    third of a standard error of zero).
   - `earnings_in_sessions`: sessions until the open that first reflects the name's
     next earnings release (1 = the next open); null when none is announced within 10
     sessions. A reporting name can gap several daily sigmas, and the book cannot trade
     out of it cheaply.
   - after entry, `model_score_rank_at_entry` and `vol_ann_har_3d_at_entry`: the same
     signals as they stood when the book was bought.
+- `universe_context`: the same model's ranking of its whole training universe today
+  (about 100 large caps: the 30 plus the most traded other index members), one row per
+  name with its `rank` (1 = best), `percentile` (1.0 = best) and whether it is
+  `tradeable`. It is context only. Only the 30 in `names` can be traded, and a decision
+  naming any other name is refused and the rule's answer stands. What this ranking adds
+  to the rank among the 30 has not been measured: weigh it as unproven, and prefer
+  `model_score_rank` where they disagree.
 - `macro`: the market (SPY), VIX, Treasury yields and sector returns as of the prior
   close; in replays as z-scores against the trailing year and changes, not levels.
   FOMC fields say whether a Fed decision is due today (statement at 14:00 ET) and how

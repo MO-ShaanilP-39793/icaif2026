@@ -571,6 +571,7 @@ def agent_inputs(cfg: Config, mkt: sim.Market, r: Round) -> tuple[dict, dict]:
         "scores": lambda: compiler.DailyPanel(
             pd.read_parquet(sdir / "scores.parquet").pivot(index="date", columns="ticker",
                                                            values="pred"), tickers),
+        "universe_scores": lambda: live.universe_scores(sdir, tickers),
         "context": lambda: macro.wide(pd.read_parquet(sdir / "prices_context.parquet")),
         "earnings": lambda: live.CalendarEarnings(
             pd.read_parquet(universe.latest("earnings_calendar_*.parquet")), mkt.days),

@@ -10,6 +10,10 @@ never saw (HAR) or saw undocumented:
 - **The daily model's score**, as a rank within the 30 (1 = best). Replays read the
   walk-forward predictions (`compiler.load_daily_scores`), live the frozen model's
   row for the day (`live.daily_scores`).
+- **The daily model's ranking of its whole training universe** (`UniverseScores`), about
+  100 names a day, as context: only the 30 can be traded. The rank among the 30 stays the
+  primary signal, because it is the one measured (mean daily rank IC 0.051, 2023 to Sep
+  2026); what the agent can do with the other names' ranks is not measured.
 - **Sessions to the next earnings reaction** (`desk.EarningsCalendar` in replays,
   `live.CalendarEarnings` live), unchanged here.
 
@@ -105,6 +109,41 @@ class VolForecasts:
         open, and none after it is served.
         """
         return self.panels[horizon].trailing(day, deadline, n)
+
+
+class UniverseScores:
+    """The daily model's score for every name in each day's training universe.
+
+    Rows are (date, ticker) -> score, a varying set of names a day. Served through
+    `compiler.DailyPanel`'s door like the 30's scores: a universe row is made from the
+    prior close, so tomorrow's would carry today's, and the door raises for it.
+    `tradeable` is the competition's 30; every other name is context the agent may read
+    and never trade.
+    """
+
+    def __init__(self, scores: pd.Series, tradeable: list[str]):
+        wide = scores.unstack("ticker")
+        self.panel = compiler.DailyPanel(wide, sorted(wide.columns))
+        self.tradeable = set(tradeable)
+
+    @classmethod
+    def load(cls, path=None, column: str = "pred") -> "UniverseScores":
+        """The walk-forward predictions for every universe name (replays, 2023 on)."""
+        from icaif import data
+
+        return cls(pd.read_parquet(path or compiler.PREDS)[column], sorted(data.load_universe()))
+
+    def for_day(self, day, deadline) -> pd.DataFrame:
+        """Ticker x rank (1 = best), percentile (1.0 = best), tradeable; best first.
+
+        Only the names scored that day: a name outside the day's universe is absent, not
+        last, so a percentile counts the universe the model ranked.
+        """
+        s = self.panel.for_day(day, deadline).dropna()
+        out = pd.DataFrame({"rank": s.rank(ascending=False, method="min"),
+                            "percentile": s.rank(pct=True),
+                            "tradeable": [t in self.tradeable for t in s.index]})
+        return out.sort_values(["rank", "percentile"], ascending=[True, False])
 
 
 def annualised(var: pd.Series) -> pd.Series:

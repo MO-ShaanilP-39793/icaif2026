@@ -516,6 +516,14 @@ def daily_scores(as_of=None, *, predictor=None, inputs: Optional[LiveInputs] = N
         warnings.append(f"no bar on {inputs.latest_session:%Y-%m-%d} for {stale}: scored NaN")
         ours[stale] = np.nan
     check_prediction(ours)
+    # The same for the rest of the universe, which the agent now reads as context.
+    last_u = inputs.daily.groupby("ticker")["date"].max().reindex(pred.index)
+    stale_u = [t for t in pred.index if t not in tickers and not last_u.get(t) == inputs.latest_session]
+    if stale_u:
+        warnings.append(f"no bar on {inputs.latest_session:%Y-%m-%d} for universe names {stale_u}: "
+                        f"scored NaN")
+        pred = pred.copy()
+        pred[stale_u] = np.nan
     return Scored(ours=ours, universe=pred, features=frame, decision_date=day, inputs=inputs,
                   events=raw_events, events_meta=events_meta, warnings=warnings)
 
@@ -804,6 +812,20 @@ def _clean(x):
     return x
 
 
+def universe_scores(sdir: Path, tickers: list[str]):
+    """The scoring run's universe row as the agent reads it (`signals.UniverseScores`).
+
+    An archive written before the row carried its date takes it from `scores.parquet`,
+    which the same run wrote for the same decision date.
+    """
+    from icaif.agents import signals
+
+    u = pd.read_parquet(sdir / "scores_universe.parquet")
+    if "date" not in u.columns:
+        u = u.assign(date=pd.read_parquet(sdir / "scores.parquet")["date"].iloc[0])
+    return signals.UniverseScores(u.set_index(["date", "ticker"])["pred"], tickers)
+
+
 def archive_scores(scored: "Scored", out: Path) -> dict:
     """Write what the shadow agent and the record need from a scoring run.
 
@@ -818,7 +840,8 @@ def archive_scores(scored: "Scored", out: Path) -> dict:
     scored.inputs.ctx.to_parquet(out / "prices_context.parquet", index=False)
     scored.events.to_parquet(out / "earnings_events.parquet", index=False)
     scored.features.reset_index().to_parquet(out / "features.parquet", index=False)
-    scored.universe.rename("pred").reset_index().to_parquet(out / "scores_universe.parquet", index=False)
+    scored.universe.rename("pred").rename_axis("ticker").reset_index().assign(
+        date=scored.decision_date).to_parquet(out / "scores_universe.parquet", index=False)
     meta = _clean({"decision_date": str(scored.decision_date.date()),
                    "latest_session": str(scored.inputs.latest_session.date()),
                    "inputs": {**scored.inputs.meta, "earnings": scored.events_meta},
