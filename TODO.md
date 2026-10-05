@@ -151,7 +151,7 @@ tilt loses to the hold after fees, and the GNN failed its stage-1 gate.
       external text quoted in `source_text`, cleaned and capped, and a trim lever (a
       quarter or half, with a cause; 0.5% floor, 3 a window). The rule desk with every
       input still equals its candidate in 167 of 167. The rule's trim, chosen on 2016-25
-      (51127ed) and scored once on Jan-Jun 2026, does not win: the trailing take was
+      (8e59c1e) and scored once on Jan-Jun 2026, does not win: the trailing take was
       -0.017 (2.25 SE) against the rule on 2016-25 and 0.000 on the holdout. The rule desk
       does not trim (README "News and profit booking").
 - [ ] What the LLM does with the news and the trim lever is step 6's paid replay for 8-K

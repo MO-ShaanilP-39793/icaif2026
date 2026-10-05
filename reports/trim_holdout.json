@@ -2,7 +2,8 @@
  "looks": [
   {
    "at": "2026-10-03T08:21:46.921747+00:00",
-   "choice_commit": "51127edf321a696ae0ccd1a75d33e382f31e520a",
+   "choice_commit": "8e59c1e4ec49dc6a3304fe48b5bf48e2dc9ceeaa",
+   "choice_commit_before_rebase": "51127edf321a696ae0ccd1a75d33e382f31e520a",
    "windows": 109,
    "n_eff": 8
   }

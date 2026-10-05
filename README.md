@@ -567,9 +567,9 @@ high-water mark, when the expected give-back over the sessions left beats 20 bps
 rank hit. The give-back is either assumed to continue (`trailing`, the classic
 profit-take) or estimated from past windows that had ended (`expanding`, `rolling3y`).
 Settings were chosen on the 146 windows of 2016-25 by the no-clone score, the choice
-committed (`51127ed`, `reports/trim_choice.json`), then scored once on the 109 rolling
-Jan-Jun 2026 windows (`reports/trim_holdout.json`). Paired differences on the no-clone
-field, SE in brackets, negative better:
+committed (`8e59c1e`; `51127ed` before the rebase onto main; `reports/trim_choice.json`),
+then scored once on the 109 rolling Jan-Jun 2026 windows (`reports/trim_holdout.json`).
+Paired differences on the no-clone field, SE in brackets, negative better:
 
 | Variant, chosen settings | 2016-25 vs rule | vs hold | Jan-Jun 2026 vs rule | vs hold | Trims, 2016-25 / 2026 |
 | --- | --- | --- | --- | --- | --- |
