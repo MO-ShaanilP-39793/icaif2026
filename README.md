@@ -223,6 +223,27 @@ survivor behaviour will show up there as worse test IC.
 Also known: GOOG and GOOGL are both in the universe (near-duplicate rows in a
 cross-section), and a reused symbol would carry the later company's prices.
 
+**Renames and late index changes** (`universe.RENAMES`, `universe.LATE_CHANGES`). The
+membership file uses the ticker in force on each date, and Yahoo keys a renamed
+company's whole history under its new ticker. So a spell under the old ticker priced
+nothing, and the company dropped out of the universe for that spell (Fiserv as FI from
+2023-06 to 2025-11). BK→BNY, FI→FISV, MMC→MRSH and SATS→ECHO now map to the current
+symbol; a test ties each to the file (the old spell ends the day the new one starts).
+The file's source last updated on 2026-09-07, so the September rebalance (effective
+2026-09-21: BE, ILMN, P in; TAP, TTD, BLDR out) is added by hand until a refreshed
+snapshot has it. BE trades about $3.7bn a day against a top-100 cut near $0.9bn. Without
+it, NXPI held its place in the live universe on 2026-10-05, and 8 of the 30's within-30
+ranks moved, by up to 2 places. A live score now warns when the membership records no
+change since the last quarterly rebalance. The walk-forward predictions and the frozen
+model were built before both fixes; they take effect at the next retrain.
+
+The live fetch always lists names Yahoo no longer serves: `live_symbols` also asks for
+spells that ended in the last two years. On 2026-10-05 these were 12 takeovers and
+take-privates, all gone from Yahoo under any symbol: ANSS, CTLT, CTRA, DAY, DFS, HES,
+HOLX, IPG, JNPR, K, MRO and WBA. Before the renames, BK, FI, MMC and SATS were among them.
+`scores_meta.json` now keeps them as `ended_spells_unpriced`, apart from
+`current_members_unpriced`, the list that can cost the universe a name.
+
 Earnings dates come from EDGAR 8-K item 2.02 acceptance times (`earnings.py`). This
 needs `SEC_USER_AGENT="<name> <email>"` in the environment.
 

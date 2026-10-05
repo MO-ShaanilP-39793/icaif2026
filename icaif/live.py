@@ -375,6 +375,12 @@ def fetch_inputs(now: pd.Timestamp) -> LiveInputs:
 
     members = set(membership[(membership["start"] <= day) & (membership["end"].isna() | (membership["end"] > day))]["symbol"])
     unpriced = sorted(members & set(missing))
+    # `live_symbols` asks for spells that ended within MEMBERSHIP_DAYS too, so `missing`
+    # always lists takeovers and delistings Yahoo no longer serves (16 names on
+    # 2026-10-01, four of them renames before universe.RENAMES). Kept apart from current
+    # members, the only list that can cost the universe a name, so a real loss is not
+    # read past among expected ones.
+    ended = sorted(set(missing) - members)
     if len(unpriced) > MAX_MISSING_MEMBERS * max(len(members), 1):
         # The top 100 is refilled from whoever is left, so the universe keeps its size and
         # every rank shifts quietly. A handful is normal (renames, takeovers the snapshot
@@ -384,7 +390,8 @@ def fetch_inputs(now: pd.Timestamp) -> LiveInputs:
                       membership=membership, meta={
                           "fetched_at": str(fetched_at), "history_start": start,
                           "symbols_requested": len(symbols), "symbols_missing": missing,
-                          "current_members_unpriced": unpriced,
+                          "current_members_unpriced": unpriced, "ended_spells_unpriced": ended,
+                          "membership_as_of": str(universe.as_of(membership).date()),
                           "partial_bars_dropped": dropped + ctx_dropped, "sessions": int(n_sessions),
                           "context_off_session_dates_dropped": ctx_off_grid})
 
@@ -473,6 +480,14 @@ def daily_scores(as_of=None, *, predictor=None, inputs: Optional[LiveInputs] = N
     if events_meta.get("stale"):
         warnings.append(f"earnings from a stale snapshot ({events_meta.get('path')}); "
                         f"latest release {events_meta.get('latest_release')}")
+    rebalance = universe.last_rebalance(day)
+    if universe.as_of(inputs.membership) < rebalance:
+        # A stale membership ranks today's dollar volume over yesterday's index: a name
+        # the rebalance added is never priced and every rank below it shifts. The
+        # scores still mean something, so this is recorded rather than raised.
+        warnings.append(f"membership records no change since {universe.as_of(inputs.membership):%Y-%m-%d}, "
+                        f"before the {rebalance:%Y-%m-%d} rebalance: add its changes to "
+                        f"universe.LATE_CHANGES or refresh the snapshot")
     warnings.append("e_sessions_to_next is NaN for every name live (EDGAR records only past "
                     "releases); training saw it filled within 10 sessions of a release. "
                     "Cost on 2026: IC_30 0.021 -> 0.012 until an earnings calendar feeds it")
