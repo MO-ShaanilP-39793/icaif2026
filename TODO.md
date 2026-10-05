@@ -79,8 +79,11 @@ tilt loses to the hold after fees, and the GNN failed its stage-1 gate.
 - [x] A scheduler for the 7 rounds, with the fallback chain: agent, then rule, then no
       submission (`tools/live_runner.py run`).
 - [x] A fast rehearsal: 2026-09-30's 7 rounds as worker processes, in 36 s.
-- [ ] A rehearsal: a full day of dry-run rounds at real times on the chosen machine
-      (`tools/live_runner.py rehearse`, 08:58-15:25 ET).
+- [x] A rehearsal: a full day of dry-run rounds at real times on the chosen machine
+      (`tools/live_runner.py rehearse`, 08:58-15:25 ET). Oct 1 on the owner's Mac: all 7
+      rounds ready about 12 minutes before the deadline, no errors or warnings. The lid
+      was closed on battery from 17:44 to 18:02 IST and the Mac slept, 26 minutes before
+      round 1's wake: keep it plugged in with the lid open through every phase.
 - [ ] Snapshot the earnings calendar daily on the runner's machine: the shadow reads the
       latest snapshot (2026-09-28). 8-Ks no longer need one: each live round reads EDGAR's
       newest filings itself (step 5), given `SEC_USER_AGENT`.

@@ -316,8 +316,11 @@ Roadmap's step-6 gate.
   differs by at most 0.0011, the largest single-name gap is 0.0016, and the summed
   difference is at most 0.015. The turbulent 2025-10-13 (p = 0.78, gross 0.42) agreed
   as well.
-- **Timing.** A dry round 1 takes 2.7 s without scoring and 21 s with it (the scorer
-  child takes 14 s). A fast rehearsal of 2026-09-30 ran 7 worker processes in 36 s.
+- **Timing.** A dry round 1 takes 2.7 s without scoring. With the daily model scored it
+  took 21 s on the stale earnings snapshot, and 89 s live in the Oct 1 rehearsal, 76 s
+  of it the scorer asking EDGAR for recent filings (its limit is 240 s). Rounds 2-7
+  reuse the day's scores and took 1.4-3.1 s. A fast rehearsal of 2026-09-30 ran 7
+  worker processes in 36 s.
 - **Restarts.** A round commits once, at its end: one atomic write of state.json holds
   the entry, both paper books and both desks' journals. Every file is written whole
   (temp, fsync, rename), so a worker killed mid-write leaves the last good file and its
