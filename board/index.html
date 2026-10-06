@@ -113,8 +113,9 @@
                                    border: 1px solid var(--line); border-radius: 6px; padding: 5px 10px; }
   .picker button { cursor: pointer; }
   .picker button:disabled { color: var(--muted); cursor: default; }
-  tr.sep td { padding: 8px 10px 4px; font-size: 12px; color: var(--muted); border-bottom: 1px solid var(--line); }
+  tr.agentic td { background: var(--warn-bg); }
   tr.agentic .sname { font-style: italic; }
+  .picker label { display: inline-flex; gap: 6px; align-items: center; color: var(--ink-2); cursor: pointer; }
   th button.sort { font: inherit; color: inherit; background: none; border: 0; padding: 0; cursor: pointer; text-align: left; }
   th button.sort:hover, th[aria-sort] button.sort { color: var(--ink); }
   [hidden] { display: none !important; }
@@ -162,6 +163,7 @@
     <select id="win-select" aria-label="Window"></select>
     <button id="win-next" aria-label="Next window">▸</button>
     <span id="win-note" class="muted"></span>
+    <label id="win-agents-label" hidden><input type="checkbox" id="win-agents" checked> Show agentic entries</label>
   </div>
   <div class="panel scroll"><table id="window"></table></div>
   </section>
@@ -197,8 +199,10 @@
       window, are listed but not ranked.</p>
     <p>The By window tab shows one window's ranking on its own. A single window is one draw:
       neighbouring windows share 14 of 15 days, and a strategy's board place is its mean across
-      all of them. Agentic entries that covered a window are listed under the field with the place
-      they would have taken in it; they move no one else's place.</p>
+      all of them. Agentic entries that covered a window are shown among the field, shaded, at
+      the place they would have taken in it: each is ranked against the field plus itself, and
+      never against another agent. The field's own places and ranks leave them out, so an
+      agent sharing a window moves no one else's number.</p>
     <p>An agentic entry's place in a window is its rank among the main board's entrants in that
       window plus itself, under the same rules. A tied rank shares the average, so a metric's rank
       can fall between two places.</p>
@@ -410,18 +414,24 @@
     const head = `<thead><tr>${th("position", "Place", "")}<th>Strategy</th>` +
       th("overall_score", "Score", "mean rank, lower is better") +
       METRICS.map((k) => th(k, LABELS[k], `${HIGHER[k]} · rank`)).join("") + `</tr></thead>`;
+    // An agent placed pth sits just above the field's pth: it would take that place and push
+    // the rest down one. Only its own row says so; the field keeps the numbers its score
+    // averages, which a second agent in the same window would otherwise shift too.
+    const agents = $("win-agents").checked ? (agentsIn[w.window_start + "|" + w.window_end] || []) : [];
+    $("win-agents-label").hidden = !(agentsIn[w.window_start + "|" + w.window_end] || []).length;
+    const at = (r) => r.agentic ? r.position - 0.5 : r.position;
+    const val = (r) => sortKey === "position" ? at(r) : r[sortKey];
     // Ties keep the contest's place order, so a sort never reshuffles equal values at random.
-    const order = (rows) => [...rows].sort((a, b) =>
-      (sortDesc ? b[sortKey] - a[sortKey] : a[sortKey] - b[sortKey]) || a.position - b.position);
-    const field = order(w.rows).map((r) => `<tr class="${r.kind}${r.position === 1 ? " top" : ""}"><td class="rank">${r.position}</td>` +
-      `<td class="name"><span class="sname">${esc(r.strategy)}</span>${r.kind === "reference" ? '<span class="chip">reference</span>' : ""}` +
-      `<div class="by">board #${boardRank[r.strategy]}</div></td>${cells(r)}</tr>`).join("");
-    const agents = agentsIn[w.window_start + "|" + w.window_end] || [];
-    const extra = agents.length ? `<tr class="sep"><td colspan="${3 + METRICS.length}">Agentic entries in this window, ` +
-      `each placed against the field above plus itself</td></tr>` +
-      order(agents).map((a) => `<tr class="agentic"><td class="rank">${ord(a.position)}<div class="pm">of ${a.of}</div></td>` +
-        `<td class="name"><span class="sname">${esc(a.strategy)}</span><span class="chip">agentic</span></td>${cells(a)}</tr>`).join("") : "";
-    $("window").innerHTML = head + "<tbody>" + field + extra + "</tbody>";
+    const rows = [...w.rows, ...agents.map((a) => ({ ...a, agentic: true }))].sort((a, b) =>
+      (sortDesc ? val(b) - val(a) : val(a) - val(b)) || at(a) - at(b));
+    const body = rows.map((r) => r.agentic
+      ? `<tr class="agentic"><td class="rank">${r.position}<div class="pm">of ${r.of}</div></td>` +
+        `<td class="name"><span class="sname">${esc(r.strategy)}</span><span class="chip">agentic</span>` +
+        `<div class="by">against this field plus itself</div></td>${cells(r)}</tr>`
+      : `<tr class="${r.kind}${r.position === 1 ? " top" : ""}"><td class="rank">${r.position}</td>` +
+        `<td class="name"><span class="sname">${esc(r.strategy)}</span>${r.kind === "reference" ? '<span class="chip">reference</span>' : ""}` +
+        `<div class="by">board #${boardRank[r.strategy]}</div></td>${cells(r)}</tr>`).join("");
+    $("window").innerHTML = head + "<tbody>" + body + "</tbody>";
     $("window").querySelectorAll("button.sort").forEach((btn) => btn.onclick = () => {
       const k = btn.dataset.key;
       if (k === sortKey) sortDesc = !sortDesc;
@@ -430,6 +440,7 @@
     });
     if (link) history.replaceState(null, "", "#window=" + w.window_start);
   }
+  $("win-agents").onchange = () => showWindow(Number($("win-select").value), false);
   $("win-select").onchange = (e) => showWindow(Number(e.target.value));
   $("win-prev").onclick = () => showWindow(Number($("win-select").value) - 1);
   $("win-next").onclick = () => showWindow(Number($("win-select").value) + 1);
