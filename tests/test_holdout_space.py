@@ -1,3 +1,4 @@
+import json
 import sys
 from datetime import date
 from pathlib import Path
@@ -97,3 +98,81 @@ def test_a_holdout_window_spanning_the_shipped_gap_is_not_scored_across_it():
     full = _market()
     spans, _ = holdout.suite_spans(_shipped(full), suites.get("holdout"))
     assert [d for span in spans.values() for d in span if d < DAYS[5]] == []
+
+
+# ------------------------------------------------------------------ the scorer's entry point
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "space"))
+import webapp  # noqa: E402
+
+from icaif import weights as W  # noqa: E402
+
+
+@pytest.fixture
+def page(monkeypatch):
+    monkeypatch.setattr(webapp, "_MARKET", (_market(), {"snapshot": "snap"}))
+    return webapp
+
+
+def _template_file(tmp_path, page, suite, rebalance="once"):
+    p = tmp_path / f"{suite}.json"
+    p.write_text(page.template(suite, rebalance))
+    return p
+
+
+def test_the_pages_template_scores_as_its_suite_and_exactly_as_ew_hold(tmp_path, page):
+    """The page's download is the first file most people score. If its keys or round_ids
+    were the page's own guess, the scorer would reject the file it handed out; if its
+    weights drifted from the reference's, "my file scores as ew_hold" would stop being true."""
+    for name in TEST_SUITES:
+        doc = json.loads(page.template(name, "once"))
+        assert doc["suite"] == name
+        dec = holdout.load_decisions(_template_file(tmp_path, page, name), _market(), name, strict=False)
+        got, _ = holdout.rolling(dec, _market())
+        from icaif import baselines
+        want, _ = holdout.rolling_runs(baselines.EqualWeightHold, _market(), name)
+        for k in holdout.METRICS:
+            assert list(got[k]) == pytest.approx(list(want[k]), rel=1e-12)
+
+
+def test_the_template_weights_are_the_strategy_codes_own_grid():
+    """holdout.template floors 1/30 itself, since weights.py does not ship. A different
+    rounding would leave cash a hair off and the template would fail its own cash check."""
+    tickers = _market().tickers
+    doc = holdout.template(_market(), "fixed1", "every")
+    w = next(iter(doc["windows"].values()))[0]["weights"]
+    assert w == W.safe({t: 1 / len(tickers) for t in tickers}, tickers)
+    rounds = sum(len(calendar.rounds_for(d)) for d in DAYS[:3])
+    assert len(doc["windows"][str(DAYS[0])]) == rounds
+
+
+def test_the_page_offers_an_entry_for_a_whole_suite_only_and_stamps_its_suite(tmp_path, page):
+    """An entry without its suite would rank as a holdout entry; one from a narrowed span
+    would rank a month's run beside whole-suite runs."""
+    fixed = json.loads(page.score(str(_template_file(tmp_path, page, "fixed1")), "", "", False,
+                                  "pre_fee", "fixed1"))
+    assert fixed["entry"]["suite"] == "fixed1" and fixed["report"]["suite"] == "fixed1"
+    assert fixed["report"]["trading_days"] == 3
+
+    rolling = _template_file(tmp_path, page, "holdout")
+    one = json.loads(rolling.read_text())
+    one["windows"] = {str(DAYS[5]): one["windows"][str(DAYS[5])]}
+    rolling.write_text(json.dumps(one))
+    narrowed = json.loads(page.score(str(rolling), str(DAYS[5]), str(DAYS[6]), False, "pre_fee", "holdout"))
+    assert narrowed["entry"] is None and narrowed["report"]["windows"] == 1
+    rolling = _template_file(tmp_path, page, "holdout")
+    whole = json.loads(page.score(str(rolling), "", "", False, "pre_fee", "holdout"))
+    assert whole["entry"]["suite"] == "holdout"
+    post = json.loads(page.score(str(rolling), "", "", False, "post_fee", "holdout"))
+    assert post["entry"] is None
+
+
+def test_the_page_rejects_a_file_scored_as_another_suite_with_no_numbers(tmp_path, page):
+    """The selector and the file can disagree. A partial score of a file the harness
+    disagrees with would read as a real result."""
+    out = json.loads(page.score(str(_template_file(tmp_path, page, "holdout")), "", "", False,
+                                "pre_fee", "fixed1"))
+    assert set(out) == {"rejected"} and "for suite 'holdout'" in out["rejected"]
+    bad = json.loads(page.score(str(_template_file(tmp_path, page, "fixed1")), "2026-11-16",
+                                "2026-11-17", False, "pre_fee", "fixed1"))
+    assert set(bad) == {"rejected"} and "fixed windows" in bad["rejected"]

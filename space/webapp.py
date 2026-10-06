@@ -99,6 +99,18 @@ def score(path: str, start: str, end: str, strict: bool, sizing: str,
     })
 
 
+def template(suite: str, rebalance: str) -> str:
+    """The equal-weight decisions file for a suite, as JSON text for the page to download.
+
+    `holdout.template`, the CLI's own: a template written here by hand could name a
+    window or round_id the scorer then rejects.
+    """
+    global _MARKET
+    if _MARKET is None:
+        _MARKET = load_market()
+    return json.dumps(holdout.template(_MARKET[0], suite, rebalance))
+
+
 def boot() -> None:
     """Parse the shipped prices once, when the page starts, not on the first score."""
     global _MARKET

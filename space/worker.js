@@ -51,7 +51,16 @@ onmessage = async (event) => {
     }
     return;
   }
-  const { name, text, start, end, strict, sizing } = event.data;
+  if (event.data.template) {
+    try {
+      const { suite, rebalance } = event.data.template;
+      postMessage({ template: py.globals.get("app").template(suite, rebalance), suite, rebalance });
+    } catch (err) {
+      postMessage({ error: String(err) });
+    }
+    return;
+  }
+  const { name, text, start, end, strict, sizing, suite } = event.data;
   try {
     // Keep the uploaded file's own name: it becomes the strategy name when the file
     // doesn't state one, and it is the name the rejection message cites.
@@ -59,7 +68,7 @@ onmessage = async (event) => {
     py.FS.mkdirTree("/upload");
     py.FS.writeFile("/upload/" + safe, text);
     const score = py.globals.get("app").score;
-    const out = score("/upload/" + safe, start, end, strict, sizing);
+    const out = score("/upload/" + safe, start, end, strict, sizing, suite);
     postMessage({ result: out });
   } catch (err) {
     postMessage({ error: String(err) });

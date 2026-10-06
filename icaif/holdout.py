@@ -42,6 +42,7 @@ float dust that the backend rejects.
 """
 
 import json
+import math
 import re
 from dataclasses import dataclass, field
 from datetime import date
@@ -175,8 +176,9 @@ def load_decisions(path, market: sim.Market, suite=suites.DEFAULT,
     if named != suite.name:
         raise DecisionFileError(
             f"this file is for suite {named!r} and was asked to score as {suite.name!r}. "
-            f"Score it as its own suite, or write the file for {suite.name!r} "
-            f"(tools/holdout_template.py --suite {suite.name}). Suites: {', '.join(suites.SUITES)}")
+            f"Score it as its own suite, or write the file for {suite.name!r} (the scorer "
+            f"page's template, or tools/holdout_template.py --suite {suite.name}). "
+            f"Suites: {', '.join(suites.SUITES)}")
 
     spans, skipped = suite_spans(market, suite)
     n_days = suite.n_days
@@ -269,6 +271,39 @@ def _parse_rounds(entries: list, valid: set, tickers: set, where_window: str):
         if abs(Decimal(cash) - implied) > CASH_TOLERANCE:
             errors.append(f"{where}: cash {cash} but the stock weights leave {implied}")
     return weights, errors, invalid
+
+
+REBALANCE = ("once", "daily", "every")
+
+
+def template(market: sim.Market, suite=suites.DEFAULT, rebalance: str = "once") -> dict:
+    """An equal-weight decisions file naming every window and round of the suite.
+
+    The scorer page offers it as a download and tools/holdout_template.py writes it, from
+    this one function: a page template that differed from the CLI's would teach a window
+    or round_id the CLI rejects. `once` buys 1/30 each at a window's first round and holds
+    (the ew_hold reference, exactly); `daily` writes round 1 of each day; `every`, every
+    round. Weights are 1/30 floored to the kit's 1e-6 grid, as `weights.safe` floors them
+    (that module is strategy code and does not ship), and cash is read from the same
+    Decimal text the loader reads, so the cash check is exact.
+    """
+    suite = suites.get(suite)
+    if rebalance not in REBALANCE:
+        raise ValueError(f"rebalance must be one of {REBALANCE}")
+    tickers = market.tickers
+    w = {t: math.floor((1 / len(tickers)) / 1e-6) * 1e-6 for t in tickers}
+    cash = float(Decimal(1) - sum(Decimal(repr(v)) for v in w.values()))
+    spans, _ = suite_spans(market, suite)
+    windows = {}
+    for ws, span in spans.items():
+        rounds = [(d, r["round"]) for d in span for r in calendar.rounds_for(d)]
+        if rebalance == "once":
+            rounds = rounds[:1]
+        elif rebalance == "daily":
+            rounds = [(d, r) for d, r in rounds if r == 1]
+        windows[str(ws)] = [{"round_id": round_id(d, r), "cash": cash, "weights": w}
+                            for d, r in rounds]
+    return {"strategy": f"equal_weight_{rebalance}", "suite": suite.name, "windows": windows}
 
 
 def _reject_constant(name):

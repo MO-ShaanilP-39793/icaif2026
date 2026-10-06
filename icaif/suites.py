@@ -1,8 +1,8 @@
 """The evaluation suites: which 15-day windows a decisions file, an entry and a board are about.
 
     holdout    every rolling 15-session window that fits in Jan 2 - Jun 30 2026 (~109)
-    official4  four fixed 15-session windows, chosen as the most like the Official phase
-               (Oct 12-30 2026)
+    official4  "Earnings season": four fixed 15-session windows, each opening as a quarter's
+               reporting starts, chosen as the most like the Official phase (Oct 12-30 2026)
 
 One definition, imported by the harness (`holdout`), the ranking (`leaderboard`) and both
 pages, because each of them used to carry its own idea of "the board's windows". A suite
@@ -57,9 +57,9 @@ def _fixed(name: str, title: str, windows: tuple, caveat: str = "") -> Suite:
 
 
 SUITES = {s.name: s for s in (
-    Suite("holdout", "Jan 2 - Jun 30 2026, every rolling 15-day window",
+    Suite("holdout", "Holdout, Jan 2 - Jun 30 2026",
           ("2026-01-02", "2026-06-30")),
-    _fixed("official4", "Four windows most like Official",
+    _fixed("official4", "Earnings season",
            (("2025-04-11", "2025-05-02"), ("2025-10-13", "2025-10-31"),
             ("2026-04-13", "2026-05-01"), ("2026-07-13", "2026-07-31")),
            caveat="The 2025 windows may be in-sample for any method trained on 2025 data, "

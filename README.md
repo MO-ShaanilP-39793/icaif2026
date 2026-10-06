@@ -158,7 +158,8 @@ across windows as a histogram. Bins are shared down a column, so shapes compare 
   An entry naming a suite the board lacks, or one without references there, is named in
   the holdout's not-ranked list rather than dropped. References live at
   `references/<suite>/<name>.json`.
-- **Official-like tab.** The official4 board: each entrant's place, score and return in
+- **Earnings season tab.** The official4 board, four windows each opening as a quarter's
+  reporting starts: each entrant's place, score and return in
   each of the four windows, the mean over them, submission counts (every version, agents
   included, counts as a look) and the suite's caveat. In a fixed suite agentic entries rank
   in the one field beside submissions and references, with their model, calls and cost;
