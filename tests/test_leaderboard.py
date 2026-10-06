@@ -2,7 +2,7 @@ import pandas as pd
 import pytest
 
 from icaif import leaderboard as lb
-from icaif import ranking
+from icaif import ranking, suites
 
 WINDOWS = [("2026-01-02", "2026-01-23"), ("2026-01-05", "2026-01-26"), ("2026-01-06", "2026-01-27")]
 SPAN = ("2026-01-02", "2026-08-31")
@@ -240,3 +240,86 @@ def test_an_agentic_entry_off_the_boards_windows_or_without_its_story_is_named_n
         _agentic("x", [WINDOWS[0]], [(0, 0, 0, 0)], agent={"model": "m"})
     with pytest.raises(lb.EntryError):
         _entry("y", [(0, 0, 0, 0)] * 3, agent=AGENT)
+
+# ----------------------------------------------------------------------------------- suites
+
+O4 = [tuple(w) for w in suites.SUITES["official4"].windows]
+O4_SPAN = suites.SUITES["official4"].span
+
+
+def _o4(name, per_window, kind=lb.SUBMITTED, windows=O4, **kw):
+    wins = pd.DataFrame([{"window_start": s, "window_end": e, **dict(zip(lb.METRICS, m))}
+                         for (s, e), m in zip(windows, per_window)])
+    args = dict(span=O4_SPAN, sizing="pre_fee", market_snapshot="snap", author="a",
+                submitted_at="" if kind == lb.REFERENCE else "2026-10-06T10:00:00Z",
+                suite="official4")
+    args.update(kw)
+    return lb.make_entry(name, kind, wins, **args)
+
+
+O4_CASH = _o4("cash", [(0, 0, 0, 0)] * 4, kind=lb.REFERENCE)
+O4_EW = _o4("ew_hold", [(0.02, 2.0, 0.03, 0.01)] * 4, kind=lb.REFERENCE)
+
+
+def test_an_entry_without_a_suite_ranks_on_the_holdout_exactly_as_before():
+    """Every entry on the board predates suites. Read as belonging to none, they would
+    all drop off the holdout board the day suites shipped."""
+    a = _entry("a", [(0.02, 2.0, 0.01, 0.05), (-0.01, -1.0, 0.03, 0.05), (0.03, 3.0, 0.01, 0.05)])
+    legacy = [{k: v for k, v in e.items() if k != "suite"} for e in (CASH, EW, a)]
+    assert lb.standings(legacy)["rows"] == lb.standings([CASH, EW, a])["rows"]
+    assert lb.boards(legacy)["rows"] == lb.standings([CASH, EW, a])["rows"]
+
+
+def test_each_suite_ranks_only_its_own_entries_against_its_own_references():
+    """Ranked together, an official4 entry and a holdout entry share one window at most:
+    each would be excluded from the other's board for "other windows", or worse, push the
+    other's places around in the window they share."""
+    a = _entry("a", [(0.02, 2.0, 0.01, 0.05)] * 3)
+    x = _o4("x", [(0.05, 5.0, 0.01, 0.02), (0.0, 0.0, 0.01, 0.02),
+                  (0.01, 1.0, 0.0, 0.02), (-0.01, -1.0, 0.02, 0.02)])
+    b = lb.boards([CASH, EW, a, O4_CASH, O4_EW, x])
+    o4 = b["suites"]["official4"]
+
+    assert {r["strategy"] for r in b["rows"]} == {"cash", "ew_hold", "a"}
+    assert {r["strategy"] for r in o4["rows"]} == {"cash", "ew_hold", "x"}
+    assert b["rows"] == lb.standings([CASH, EW, a])["rows"]
+    assert b["excluded"] == [] and o4["excluded"] == []
+    assert o4["suite"]["name"] == "official4" and o4["windows"] == 4
+    for i, w in enumerate(o4["by_window"]):
+        m = pd.DataFrame({e["strategy"]: e["windows"][i] for e in (O4_CASH, O4_EW, x)}).T
+        want = ranking.rank_window(m[lb.METRICS].astype(float))
+        assert {r["strategy"]: r["position"] for r in w["rows"]} == want["position"].to_dict()
+
+
+def test_a_suite_entry_covering_other_windows_is_named_not_ranked():
+    """An official4 entry run a day late in one window, or on three of the four, faces a
+    field that played other markets. Ranked, its mean would read as the suite's."""
+    late = _o4("late", [(0.01, 1.0, 0.0, 0.0)] * 4,
+               windows=[O4[0], ("2025-10-14", "2025-11-03"), *O4[2:]])
+    three = _o4("three", [(0.01, 1.0, 0.0, 0.0)] * 3, windows=O4[:3])
+    o4 = lb.boards([CASH, EW, O4_CASH, O4_EW, late, three])["suites"]["official4"]
+    assert {r["strategy"] for r in o4["rows"]} == {"cash", "ew_hold"}
+    why = {e["strategy"]: e["reason"] for e in o4["excluded"]}
+    assert set(why) == {"late", "three"} and "2025-10-14" in why["late"]
+
+
+def test_references_built_for_another_definition_of_a_fixed_suite_refuse_to_rank():
+    """If the references were scored on windows the suite no longer names, every correct
+    entry would be excluded and the references would rank alone, looking like a board."""
+    stale = [_o4(e["strategy"], [(0, 0, 0, 0)] * 4, kind=lb.REFERENCE,
+                 windows=[("2025-04-14", "2025-05-05"), *O4[1:]]) for e in (O4_CASH, O4_EW)]
+    with pytest.raises(lb.EntryError, match="rebuild the board"):
+        lb.standings(stale, "official4")
+
+
+def test_an_entry_naming_a_suite_the_board_lacks_is_named_not_dropped():
+    """A submission from a newer scorer, or one whose suite has no references here, would
+    otherwise vanish: on no board, in no list, with its author waiting for it to show."""
+    new = {**_entry("future", [(0.01, 1.0, 0.0, 0.0)] * 3), "suite": "official9"}
+    orphan = _o4("orphan", [(0.01, 1.0, 0.0, 0.0)] * 4)
+    b = lb.boards([CASH, EW, new, orphan])
+    why = {e["strategy"]: e["reason"] for e in b["excluded"]}
+    assert "official9" in why["future"] and "no references" in why["orphan"]
+    assert b["suites"] == {}
+    with pytest.raises(lb.EntryError, match="official9"):
+        _entry("y", [(0, 0, 0, 0)] * 3, suite="official9")

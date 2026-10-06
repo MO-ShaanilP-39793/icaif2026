@@ -78,15 +78,14 @@ def score(path: str, start: str, end: str, strict: bool, sizing: str,
               "missing": dec.missing, "invalid": dec.invalid, "windows": roll.attrs["windows"],
               "independent_windows": roll.attrs["independent_windows"],
               "skipped_window_starts": skipped}
-    # The entry the page would submit. Only the board's own span and sizing can rank,
-    # so any other run is scored but not offered for submission. Entries carry no suite
-    # yet, so only the holdout's can go: another suite's would rank as a holdout entry.
-    on_board = (suites.is_canonical(chosen) and chosen.name == suites.DEFAULT
-                and sizing == leaderboard.BOARD_SIZING)
+    # The entry the page would submit. Only a whole suite at the board's sizing can rank,
+    # so any other run is scored but not offered for submission.
+    on_board = suites.is_canonical(chosen) and sizing == leaderboard.BOARD_SIZING
     entry = leaderboard.make_entry(
         dec.strategy, leaderboard.SUBMITTED, wins, span=(start_d, end_d),
         sizing=sizing, market_snapshot=meta["snapshot"],
-        decisions_sha256=hashlib.sha256(Path(path).read_bytes()).hexdigest())
+        decisions_sha256=hashlib.sha256(Path(path).read_bytes()).hexdigest(),
+        suite=dec.suite)
     return json.dumps({
         "entry": entry if on_board else None,
         "report": report,

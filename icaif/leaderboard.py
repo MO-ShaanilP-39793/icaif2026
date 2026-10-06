@@ -25,6 +25,14 @@ main board's whole field in that window, and only that field: agentic entries ar
 ranked against each other, so adding one moves no other entry's place on either panel.
 Each carries how its windows were chosen, because a window picked for the agent's
 strength ranks it higher than the board's own windows would.
+
+**Suites** (`suites.py`). Every entry belongs to one suite, and each suite is its own
+board: its own references, its own windows, its own field. An entry without a `suite`
+is a holdout entry, as every entry was before suites existed, so those rank exactly as
+they did. Ranked together, an official4 entry would face holdout entrants it shares one
+window with, and either would be "excluded for other windows" from the other's board
+with nothing saying it belongs to another. `boards` ranks every suite; an entry naming a
+suite the board does not define, or one with no references, is named, never dropped.
 """
 
 import re
@@ -32,7 +40,7 @@ from datetime import datetime, timezone
 
 import pandas as pd
 
-from icaif import ranking
+from icaif import ranking, suites
 
 # 2: every window run by the entrant from cash. Schema-1 entries replayed one six-month
 # run into every window, which scored a different strategy for anything that decides
@@ -106,6 +114,10 @@ def _old_schema(entry: dict) -> str:
     return f"schema {entry.get('schema')}"
 
 
+def suite_of(entry: dict) -> str:
+    return entry.get("suite", suites.DEFAULT)
+
+
 def _status(entry: dict, latest: dict, field: dict) -> str:
     if entry.get("schema") != SCHEMA:
         return "old format"
@@ -128,7 +140,8 @@ def slug(name: str) -> str:
 def make_entry(strategy: str, kind: str, windows_df: pd.DataFrame, *,
                span: tuple, sizing: str, market_snapshot: str, author: str = "",
                note: str = "", decisions_sha256: str | None = None,
-               submitted_at: str | None = None, agent: dict | None = None) -> dict:
+               submitted_at: str | None = None, agent: dict | None = None,
+               suite: str = suites.DEFAULT) -> dict:
     held = {c: int(windows_df[c].sum()) if c in windows_df else 0
             for c in ("missing_rounds", "invalid_rounds")}
     if (kind == AGENTIC) != (agent is not None):
@@ -137,8 +150,10 @@ def make_entry(strategy: str, kind: str, windows_df: pd.DataFrame, *,
         missing = [k for k in AGENT_FIELDS if k not in agent]
         if missing:
             raise EntryError(f"agent fields missing: {missing}")
+    if suite not in suites.SUITES:
+        raise EntryError(f"no suite {suite!r}; the suites are {', '.join(suites.SUITES)}")
     return {**({"agent": agent} if agent is not None else {}),
-        "schema": SCHEMA, "kind": kind, "strategy": strategy, "author": author,
+        "schema": SCHEMA, "suite": suite, "kind": kind, "strategy": strategy, "author": author,
         "note": note,
         "submitted_at": submitted_at or datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
         "decisions_sha256": decisions_sha256, "sizing": sizing,
@@ -150,19 +165,53 @@ def make_entry(strategy: str, kind: str, windows_df: pd.DataFrame, *,
     }
 
 
-def standings(entries: list[dict]) -> dict:
+def boards(entries: list[dict]) -> dict:
+    """The holdout's standings, with every other suite's under "suites" by name.
+
+    The holdout's stay at the top level, the shape the page and `boardrank` read. An
+    entry whose suite is unknown here, or has no references on this board, is named in
+    the holdout's excluded list: dropped, it would be a submission that vanished.
+    """
+    by_suite = {}
+    for e in entries:
+        by_suite.setdefault(suite_of(e), []).append(e)
+    out = standings(by_suite.pop(suites.DEFAULT, []))
+    out["suites"] = {}
+    for name, group in by_suite.items():
+        if name in suites.SUITES and any(e.get("kind") == REFERENCE for e in group):
+            out["suites"][name] = standings(group, name)
+            continue
+        why = (f"names suite {name!r}, which this board does not define"
+               if name not in suites.SUITES else f"suite {name} has no references on this board")
+        out["excluded"] += [{"strategy": e["strategy"], "reason": why} for e in group
+                            if e.get("kind") != REFERENCE]
+    return out
+
+
+def standings(entries: list[dict], suite: str = suites.DEFAULT) -> dict:
     """Rank the newest version of every strategy, plus the references, window by window.
+
+    Only the suite's own entries and references take part; another suite's are not
+    this board's, and are left out without a word (`boards` ranks them on theirs).
 
     An entry that cannot be compared is left off and listed with the reason, never
     ranked on a subset of windows. That covers a different span or sizing, or a window
     set that differs from the references'. In a subset of windows every entrant would
     face a different field, and the mean scores would stop being comparable.
     """
+    definition = suites.get(suite)
+    entries = [e for e in entries if suite_of(e) == definition.name]
     refs = [e for e in entries if e.get("kind") == REFERENCE]
     if not refs:
-        raise EntryError("no reference entries; the board has nothing to anchor its windows")
+        raise EntryError(f"no {definition.name} reference entries; the board has nothing "
+                         "to anchor its windows")
     board_span = refs[0]["span"]
-    board_windows = [w["window_start"] for w in refs[0]["windows"]]
+    board_windows = [(w["window_start"], w["window_end"]) for w in refs[0]["windows"]]
+    # A fixed suite's references must be its definition's windows. Built on another
+    # definition, they would anchor a board every correct entry is "excluded" from.
+    if definition.fixed and board_windows != [tuple(w) for w in definition.windows]:
+        raise EntryError(f"the {definition.name} references cover {board_windows}, not the "
+                         f"suite's windows {list(definition.windows)}; rebuild the board")
     disjoint = disjoint_windows(refs[0]["windows"])
     n_independent = max(1, len(disjoint))
 
@@ -201,20 +250,22 @@ def standings(entries: list[dict]) -> dict:
             why = f"span {e['span']} is not the board's {board_span}"
         elif e["sizing"] != BOARD_SIZING:
             why = f"sizing {e['sizing']} is not the board's {BOARD_SIZING}"
-        elif [w["window_start"] for w in e["windows"]] != board_windows:
-            why = "its windows differ from the board's"
+        elif [(w["window_start"], w["window_end"]) for w in e["windows"]] != board_windows:
+            why = (f"its windows differ from the {definition.name} suite's"
+                   + (f" ({', '.join(w['window_start'] for w in e['windows'])})"
+                      if definition.fixed else ""))
         if why:
             excluded.append({"strategy": name, "reason": why})
         else:
             field[name] = e
 
     per_window = []
-    for i, start in enumerate(board_windows):
+    for i, (start, _) in enumerate(board_windows):
         m = pd.DataFrame({n: e["windows"][i] for n, e in field.items()}).T[METRICS].astype(float)
         # Rounded as rankplay does: float dust must not split what the kit's Decimals tie.
         per_window.append(ranking.rank_window(m.round(12)))
     ranks = pd.concat([r[["overall_score", "position"]].assign(window=start)
-                       for r, start in zip(per_window, board_windows)]
+                       for r, (start, _) in zip(per_window, board_windows)]
                       ).rename_axis("strategy").reset_index()
     disjoint_ranks = [per_window[i] for i in disjoint]
     g = ranks.groupby("strategy")
@@ -276,7 +327,8 @@ def standings(entries: list[dict]) -> dict:
          for e in entries if e.get("kind") == SUBMITTED),
         key=lambda h: h["submitted_at"], reverse=True)
     panel = agentic_standings(agentic, field, refs[0]["windows"], ref_names)
-    return {"span": board_span, "sizing": BOARD_SIZING, "windows": len(board_windows),
+    return {"suite": definition.doc(), "span": board_span, "sizing": BOARD_SIZING,
+            "windows": len(board_windows),
             "bins": edges,
             "independent_windows": n_independent,
             "entrants": len(rows), "rows": rows, "excluded": excluded, "history": history,

@@ -13,8 +13,9 @@ Jan 2 - Jun 30 2026); --start/--end narrow a rolling suite's span, and a narrowe
 never submitted. The file must name the suite it is scored as.
 
 --submit also posts the result (metrics and window table, never the decisions file) to
-the public leaderboard, recorded first in the private entry dataset (icaif/space_hub.py). It only accepts the board's
-own span and sizing, since an entry scored on other windows cannot be ranked against it.
+the public leaderboard, recorded first in the private entry dataset (icaif/space_hub.py).
+The entry names its suite and ranks on that suite's board only. It accepts only a whole
+suite at the board's sizing, since an entry scored on other windows cannot be ranked.
 
 The file format (one decision sequence per window) and which errors reject it are in
 icaif/holdout.py; tools/holdout_template.py writes an example.
@@ -57,9 +58,6 @@ def main() -> None:
     if args.submit and not (suites.is_canonical(suite) and args.sizing == leaderboard.BOARD_SIZING):
         sys.exit(f"--submit scores only a whole suite at {leaderboard.BOARD_SIZING} sizing, "
                  "so every entry is ranked on the same windows")
-    if args.submit and suite.name != suites.DEFAULT:
-        # Entries carry no suite yet: this one would rank among the holdout's entries.
-        sys.exit(f"--submit takes only the {suites.DEFAULT} suite for now")
 
     t0 = time.time()
     market = markets.research_market("alpaca")
@@ -103,7 +101,8 @@ def main() -> None:
             args.name or dec.strategy, leaderboard.SUBMITTED, wins,
             span=tuple(suite.span), sizing=args.sizing, market_snapshot=snapshot,
             author=args.author or space_hub.whoami(), note=args.note,
-            decisions_sha256=hashlib.sha256(args.decisions.read_bytes()).hexdigest())
+            decisions_sha256=hashlib.sha256(args.decisions.read_bytes()).hexdigest(),
+            suite=suite.name)
         path = space_hub.submit(entry)
         print(f"submitted {entry['strategy']} as {path}; "
               f"https://huggingface.co/spaces/{space_hub.BOARD_ID}")

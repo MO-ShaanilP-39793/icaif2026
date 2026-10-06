@@ -152,6 +152,12 @@ with the SE computed on ~8 independent windows. Each row shows each metric's dis
 across windows as a histogram. Bins are shared down a column, so shapes compare row to row.
 - **References.** Three strategies are always on the board: cash, ew_hold and
   inv_vol_hold_75. They are scored natively at build time, each run fresh in every window.
+- **One board per suite.** Each entry names its suite (`"suite"`; none means `holdout`, so
+  every earlier entry ranks as before), and `leaderboard.boards` ranks each suite on its
+  own references and windows. A suite entry covering other windows is named, not ranked.
+  An entry naming a suite the board lacks, or one without references there, is named in
+  the holdout's not-ranked list rather than dropped. References live at
+  `references/<suite>/<name>.json`.
 - **Submitting needs no sign-in.** Score a file on the private scorer, then use *Submit to
   leaderboard* with a name and a note. The page writes with the scorer Space's
   `SUBMIT_TOKEN` variable, a fine-grained token limited to the entry dataset and the

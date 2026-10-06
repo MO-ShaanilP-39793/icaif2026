@@ -222,33 +222,39 @@ def score_references(market) -> dict:
 
 
 def write_references(out: Path, scored: dict, snapshot: str) -> list[str]:
-    (out / "references").mkdir()
-    start, end = holdout.HOLDOUT_START, holdout.HOLDOUT_END
+    """One file per suite and reference, references/<suite>/<name>.json, each naming its
+    suite: without it, a second suite's cash would be a second holdout cash."""
     paths = []
-    for name, (factory, note) in REFERENCES.items():
-        wins = scored[suites.DEFAULT][name]
-        entry = leaderboard.make_entry(
-            name, leaderboard.REFERENCE, wins, span=(start, end), sizing=leaderboard.BOARD_SIZING,
-            market_snapshot=snapshot, author="baseline", note=note, submitted_at="")
-        path = f"references/{name}.json"
-        (out / path).write_text(json.dumps(entry))
-        paths.append(path)
+    for suite in suites.SUITES.values():
+        (out / "references" / suite.name).mkdir(parents=True)
+        for name, (_, note) in REFERENCES.items():
+            entry = leaderboard.make_entry(
+                name, leaderboard.REFERENCE, scored[suite.name][name], span=tuple(suite.span),
+                sizing=leaderboard.BOARD_SIZING, market_snapshot=snapshot, author="baseline",
+                note=note, submitted_at="", suite=suite.name)
+            path = f"references/{suite.name}/{name}.json"
+            (out / path).write_text(json.dumps(entry))
+            paths.append(path)
     return paths
 
 
 def check_board(out: Path) -> None:
-    """The public board must import nothing but ranking and leaderboard, and must rank."""
+    """The public board must import nothing but the ranking code, and must rank every suite."""
     probe = f"""
 import sys, json
 sys.path = [p for p in sys.path if p not in ("", {str(data.ROOT)!r}, {str(data.ROOT / "tools")!r})]
 sys.path.insert(0, {str(out)!r})
 import boardapp
 loaded = sorted(m for m in sys.modules if m.startswith(("icaif", "kit", "webapp")))
-assert loaded == ["icaif", "icaif.leaderboard", "icaif.ranking"], loaded
+assert loaded == ["icaif", "icaif.leaderboard", "icaif.ranking", "icaif.suites"], loaded
 refs = json.load(open({str(out / "manifest.json")!r}))["references"]
 b = json.loads(boardapp.board([open({str(out)!r} + "/" + p).read() for p in refs]))
-assert "error" not in b and b["entrants"] == len(refs), b
-print(loaded, b["entrants"], "references ranked on", b["windows"], "windows")
+assert "error" not in b, b
+ranked = {{"holdout": b, **b["suites"]}}
+assert sorted(ranked) == {sorted(suites.SUITES)!r}, sorted(ranked)
+assert all(s["entrants"] == {len(REFERENCES)} for s in ranked.values()) and not b["excluded"], b["excluded"]
+print(loaded, ", ".join(f"{{n}}: {{s['entrants']}} references on {{s['windows']}} windows"
+                        for n, s in ranked.items()))
 """
     r = subprocess.run([sys.executable, "-c", probe], capture_output=True, text=True, cwd=out)
     if r.returncode:
