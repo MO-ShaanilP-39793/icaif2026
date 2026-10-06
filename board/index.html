@@ -115,6 +115,8 @@
   .picker button:disabled { color: var(--muted); cursor: default; }
   tr.sep td { padding: 8px 10px 4px; font-size: 12px; color: var(--muted); border-bottom: 1px solid var(--line); }
   tr.agentic .sname { font-style: italic; }
+  th button.sort { font: inherit; color: inherit; background: none; border: 0; padding: 0; cursor: pointer; text-align: left; }
+  th button.sort:hover, th[aria-sort] button.sort { color: var(--ink); }
   [hidden] { display: none !important; }
 </style>
 </head>
@@ -367,6 +369,10 @@
   // icaif/leaderboard.py), never re-ranked here: a ranking in JS could drift from the rules'.
   // Agentic entries are appended with their own place against that field, not ranked in it.
   let windows = [], boardRank = {}, agentsIn = {};
+  // A column's first click sorts it best first, by the rules' direction for that metric;
+  // a second click reverses it. Place stays the contest's place whatever the order.
+  let sortKey = "position", sortDesc = false;
+  const BEST_DESC = { cumulative_return: true, sharpe_ratio: true };
   function setupWindows(b) {
     windows = b.by_window || [];
     boardRank = Object.fromEntries(b.rows.map((r) => [r.strategy, r.rank]));
@@ -396,17 +402,32 @@
     $("win-note").textContent = `window ${i + 1} of ${windows.length} · ${w.rows.length} entrants`;
     const cells = (r) => `<td class="score"><span class="big">${r.overall_score.toFixed(2)}</span></td>` +
       METRICS.map((k) => `<td class="num">${fmtFull(k, r[k])} <span class="rk">· ${rk(r["rank_" + k])}</span></td>`).join("");
-    const head = `<thead><tr><th>Place</th><th>Strategy</th><th>Score<span class="range">mean rank, lower is better</span></th>` +
-      METRICS.map((k) => `<th>${LABELS[k]}<span class="range">${HIGHER[k]} · rank</span></th>`).join("") + `</tr></thead>`;
-    const field = w.rows.map((r) => `<tr class="${r.kind}${r.position === 1 ? " top" : ""}"><td class="rank">${r.position}</td>` +
+    const th = (key, label, range) => {
+      const on = key === sortKey, arrow = on ? (sortDesc ? " ▾" : " ▴") : "";
+      return `<th${on ? ` aria-sort="${sortDesc ? "descending" : "ascending"}"` : ""}>` +
+        `<button class="sort" data-key="${key}">${label}${arrow}<span class="range">${range}</span></button></th>`;
+    };
+    const head = `<thead><tr>${th("position", "Place", "")}<th>Strategy</th>` +
+      th("overall_score", "Score", "mean rank, lower is better") +
+      METRICS.map((k) => th(k, LABELS[k], `${HIGHER[k]} · rank`)).join("") + `</tr></thead>`;
+    // Ties keep the contest's place order, so a sort never reshuffles equal values at random.
+    const order = (rows) => [...rows].sort((a, b) =>
+      (sortDesc ? b[sortKey] - a[sortKey] : a[sortKey] - b[sortKey]) || a.position - b.position);
+    const field = order(w.rows).map((r) => `<tr class="${r.kind}${r.position === 1 ? " top" : ""}"><td class="rank">${r.position}</td>` +
       `<td class="name"><span class="sname">${esc(r.strategy)}</span>${r.kind === "reference" ? '<span class="chip">reference</span>' : ""}` +
       `<div class="by">board #${boardRank[r.strategy]}</div></td>${cells(r)}</tr>`).join("");
     const agents = agentsIn[w.window_start + "|" + w.window_end] || [];
     const extra = agents.length ? `<tr class="sep"><td colspan="${3 + METRICS.length}">Agentic entries in this window, ` +
       `each placed against the field above plus itself</td></tr>` +
-      agents.map((a) => `<tr class="agentic"><td class="rank">${ord(a.position)}<div class="pm">of ${a.of}</div></td>` +
+      order(agents).map((a) => `<tr class="agentic"><td class="rank">${ord(a.position)}<div class="pm">of ${a.of}</div></td>` +
         `<td class="name"><span class="sname">${esc(a.strategy)}</span><span class="chip">agentic</span></td>${cells(a)}</tr>`).join("") : "";
     $("window").innerHTML = head + "<tbody>" + field + extra + "</tbody>";
+    $("window").querySelectorAll("button.sort").forEach((btn) => btn.onclick = () => {
+      const k = btn.dataset.key;
+      if (k === sortKey) sortDesc = !sortDesc;
+      else { sortKey = k; sortDesc = !!BEST_DESC[k]; }
+      showWindow(i, false);
+    });
     if (link) history.replaceState(null, "", "#window=" + w.window_start);
   }
   $("win-select").onchange = (e) => showWindow(Number(e.target.value));
