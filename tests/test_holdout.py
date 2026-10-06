@@ -1,10 +1,13 @@
+import ast
+import glob
 import json
+from dataclasses import replace
 from datetime import date
 
 import pandas as pd
 import pytest
 
-from icaif import baselines, calendar, data, holdout, sim
+from icaif import baselines, calendar, data, holdout, sim, suites, windows
 from icaif import weights as W
 from icaif.rankplay import _Replay
 
@@ -30,6 +33,11 @@ def _market(issues=None):
 
 N = 3   # window length here: six days give four windows
 STARTS = DAYS[:4]
+# The holdout suite as these tests see it: the synthetic market's six days, 3-day windows.
+SUITE = suites.Suite("holdout", "test", (str(START), str(END)), n_days=N)
+# A fixed suite on the same market: two windows that share no day.
+FIXED = suites.Suite("fixed2", "test", (str(START), str(END)),
+                     ((str(DAYS[0]), str(DAYS[2])), (str(DAYS[3]), str(DAYS[5]))), n_days=N)
 
 
 def _rounds(days):
@@ -63,15 +71,16 @@ def _doc(plans):
     return {str(ws): [_entry(k, w) for k, w in plan.items()] for ws, plan in plans.items()}
 
 
-def _write(tmp_path, windows, name="agent"):
+def _write(tmp_path, windows, name="agent", **extra):
     p = tmp_path / "decisions.json"
-    p.write_text(json.dumps({"strategy": name, "windows": windows}))
+    p.write_text(json.dumps({"strategy": name, **extra, "windows": windows}))
     return p
 
 
-def _load(tmp_path, windows, market=None, **kw):
-    return holdout.load_decisions(_write(tmp_path, windows), market or _market(), START, END,
-                                  n_days=N, **kw)
+def _load(tmp_path, windows, market=None, suite=SUITE, **kw):
+    extra = {} if suite.name == suites.DEFAULT else {"suite": suite.name}
+    return holdout.load_decisions(_write(tmp_path, windows, **extra), market or _market(),
+                                  suite, **kw)
 
 
 def test_each_window_scores_its_own_decisions_from_one_million_in_cash(tmp_path):
@@ -98,7 +107,7 @@ def test_an_equal_weight_hold_file_scores_exactly_as_the_ew_hold_reference(tmp_p
     windows = {str(ws): [_entry(_rounds(_span(ws))[0], w)] for ws in STARTS}
     dec = _load(tmp_path, windows)
     got, _ = holdout.rolling(dec, _market())
-    want, _ = holdout.rolling_runs(baselines.EqualWeightHold, _market(), START, END, n_days=N)
+    want, _ = holdout.rolling_runs(baselines.EqualWeightHold, _market(), SUITE)
 
     for k in holdout.METRICS:
         assert list(got[k]) == pytest.approx(list(want[k]), rel=1e-12)
@@ -110,7 +119,7 @@ def test_the_old_one_run_file_is_rejected_by_name_not_replayed(tmp_path):
     p = tmp_path / "old.json"
     p.write_text(json.dumps({"strategy": "x", "decisions": []}))
     with pytest.raises(holdout.DecisionFileError, match="old one-run format"):
-        holdout.load_decisions(p, _market(), START, END, n_days=N)
+        holdout.load_decisions(p, _market(), SUITE)
 
 
 def test_a_missing_window_rejects_the_file(tmp_path):
@@ -250,4 +259,125 @@ def test_independent_windows_counts_windows_that_share_no_day(tmp_path):
 def test_a_market_that_ends_before_the_span_rejects_rather_than_scoring_less(tmp_path):
     path = _write(tmp_path, _doc(_plan()))
     with pytest.raises(holdout.DecisionFileError, match="ends"):
-        holdout.load_decisions(path, _market(), START, date(2026, 12, 31), n_days=N)
+        holdout.load_decisions(path, _market(), SUITE.narrowed(START, "2026-12-31"))
+
+
+# ----------------------------------------------------------------------------------- suites
+
+def _fixed_plans():
+    plans = _plan()
+    return {ws: plans[ws] for ws in (DAYS[0], DAYS[3])}
+
+
+def test_a_file_scored_as_another_suite_is_rejected_by_name(tmp_path):
+    """A holdout file scored as a fixed suite would fail window by window, and a fixed-suite
+    file whose windows happen to fit a narrowed holdout would pass as a holdout result.
+    Either way the score belongs to a suite the agent was not run for."""
+    holdout_file = _write(tmp_path, _doc(_plan()))
+    with pytest.raises(holdout.DecisionFileError, match="for suite 'holdout'.*as 'fixed2'"):
+        holdout.load_decisions(holdout_file, _market(), FIXED)
+
+    fixed_file = _write(tmp_path, _doc(_fixed_plans()), suite="fixed2")
+    with pytest.raises(holdout.DecisionFileError, match="for suite 'fixed2'.*as 'holdout'"):
+        holdout.load_decisions(fixed_file, _market(), SUITE)
+
+    unknown = _write(tmp_path, _doc(_plan()), suite="official9")
+    with pytest.raises(holdout.DecisionFileError, match="official9"):
+        holdout.load_decisions(unknown, _market(), SUITE)
+
+
+def test_a_fixed_suite_scores_exactly_its_windows_each_from_cash(tmp_path):
+    """Scored on the rolling windows between them, a fixed suite's mean would be over
+    windows nobody chose, and its entries would rank on a field no other suite entry saw."""
+    plans = _fixed_plans()
+    dec = _load(tmp_path, _doc(plans), suite=FIXED)
+    wins, skipped = holdout.rolling(dec, _market())
+
+    assert dec.suite == "fixed2" and skipped == []
+    assert list(zip(wins["window_start"], wins["window_end"])) == [tuple(w) for w in FIXED.windows]
+    for ws, (_, row) in zip(plans, wins.iterrows()):
+        want = sim.run(_Replay(plans[ws]), _market(), ws, N).metrics()
+        for k in holdout.METRICS:
+            assert row[k] == pytest.approx(want[k], rel=1e-12)
+    refs, _ = holdout.rolling_runs(baselines.EqualWeightHold, _market(), FIXED)
+    assert list(refs["window_start"]) == list(wins["window_start"])
+
+
+def test_a_fixed_suite_rejects_a_rolling_neighbour_and_a_missing_window(tmp_path):
+    """A window keyed one day late is a different market; one left out shrinks four
+    windows to three under the same suite name. Both are the file disagreeing with the
+    suite, so both reject it."""
+    windows = _doc(_fixed_plans())
+    windows[str(DAYS[1])] = windows[str(DAYS[0])]
+    with pytest.raises(holdout.DecisionFileError, match=f"window {DAYS[1]}: not one of suite fixed2"):
+        _load(tmp_path, windows, suite=FIXED)
+
+    windows = _doc(_fixed_plans())
+    del windows[str(DAYS[3])]
+    with pytest.raises(holdout.DecisionFileError, match=f"window {DAYS[3]}: no decisions"):
+        _load(tmp_path, windows, suite=FIXED)
+
+
+def test_a_fixed_window_the_market_lacks_a_session_of_raises_rather_than_running_on(tmp_path):
+    """The scorer ships prices for a fixed suite's windows only. If one session were
+    missing, 15 sessions from the start would run into whatever the price file holds
+    next, months later, and score a window that never existed."""
+    full = _market()
+    gone = full.exec_prices.index.date != DAYS[4]
+    short = sim.Market(full.exec_prices[gone], full.closes[full.closes.index.date != DAYS[4]],
+                       full.info_bars)
+    with pytest.raises(holdout.DecisionFileError, match=f"window {DAYS[3]}..{DAYS[5]}: the market holds 2"):
+        _load(tmp_path, _doc(_fixed_plans()), market=short, suite=FIXED)
+
+
+def test_a_fixed_window_on_a_degraded_day_raises_rather_than_being_skipped(tmp_path):
+    """A rolling suite can skip a window and still be ~100 windows. A fixed suite that
+    skipped one would rank three windows under the name of four."""
+    market = _market(issues={"degraded_days": [str(DAYS[4])]})
+    with pytest.raises(holdout.DecisionFileError, match="degraded"):
+        _load(tmp_path, _doc(_fixed_plans()), market=market, suite=FIXED)
+
+
+def test_a_narrowed_suite_is_scoreable_but_never_the_suite_itself():
+    """A narrowed holdout keeps the holdout's name. If it compared equal to the holdout,
+    a run over March alone could be submitted beside six-month entries."""
+    narrow = suites.SUITES["holdout"].narrowed("2026-03-02", "2026-03-31")
+    assert narrow.name == "holdout" and not suites.is_canonical(narrow)
+    assert suites.is_canonical(suites.SUITES["holdout"])
+    assert not suites.is_canonical(replace(suites.SUITES["official4"], windows=()))
+    with pytest.raises(ValueError, match="fixed windows"):
+        suites.SUITES["official4"].narrowed("2025-04-11", "2025-05-02")
+
+
+def test_the_holdout_span_is_read_from_the_suite_not_a_second_copy():
+    """Two definitions of the holdout drift: the board would rank windows the scorer no
+    longer scores, and nothing on either page would show it."""
+    assert (str(holdout.HOLDOUT_START), str(holdout.HOLDOUT_END)) == suites.SUITES["holdout"].span
+    assert suites.WINDOW_DAYS == windows.WINDOW_DAYS
+    assert all(s.n_days == windows.WINDOW_DAYS for s in suites.SUITES.values())
+
+
+def test_the_suite_module_imports_nothing_the_public_board_cannot_ship():
+    """The public board ships suites.py beside the ranking code only. An import of the
+    simulator or the kit here would either break the board or carry them into it."""
+    tree = ast.parse((data.ROOT / "icaif" / "suites.py").read_text())
+    mods = {a.name.split(".")[0] for n in ast.walk(tree) if isinstance(n, ast.Import) for a in n.names}
+    mods |= {n.module.split(".")[0] for n in ast.walk(tree) if isinstance(n, ast.ImportFrom)}
+    assert mods <= {"dataclasses", "datetime"}, mods
+
+
+SNAPSHOTS = sorted(glob.glob(str(data.ROOT / "data" / "public" / "alpaca_30m_2*.parquet")))
+
+
+@pytest.mark.skipif(not SNAPSHOTS, reason="no alpaca_30m snapshot")
+def test_every_fixed_window_is_its_stated_sessions_on_the_exchange_calendar():
+    """A last session typed one day off makes a 14- or 16-day window, and a first one on
+    a holiday starts a window the contest could never have; the scorer would then refuse
+    every file, or score a window nobody meant. Checked against the data's own sessions."""
+    sessions = sorted(set(pd.read_parquet(SNAPSHOTS[-1], columns=["start"])["start"].dt.date))
+    for suite in suites.SUITES.values():
+        for first, last in suite.windows:
+            i = sessions.index(date.fromisoformat(first))
+            assert str(sessions[i + suite.n_days - 1]) == last, (suite.name, first)
+    assert [w[0] for w in suites.SUITES["official4"].windows] == [
+        "2025-04-11", "2025-10-13", "2026-04-13", "2026-07-13"]

@@ -41,21 +41,22 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "space"))
 
 import webapp  # noqa: E402
-from icaif import baselines, calendar, data, holdout, leaderboard, markets, space_hub  # noqa: E402
+from icaif import baselines, calendar, data, holdout, leaderboard, markets, space_hub, suites  # noqa: E402
 
 REPO_ID = space_hub.REPO_ID
 # Static because a Gradio Space needs a paid plan: Team/Enterprise for the org, PRO for
 # a personal account. Both refused with HF 402 on 2026-09-30.
 ICAIF_MODULES = ["__init__", "calendar", "data", "holdout", "kit", "leaderboard", "ranking",
-                 "sim", "windows"]
+                 "sim", "suites", "windows"]
 KIT_FILES = ["kit/__init__.py", "kit/config.py", "kit/contracts.py", "kit/evaluation.py",
              "universe.json"]
 SPACE_FILES = ["index.html", "worker.js", "webapp.py", "README.md"]
 BOARD_FILES = {"index.html": "board/index.html", "README.md": "board/README.md",
                "boardapp.py": "board/boardapp.py", "worker.js": "space/worker.js",
                "icaif/__init__.py": "icaif/__init__.py", "icaif/ranking.py": "icaif/ranking.py",
-               "icaif/leaderboard.py": "icaif/leaderboard.py"}
-BOARD_PY = ["boardapp.py", "icaif/__init__.py", "icaif/ranking.py", "icaif/leaderboard.py"]
+               "icaif/leaderboard.py": "icaif/leaderboard.py", "icaif/suites.py": "icaif/suites.py"}
+BOARD_PY = ["boardapp.py", "icaif/__init__.py", "icaif/ranking.py", "icaif/leaderboard.py",
+            "icaif/suites.py"]
 # What the worker writes into Pyodide's filesystem; the page's own HTML/JS is not.
 PY_FILES = ["webapp.py", *(f"icaif/{m}.py" for m in ICAIF_MODULES),
             *(f"starter-kit/{f}" for f in KIT_FILES),
@@ -88,6 +89,8 @@ def build(out: Path) -> dict:
     days = [d for d in market.days if str(d) >= PRICES_FROM]
     meta = {"snapshot": snapshot, "first_day": str(days[0]), "last_day": str(days[-1]),
             "holdout": [str(holdout.HOLDOUT_START), str(holdout.HOLDOUT_END)],
+            # The page's suite selector reads these, never a copy of its own.
+            "suites": [s.doc() for s in suites.SUITES.values()],
             "degraded_days": [d for d in market.issues.get("degraded_days", [])
                               if d >= PRICES_FROM]}
     (out / "data" / "market.json").write_text(json.dumps(meta, indent=1))
@@ -123,7 +126,8 @@ def build_board(out: Path, market, snapshot: str) -> None:
     refs = write_references(out, market, snapshot)
     (out / "manifest.json").write_text(json.dumps(
         {"files": BOARD_PY, "module": "boardapp", "references": refs,
-         "meta": {"holdout": [str(holdout.HOLDOUT_START), str(holdout.HOLDOUT_END)]}}, indent=1))
+         "meta": {"holdout": [str(holdout.HOLDOUT_START), str(holdout.HOLDOUT_END)],
+                  "suites": [s.doc() for s in suites.SUITES.values()]}}, indent=1))
     # Exact, not "at least": the board is public, so anything extra is published.
     shipped = {p.relative_to(out).as_posix() for p in out.rglob("*") if p.is_file()}
     expected = set(BOARD_FILES) | set(refs) | {"manifest.json"}
@@ -148,7 +152,7 @@ def write_references(out: Path, market, snapshot: str) -> list[str]:
     start, end = holdout.HOLDOUT_START, holdout.HOLDOUT_END
     paths = []
     for name, (factory, note) in REFERENCES.items():
-        wins, _ = holdout.rolling_runs(factory, market, start, end)
+        wins, _ = holdout.rolling_runs(factory, market, suites.DEFAULT)
         entry = leaderboard.make_entry(
             name, leaderboard.REFERENCE, wins, span=(start, end), sizing=leaderboard.BOARD_SIZING,
             market_snapshot=snapshot, author="baseline", note=note, submitted_at="")
@@ -234,8 +238,7 @@ def parity(out: Path) -> None:
     probe.write_text(json.dumps({"strategy": "parity", "windows": windows}))
     dec = holdout.load_decisions(probe, full)
     a_roll, _ = holdout.rolling(dec, full)
-    page = json.loads(webapp.score(str(probe), str(holdout.HOLDOUT_START),
-                                   str(holdout.HOLDOUT_END), False, "pre_fee"))
+    page = json.loads(webapp.score(str(probe), "", "", False, "pre_fee", suites.DEFAULT))
     probe.unlink()
     b_roll = page["windows"]
     # Prices are bitwise equal; the last digits differ only because numpy's dot product

@@ -5,7 +5,7 @@ the harness scores a fresh $1M in every 15-day window starting on each trading d
 the span (`windows.py`), and the file carries one decision sequence per window: the
 agent run as itself from that window's first round, as it would be in the contest.
 
-    {"strategy": "my_agent",
+    {"strategy": "my_agent", "suite": "holdout",
      "windows": {"2026-01-02": [{"round_id": "holdout-2026-01-02-r1", "cash": 0.25,
                                  "weights": {<all 30 symbols>: number}}, ...],
                  "2026-01-05": [...], ...}}
@@ -17,6 +17,12 @@ not 1/30 each; and an agent that decides from its own book (a drawdown stop, pro
 booking, a band around its holdings) saw a book it never had. The old shape is rejected
 by name, not accepted alongside: both would rank side by side with nothing to tell
 them apart.
+
+The windows are a suite's (`suites.py`): every rolling window of the holdout span, or a
+fixed set such as official4. The file names its suite, and a file without one is a
+holdout file, as every file was before suites existed. A file for one suite scored as
+another is rejected by name: its windows would otherwise fail one by one, or worse, a
+holdout file narrowed to a stretch could pass as a different suite's.
 
 Two kinds of error are treated differently, as the backend treats them:
 
@@ -44,12 +50,11 @@ from pathlib import Path
 
 import pandas as pd
 
-from icaif import calendar, kit, sim
+from icaif import calendar, kit, sim, suites
 from icaif.leaderboard import independent_windows  # noqa: F401  (re-exported)
 from icaif.windows import WINDOW_DAYS
 
-HOLDOUT_START = date(2026, 1, 2)
-HOLDOUT_END = date(2026, 6, 30)
+HOLDOUT_START, HOLDOUT_END = (date.fromisoformat(d) for d in suites.SUITES["holdout"].span)
 CASH_TOLERANCE = Decimal("1e-9")
 METRICS = ("cumulative_return", "sharpe_ratio", "maximum_drawdown", "turnover")
 # A systematic mistake repeats in every window; 11,000 identical lines bury the first.
@@ -65,6 +70,7 @@ class DecisionFileError(ValueError):
 @dataclass
 class Decisions:
     strategy: str
+    suite: str
     windows: dict                     # window start -> {(day, round): {ticker: Decimal}}
     spans: dict                       # window start -> its trading days, scored windows only
     skipped: list = field(default_factory=list)   # starts of windows on a degraded day
@@ -107,14 +113,53 @@ def window_spans(market: sim.Market, start: date, end: date, n_days: int = WINDO
     return scored, skipped
 
 
+def suite_spans(market: sim.Market, suite) -> tuple[dict, list]:
+    """A suite's windows on this market: ({first day: its trading days}, skipped starts).
+
+    A rolling suite skips and names a window touching a degraded day, as `window_spans`
+    does. A fixed suite cannot: dropping one of four windows would rank a different suite
+    under the same name. So a degraded day, a window whose sessions the market does not
+    hold all of, or one that runs past its stated last session, raises.
+    """
+    suite = suites.get(suite)
+    if not suite.fixed:
+        start, end = (date.fromisoformat(d) for d in suite.span)
+        return window_spans(market, start, end, suite.n_days)
+    span_days(market, *(date.fromisoformat(d) for d in suite.span))
+    degraded = set(market.issues.get("degraded_days", []))
+    scored = {}
+    for first, last in suite.windows:
+        days = [d for d in market.days if first <= str(d) <= last]
+        if len(days) != suite.n_days or (str(days[0]), str(days[-1])) != (first, last):
+            raise DecisionFileError(
+                f"suite {suite.name} window {first}..{last}: the market holds "
+                f"{len(days)} trading days there, not {suite.n_days} from {first} to {last}")
+        if degraded & {str(d) for d in days}:
+            raise DecisionFileError(f"suite {suite.name} window {first}..{last} touches a "
+                                    "degraded day; a fixed suite cannot skip a window")
+        scored[days[0]] = days
+    return scored, []
+
+
+def suite_days(market: sim.Market, suite) -> list[date]:
+    """The trading days a suite scores: its span for a rolling suite, the union of its
+    windows for a fixed one. A fixed suite's span runs over a year it never scores, and
+    a day count off it would report sessions no window contains."""
+    suite = suites.get(suite)
+    if not suite.fixed:
+        return span_days(market, *(date.fromisoformat(d) for d in suite.span))
+    spans, _ = suite_spans(market, suite)
+    return sorted({d for days in spans.values() for d in days})
+
+
 def round_id(day: date, round_no: int, phase: str = "holdout") -> str:
     return f"{phase}-{day.isoformat()}-r{round_no}"
 
 
-def load_decisions(path, market: sim.Market, start: date = HOLDOUT_START,
-                   end: date = HOLDOUT_END, strict: bool = False,
-                   n_days: int = WINDOW_DAYS) -> Decisions:
-    """Parse and check a decisions file against the market's calendar for the span."""
+def load_decisions(path, market: sim.Market, suite=suites.DEFAULT,
+                   strict: bool = False) -> Decisions:
+    """Parse and check a decisions file against the suite's windows on the market's calendar."""
+    suite = suites.get(suite)
     raw = Path(path).read_text()
     doc = json.loads(raw, parse_float=Decimal, parse_constant=_reject_constant)
     if isinstance(doc, dict) and "decisions" in doc and "windows" not in doc:
@@ -126,8 +171,15 @@ def load_decisions(path, market: sim.Market, start: date = HOLDOUT_START,
     if not isinstance(doc, dict) or not isinstance(doc.get("windows"), dict):
         raise DecisionFileError('expected {"strategy": ..., "windows": {"YYYY-MM-DD": [...]}}')
     strategy = str(doc.get("strategy") or Path(path).stem)
+    named = doc.get("suite", suites.DEFAULT)
+    if named != suite.name:
+        raise DecisionFileError(
+            f"this file is for suite {named!r} and was asked to score as {suite.name!r}. "
+            f"Score it as its own suite, or write the file for {suite.name!r} "
+            f"(tools/holdout_template.py --suite {suite.name}). Suites: {', '.join(suites.SUITES)}")
 
-    spans, skipped = window_spans(market, start, end, n_days)
+    spans, skipped = suite_spans(market, suite)
+    n_days = suite.n_days
     tickers = set(market.tickers)
     errors, windows, missing, invalid = [], {}, [], []
     given = {}
@@ -140,8 +192,11 @@ def load_decisions(path, market: sim.Market, start: date = HOLDOUT_START,
         if key in skipped:
             continue   # touches a degraded day; not scored, so not checked
         if ws not in spans:
-            errors.append(f"window {key}: no {n_days}-day window starts there in {start}..{end} "
-                          "(not a trading day, or too close to the end)")
+            errors.append(f"window {key}: not one of suite {suite.name}'s windows ("
+                          + (", ".join(w for w, _ in suite.windows) if suite.fixed else
+                             f"a {n_days}-day window from each trading day in "
+                             f"{suite.span[0]}..{suite.span[1]}; not a trading day, or too "
+                             "close to the end") + ")")
             continue
         if not isinstance(entries, list):
             errors.append(f"window {key}: expected a list of decisions")
@@ -169,7 +224,7 @@ def load_decisions(path, market: sim.Market, start: date = HOLDOUT_START,
             f"strict: {len(missing)} missing round(s), {len(invalid)} invalid round(s); "
             f"first missing {missing[:5]}, first invalid {invalid[:5]}")
     ordered = {ws: windows[ws] for ws in spans}
-    return Decisions(strategy, ordered, spans, skipped, missing, invalid)
+    return Decisions(strategy, suite.name, ordered, spans, skipped, missing, invalid)
 
 
 def _parse_rounds(entries: list, valid: set, tickers: set, where_window: str):
@@ -252,17 +307,15 @@ def rolling(decisions: Decisions, market: sim.Market, sizing: str = "pre_fee"):
     return pd.DataFrame(rows), list(decisions.skipped)
 
 
-def rolling_runs(factory, market: sim.Market, start: date = HOLDOUT_START,
-                 end: date = HOLDOUT_END, n_days: int = WINDOW_DAYS,
-                 sizing: str = "pre_fee"):
-    """`rolling` for any strategy factory, one fresh instance per window.
+def rolling_runs(factory, market: sim.Market, suite=suites.DEFAULT, sizing: str = "pre_fee"):
+    """`rolling` for any strategy factory, one fresh instance per window of the suite.
 
     The leaderboard's reference strategies run here as themselves, so a stateful one
     such as a buy-and-hold starts each window in cash, as it would in the contest. A
     decisions file holds the same thing written down: one run per window.
     """
-    spans, skipped = window_spans(market, start, end, n_days)
-    rows = [_window_row(sim.run(factory(), market, span[0], n_days, sizing=sizing), span, 0)
+    spans, skipped = suite_spans(market, suite)
+    rows = [_window_row(sim.run(factory(), market, span[0], len(span), sizing=sizing), span, 0)
             for span in spans.values()]
     return pd.DataFrame(rows), skipped
 

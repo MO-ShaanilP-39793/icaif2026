@@ -13,7 +13,7 @@ from pathlib import Path
 
 import pandas as pd
 
-from icaif import calendar, holdout, leaderboard
+from icaif import calendar, holdout, leaderboard, suites
 
 ROOT = Path(__file__).resolve().parent
 
@@ -45,24 +45,33 @@ def load_market(root: Path = ROOT):
 _MARKET = None
 
 
-def score(path: str, start: str, end: str, strict: bool, sizing: str) -> str:
-    """JSON: {"rejected": msg} or the notes, the tables and CSV texts for download."""
+def score(path: str, start: str, end: str, strict: bool, sizing: str,
+          suite: str = suites.DEFAULT) -> str:
+    """JSON: {"rejected": msg} or the notes, the tables and CSV texts for download.
+
+    `start`/`end` narrow a rolling suite's span; blank, or a fixed suite, takes the
+    suite's own. A narrowed run is scored but not offered for submission.
+    """
     global _MARKET
     if _MARKET is None:
         _MARKET = load_market()
     market, meta = _MARKET
     try:
-        start_d, end_d = date.fromisoformat(start.strip()), date.fromisoformat(end.strip())
-        dec = holdout.load_decisions(path, market, start_d, end_d, strict=strict)
-    except (holdout.DecisionFileError, ValueError) as err:
+        chosen = suites.get(suite)
+        span = (start.strip() or chosen.span[0], end.strip() or chosen.span[1])
+        if span != tuple(chosen.span):
+            chosen = chosen.narrowed(*(str(date.fromisoformat(d)) for d in span))
+        start_d, end_d = (date.fromisoformat(d) for d in chosen.span)
+        dec = holdout.load_decisions(path, market, chosen, strict=strict)
+    except (holdout.DecisionFileError, ValueError, KeyError) as err:
         # A rejected file shows the reason and no numbers: a partial score of a file
         # the harness disagrees with would read as a real result.
         return json.dumps({"rejected": str(err)})
 
     wins, skipped = holdout.rolling(dec, market, sizing=sizing)
     roll = holdout.summarise_rolling(wins)
-    days = holdout.span_days(market, start_d, end_d)
-    report = {"strategy": dec.strategy, "sizing": sizing, "fills": "alpaca",
+    days = holdout.suite_days(market, chosen)
+    report = {"strategy": dec.strategy, "suite": dec.suite, "sizing": sizing, "fills": "alpaca",
               "market_snapshot": meta["snapshot"],
               "first_day": str(days[0]), "last_day": str(days[-1]), "trading_days": len(days),
               "rounds": sum(len(w) for w in dec.windows.values()),
@@ -70,9 +79,10 @@ def score(path: str, start: str, end: str, strict: bool, sizing: str) -> str:
               "independent_windows": roll.attrs["independent_windows"],
               "skipped_window_starts": skipped}
     # The entry the page would submit. Only the board's own span and sizing can rank,
-    # so any other run is scored but not offered for submission.
-    on_board = (start_d, end_d, sizing) == (holdout.HOLDOUT_START, holdout.HOLDOUT_END,
-                                            leaderboard.BOARD_SIZING)
+    # so any other run is scored but not offered for submission. Entries carry no suite
+    # yet, so only the holdout's can go: another suite's would rank as a holdout entry.
+    on_board = (suites.is_canonical(chosen) and chosen.name == suites.DEFAULT
+                and sizing == leaderboard.BOARD_SIZING)
     entry = leaderboard.make_entry(
         dec.strategy, leaderboard.SUBMITTED, wins, span=(start_d, end_d),
         sizing=sizing, market_snapshot=meta["snapshot"],

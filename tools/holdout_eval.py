@@ -1,13 +1,16 @@
-"""Score an agent's decisions file on the Jan-Jun 2026 holdout.
+"""Score an agent's decisions file on a suite's windows (icaif/suites.py).
 
     .venv/bin/python tools/holdout_eval.py --decisions path/to/decisions.json
-        [--start 2026-01-02] [--end 2026-06-30] [--strict] [--sizing pre_fee|post_fee]
+        [--suite holdout|official4] [--start 2026-01-02] [--end 2026-06-30]
+        [--strict] [--sizing pre_fee|post_fee]
         [--out output/holdout/<strategy>/<ts>/]
         [--submit [--name NAME] [--author WHO] [--note TEXT]]
 
-On Alpaca :30 fills (markets.research_market), a fresh $1M in every 15-day window
-starting on each trading day, each running that window's own decisions: report.json,
-windows.csv, rolling_summary.csv.
+On Alpaca :30 fills (markets.research_market), a fresh $1M in every window of the suite,
+each running that window's own decisions: report.json, windows.csv, rolling_summary.csv.
+The suite defaults to the holdout (every 15-day window starting on a trading day of
+Jan 2 - Jun 30 2026); --start/--end narrow a rolling suite's span, and a narrowed run is
+never submitted. The file must name the suite it is scored as.
 
 --submit also posts the result (metrics and window table, never the decisions file) to
 the public leaderboard, recorded first in the private entry dataset (icaif/space_hub.py). It only accepts the board's
@@ -22,19 +25,20 @@ import hashlib
 import json
 import sys
 import time
-from datetime import date, datetime
+from datetime import datetime
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from icaif import data, holdout, leaderboard, markets, space_hub  # noqa: E402
+from icaif import data, holdout, leaderboard, markets, space_hub, suites  # noqa: E402
 
 
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--decisions", required=True, type=Path)
-    ap.add_argument("--start", type=date.fromisoformat, default=holdout.HOLDOUT_START)
-    ap.add_argument("--end", type=date.fromisoformat, default=holdout.HOLDOUT_END)
+    ap.add_argument("--suite", choices=sorted(suites.SUITES), default=suites.DEFAULT)
+    ap.add_argument("--start", help="narrow a rolling suite's span (not submittable)")
+    ap.add_argument("--end", help="narrow a rolling suite's span (not submittable)")
     ap.add_argument("--strict", action="store_true",
                     help="make missing and invalid rounds fatal instead of holds")
     ap.add_argument("--sizing", choices=["pre_fee", "post_fee"], default="pre_fee")
@@ -44,26 +48,34 @@ def main() -> None:
     ap.add_argument("--author", help="default: your HF username")
     ap.add_argument("--note", default="", help="one line: what this version changes")
     args = ap.parse_args()
-    if args.submit and ((args.start, args.end) != (holdout.HOLDOUT_START, holdout.HOLDOUT_END)
-                        or args.sizing != leaderboard.BOARD_SIZING):
-        sys.exit(f"--submit scores only the board's span {holdout.HOLDOUT_START}..{holdout.HOLDOUT_END} "
-                 f"at {leaderboard.BOARD_SIZING} sizing, so every entry is ranked on the same windows")
+    suite = suites.get(args.suite)
+    if args.start or args.end:
+        try:
+            suite = suite.narrowed(args.start or suite.span[0], args.end or suite.span[1])
+        except ValueError as err:
+            sys.exit(str(err))
+    if args.submit and not (suites.is_canonical(suite) and args.sizing == leaderboard.BOARD_SIZING):
+        sys.exit(f"--submit scores only a whole suite at {leaderboard.BOARD_SIZING} sizing, "
+                 "so every entry is ranked on the same windows")
+    if args.submit and suite.name != suites.DEFAULT:
+        # Entries carry no suite yet: this one would rank among the holdout's entries.
+        sys.exit(f"--submit takes only the {suites.DEFAULT} suite for now")
 
     t0 = time.time()
     market = markets.research_market("alpaca")
     try:
-        dec = holdout.load_decisions(args.decisions, market, args.start, args.end, args.strict)
+        dec = holdout.load_decisions(args.decisions, market, suite, args.strict)
     except holdout.DecisionFileError as err:
         sys.exit(f"rejected: {err}")
 
     wins, skipped = holdout.rolling(dec, market, sizing=args.sizing)
     roll = holdout.summarise_rolling(wins)
-    days = holdout.span_days(market, args.start, args.end)
+    days = holdout.suite_days(market, suite)
 
     out = args.out or (data.ROOT / "output" / "holdout" / dec.strategy
                        / datetime.now().strftime("%Y%m%d-%H%M%S"))
     out.mkdir(parents=True, exist_ok=True)
-    report = {"strategy": dec.strategy, "decisions_file": str(args.decisions),
+    report = {"strategy": dec.strategy, "suite": dec.suite, "decisions_file": str(args.decisions),
               "sizing": args.sizing, "fills": "alpaca",
               "first_day": str(days[0]), "last_day": str(days[-1]), "trading_days": len(days),
               "missing": dec.missing, "invalid": dec.invalid,
@@ -74,12 +86,12 @@ def main() -> None:
     wins.to_csv(out / "windows.csv", index=False)
     roll.to_csv(out / "rolling_summary.csv")
 
-    print(f"{dec.strategy}: {days[0]}..{days[-1]}, {len(days)} days, "
+    print(f"{dec.strategy} ({dec.suite}): {days[0]}..{days[-1]}, {len(days)} days, "
           f"{sum(len(w) for w in dec.windows.values())} decisions")
     if dec.missing or dec.invalid:
         print(f"  HELD: {len(dec.missing)} missing round(s), {len(dec.invalid)} invalid "
               f"round(s) across all windows; listed in report.json")
-    print(f"\n{roll.attrs['windows']} rolling 15-day windows, each its own run from cash "
+    print(f"\n{roll.attrs['windows']} 15-day windows, each its own run from cash "
           f"(~{roll.attrs['independent_windows']} independent; "
           f"{len(skipped)} skipped for degraded days)")
     print(roll.round(4).to_string())
@@ -89,7 +101,7 @@ def main() -> None:
         snapshot = sorted((data.ROOT / "data" / "public").glob("alpaca_30m_2*.parquet"))[-1].name
         entry = leaderboard.make_entry(
             args.name or dec.strategy, leaderboard.SUBMITTED, wins,
-            span=(args.start, args.end), sizing=args.sizing, market_snapshot=snapshot,
+            span=tuple(suite.span), sizing=args.sizing, market_snapshot=snapshot,
             author=args.author or space_hub.whoami(), note=args.note,
             decisions_sha256=hashlib.sha256(args.decisions.read_bytes()).hexdigest())
         path = space_hub.submit(entry)

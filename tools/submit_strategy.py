@@ -54,7 +54,7 @@ def main() -> None:
     factory = build()
     market = markets.research_market("alpaca")
     start, end = holdout.HOLDOUT_START, holdout.HOLDOUT_END
-    wins, skipped = holdout.rolling_runs(factory, market, start, end)
+    wins, skipped = holdout.rolling_runs(factory, market, "holdout")
     if skipped:
         print(f"skipped windows touching degraded days: {skipped}")
 

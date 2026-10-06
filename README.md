@@ -95,11 +95,22 @@ The contest starts every entrant from $1M in cash, so the file holds **one run p
 window**: the agent run from cash at that window's first round, for its 15 trading days.
 
 ```json
-{"strategy": "my_agent",
+{"strategy": "my_agent", "suite": "holdout",
  "windows": {"2026-01-02": [{"round_id": "holdout-2026-01-02-r1", "cash": 0.25,
                              "weights": {"AAPL": 0.03, "...": "all 30 symbols"}}, ...],
              "2026-01-05": [...], ...}}
 ```
+
+**Suites** (`icaif/suites.py`, the one definition the harness, the ranking and both pages
+import). `holdout` is the rolling Jan 2 – Jun 30 2026 set above. `official4` is four
+fixed windows of 15 sessions, the ones most like Official: from 2025-04-11, 2025-10-13,
+2026-04-13 and 2026-07-13. Only 2026-04-13 lies in the holdout span. A file names its
+suite (no `"suite"` key means `holdout`), and `--suite` on `holdout_template.py` and
+`holdout_eval.py` picks it. A file scored as a suite it does not name is rejected by name.
+A fixed suite states each window's last session as well as its first, so a price file
+missing a session raises rather than letting the window run on into later data; a fixed
+window on a degraded day raises too, since skipping one of four would rank a different
+suite under the same name.
 
 `tools/holdout_template.py` writes an equal-weight file with every window key. With
 `--rebalance once` (the default), each window buys 1/30 each at its first round and
