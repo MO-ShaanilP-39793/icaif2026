@@ -47,7 +47,9 @@ def main() -> None:
     ap.add_argument("--on", action="append", default=[], help="a window's first session (repeatable)")
     ap.add_argument("--board", action="store_true", help="add the board's non-overlapping windows")
     ap.add_argument("--model", default="grok-4.7", choices=brains.ALLOWED_MODELS)
-    ap.add_argument("--effort", default="medium", choices=["low", "medium", "high", "xhigh", "max"])
+    # The deep roles' effort: a model that thinks harder recalls more, and the PM, which
+    # decides, thinks at high. Probed at medium, a window could pass that the PM remembers.
+    ap.add_argument("--effort", default="high", choices=["low", "medium", "high", "xhigh", "max"])
     ap.add_argument("--largest", type=int, default=memprobe.LARGEST)
     ap.add_argument("--yes", action="store_true", help="confirm spending")
     ap.add_argument("--offline", action="store_true", help="answer only from the cache")
@@ -105,7 +107,7 @@ def main() -> None:
                 continue
             try:
                 ans = brain.decide(f"memory_probe_{kind}", memprobe.SYSTEM, memprobe.payload(moves),
-                                   memprobe.Guesses, timeout=600)
+                                   memprobe.schema(moves), timeout=600)
                 got = memprobe.attach(moves, ans)
                 sc = memprobe.score(got)
             except brains.BrainError as err:

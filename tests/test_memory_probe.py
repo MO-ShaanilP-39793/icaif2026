@@ -2,6 +2,8 @@ from datetime import date
 
 import numpy as np
 import pandas as pd
+import pytest
+from pydantic import ValidationError
 
 from icaif import memprobe as mp
 
@@ -39,14 +41,31 @@ def test_a_model_with_no_memory_is_flagged_at_about_the_rate_the_docstring_state
     assert 0.03 < np.mean(flags) < 0.13
 
 
-def test_a_line_the_model_skipped_is_left_out_never_filled():
-    """A skipped line filled with zero or a mean is a guess the model never made, and it
-    moves both the sign count and the correlation."""
-    moves = pd.DataFrame({"id": ["AAPL 2026-01-30", "MSFT 2026-01-29"], "actual": [-3.0, 4.0]})
-    got = mp.attach(moves, mp.Guesses(guesses=[mp.Guess(id=" AAPL 2026-01-30 ", pct=-2.0),
-                                               mp.Guess(id="AAPL 2026-01-30", pct=9.0),
-                                               mp.Guess(id="NOPE", pct=1.0)]))
-    assert got["guess"].iloc[0] == -2.0 and np.isnan(got["guess"].iloc[1])
+def test_every_line_must_be_answered_under_its_own_key_and_none_can_be_invented():
+    """Asked for a list of (id, guess) pairs, Grok answered five lines of twenty and then
+    ids "1" to "15". A skipped line filled in is a guess never made; an invented one
+    scored would be noise. One required field per line refuses both."""
+    moves = pd.DataFrame({"key": ["k01", "k02"], "id": ["AAPL 2026-01-30", "MSFT 2026-01-29"],
+                          "ticker": ["AAPL", "MSFT"], "day": ["2026-01-30", "2026-01-29"],
+                          "actual": [-3.0, 4.0], "note": ""})
+    S = mp.schema(moves)
+    with pytest.raises(ValidationError):
+        S.model_validate({"k01": -2.0})
+    got = mp.attach(moves, S.model_validate({"k01": -2.0, "k02": 3.0, "1": 0.1}))
+    assert got["guess"].tolist() == [-2.0, 3.0]
+    assert [line["stock"] for line in mp.payload(moves)["lines"]] == ["AAPL", "MSFT"]
+
+
+def test_a_model_that_declines_to_guess_never_clears_a_window():
+    """Grok answered whole sets with 0.0, or 0.03-0.05 against moves of 5-23%. Scored,
+    those read as "no edge", the verdict a window needs to be replayed, when the model
+    was never tested at all."""
+    actual = [11.6, -11.4, 9.6, -6.3, 5.5, 5.0, 5.0, -4.7]
+    zeros = mp.score(_set(actual, [0.0] * 8))
+    tiny = mp.score(_set(actual, [0.03, 0.05, 0.04, 0.03, 0.04, 0.05, 0.03, 0.04]))
+    assert zeros["remembered"] is None and "declined" in zeros["why"]
+    assert tiny["remembered"] is None and "declined" in tiny["why"]
+    assert mp.verdict([zeros, {"remembered": False}]) == "unanswered"
 
 
 def test_a_probe_the_model_did_not_answer_never_clears_a_window():

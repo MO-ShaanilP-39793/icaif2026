@@ -35,7 +35,7 @@ from datetime import date
 
 import numpy as np
 import pandas as pd
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, create_model
 
 from icaif import earnings
 
@@ -45,20 +45,29 @@ ALPHA = 0.05
 # signs right is p = 0.06 at even odds), so such a set is not asked: a window with two
 # results in it is judged on its largest moves alone.
 MIN_LINES = 5
+# Guesses that average under this share of the moves' size are not estimates. Grok 4.7
+# answered three of eight sets on 2026-10-06 with every line 0.0 or 0.03-0.05, against
+# moves of 5-23%; scored, those read as "no edge" and cleared windows nobody had tested.
+DECLINED_SIZE = 0.1
 SYSTEM = (
     "This is a forecasting calibration exercise. Each line names a US stock and a "
     "trading date. Give your best numeric estimate of that stock's one-day move on that "
-    "date, close to close, in percent (e.g. -4.2 for a 4.2% fall). Give a number for "
-    "every line, even if uncertain, and answer each line under its id.")
+    "date, close to close, in percent: a 4.2% fall is -4.2, not -0.042. Give a number for "
+    "every line, even if uncertain, under the line's key. Do not answer 0 unless you "
+    "expect no move at all.")
 
 
-class Guess(BaseModel):
-    id: str = Field(description="the line's id, exactly as given")
-    pct: float = Field(description="estimated one-day close-to-close move, in percent")
+def schema(moves: pd.DataFrame) -> type[BaseModel]:
+    """One required number per line, named by the line's key.
 
-
-class Guesses(BaseModel):
-    guesses: list[Guess]
+    A list of (id, guess) pairs let the decoder pad and drop: on 2026-10-06 Grok 4.7
+    answered five lines of twenty and then ids "1" to "15", and another set with ids
+    "error". Each line a required field, a skipped line fails validation (unanswered)
+    and an invented one has nowhere to go.
+    """
+    fields = {k: (float, Field(description=f"{t} {d}: estimated one-day move, in percent"))
+              for k, t, d in zip(moves["key"], moves["ticker"], moves["day"])}
+    return create_model("MoveGuesses", **fields)
 
 
 def earnings_moves(reactions: pd.DataFrame, days: list[date]) -> pd.DataFrame:
@@ -73,6 +82,7 @@ def earnings_moves(reactions: pd.DataFrame, days: list[date]) -> pd.DataFrame:
     t = t.drop_duplicates("ticker")
     acc = pd.to_datetime(t["accepted"]).dt.tz_convert("America/New_York")
     return pd.DataFrame({
+        "key": [f"k{i + 1:02d}" for i in range(len(t))],
         "id": [f"{tk} {d}" for tk, d in zip(t["ticker"], t["session"])],
         "ticker": t["ticker"].to_numpy(), "day": t["session"].to_numpy(),
         "actual": (100 * t["pct"]).round(2).to_numpy(),
@@ -90,26 +100,21 @@ def largest_moves(daily: pd.DataFrame, days: list[date], n: int = LARGEST) -> pd
     ret.index = [ts.date() for ts in ret.index]
     r = ret[ret.index.isin(set(days))].stack().dropna()
     top = r.abs().sort_values(ascending=False, kind="stable").head(n).index
-    return pd.DataFrame({"id": [f"{t} {d}" for d, t in top], "ticker": [t for _, t in top],
+    return pd.DataFrame({"key": [f"k{i + 1:02d}" for i in range(len(top))],
+                         "id": [f"{t} {d}" for d, t in top], "ticker": [t for _, t in top],
                          "day": [d for d, _ in top], "actual": [round(100 * r[k], 2) for k in top],
                          "note": ""})
 
 
 def payload(moves: pd.DataFrame) -> dict:
-    return {"lines": [{"id": m.id, **({"note": m.note} if m.note else {})}
-                      for m in moves.itertuples()]}
+    return {"lines": [{"key": m.key, "stock": m.ticker, "date": str(m.day),
+                       **({"note": m.note} if m.note else {})} for m in moves.itertuples()]}
 
 
-def attach(moves: pd.DataFrame, answer: Guesses) -> pd.DataFrame:
-    """The moves with the model's guess beside each; a line it skipped is NaN.
-
-    Matched by id, first answer wins. A skipped line is left out of the scores and
-    counted, never filled: a filled guess is one the model did not make.
-    """
-    got = {}
-    for g in answer.guesses:
-        got.setdefault(g.id.strip(), g.pct)
-    return moves.assign(guess=[got.get(i, np.nan) for i in moves["id"]])
+def attach(moves: pd.DataFrame, answer: BaseModel) -> pd.DataFrame:
+    """The moves with the model's guess beside each, by key."""
+    got = answer.model_dump()
+    return moves.assign(guess=[float(got[k]) for k in moves["key"]])
 
 
 def _binom_sf(k: int, n: int, p: float) -> float:
@@ -126,6 +131,13 @@ def score(moves: pd.DataFrame, alpha: float = ALPHA) -> dict:
     out = {"lines": len(moves), "answered": n}
     if n < MIN_LINES:
         return {**out, "remembered": None, "why": f"answered {n} of {len(moves)} lines"}
+    signed = int((a["guess"] != 0).sum())
+    if signed < MIN_LINES:
+        return {**out, "remembered": None, "why": f"declined: {n - signed} of {n} guesses are 0"}
+    size, moved = float(a["guess"].abs().mean()), float(a["actual"].abs().mean())
+    if size < DECLINED_SIZE * moved:
+        return {**out, "remembered": None,
+                "why": f"declined: guesses average {size:.2f}% against moves of {moved:.2f}%"}
     sa, sg = np.sign(a["actual"].to_numpy()), np.sign(a["guess"].to_numpy())
     right = int((sa == sg).sum())
     up_a, up_g = (sa > 0).mean(), (sg > 0).mean()
