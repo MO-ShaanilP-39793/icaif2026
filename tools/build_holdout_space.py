@@ -12,8 +12,9 @@ Two pages, because only one of them may be public (icaif/space_hub.py has the ta
   is public and that data is not ours to redistribute.
 
 The Space is an allowlist, not a copy of the repo. It ships the harness, the ledger,
-the calendar and the organizers' validator and metric calculator, plus a 2026-only
-price file (JSON: the office network blocks .csv downloads). Nothing else goes: no models, no features, no strategy code, no organizer
+the calendar and the organizers' validator and metric calculator, plus a price file
+(JSON: the office network blocks .csv downloads) holding Dec 2025 on and every fixed
+suite's windows (icaif/suites.py), nothing between them. Nothing else goes: no models, no features, no strategy code, no organizer
 panel. `icaif/` is mostly strategy code, and one stray import would carry it into the
 upload. So the build imports the harness from the built folder alone and refuses to
 finish if anything outside the allowlist loaded.
@@ -31,6 +32,7 @@ entries.
 
 import argparse
 import json
+from datetime import date
 import shutil
 import subprocess
 import sys
@@ -62,8 +64,66 @@ PY_FILES = ["webapp.py", *(f"icaif/{m}.py" for m in ICAIF_MODULES),
             *(f"starter-kit/{f}" for f in KIT_FILES),
             "data/prices.json", "data/market.json"]
 # From just before the holdout, so a Space scoring a start in early January has fills;
-# the organizer panel (licensed to participants) is never an input here.
+# the organizer panel (licensed to participants) is never an input here. Fixed suites'
+# windows before this date are added session by session (`shipped_days`).
 PRICES_FROM = "2025-12-01"
+
+
+def shipped_days(market) -> list:
+    """The sessions the price file carries: PRICES_FROM on, plus every fixed suite's windows.
+
+    Only the windows, not the months between them: the file is downloaded on every page
+    load, and Alpaca's prices are not ours to hand out beyond what scoring needs.
+    """
+    days = {d for d in market.days if str(d) >= PRICES_FROM}
+    for suite in suites.SUITES.values():
+        spans, _ = holdout.suite_spans(market, suite)
+        days |= {d for span in spans.values() for d in span}
+    return sorted(days)
+
+
+def _on_days(frame, days: set):
+    return frame[[ts.date() in days for ts in frame.index]]
+
+
+def price_file_problems(shipped, full) -> list[str]:
+    """Why the shipped market would score a suite differently from the full one; [] if none.
+
+    Two ways to be wrong while every check on the numbers passes: a price that differs
+    (every fill drifts a little), or a session missing from a window. The second is worse
+    in a fixed suite, whose windows are islands in the file: the harness refuses a short
+    window, but a rolling suite would just score fewer windows, or windows whose 15
+    sessions skip a day. So every suite's windows on the shipped market must be the full
+    market's, session for session and round for round.
+    """
+    problems = []
+    for name in ("exec_prices", "closes"):
+        mine, theirs = getattr(shipped, name), getattr(full, name)
+        extra = mine.index.difference(theirs.index)
+        if len(extra):
+            problems.append(f"{name}: {len(extra)} timestamps the full market lacks, first {extra[0]}")
+        elif not mine.equals(theirs.loc[mine.index]):
+            problems.append(f"{name}: not bit-identical to the full market's")
+    for suite in suites.SUITES.values():
+        want, _ = holdout.suite_spans(full, suite)
+        try:
+            got, _ = holdout.suite_spans(shipped, suite)
+        except holdout.DecisionFileError as err:
+            problems.append(f"suite {suite.name}: {err}")
+            continue
+        if got != want:
+            off = sorted((set(got) ^ set(want)) | {k for k in got if got[k] != want.get(k)})
+            problems.append(f"suite {suite.name}: windows differ from the full market's, first at {off[0]}")
+            continue
+        days = {d for span in want.values() for d in span}
+        for name in ("exec_prices", "closes"):
+            a = _on_days(getattr(shipped, name), days).index
+            b = _on_days(getattr(full, name), days).index
+            if not a.equals(b):
+                gone = b.difference(a)
+                problems.append(f"suite {suite.name}: {name} lacks {len(gone)} of its rounds"
+                                + (f", first {gone[0]}" if len(gone) else ""))
+    return problems
 
 
 def build(out: Path) -> dict:
@@ -81,18 +141,19 @@ def build(out: Path) -> dict:
     inline_hist(out / "index.html")
 
     market = markets.research_market("alpaca")
-    since = market.exec_prices.index >= PRICES_FROM
+    days = shipped_days(market)
+    keep = set(days)
     (out / "data" / "prices.json").write_text(json.dumps({
-        "exec_prices": webapp.frame_doc(market.exec_prices[since]),
-        "closes": webapp.frame_doc(market.closes[market.closes.index >= PRICES_FROM])}))
+        "exec_prices": webapp.frame_doc(_on_days(market.exec_prices, keep)),
+        "closes": webapp.frame_doc(_on_days(market.closes, keep))}))
     snapshot = sorted((data.ROOT / "data" / "public").glob("alpaca_30m_2*.parquet"))[-1].name
-    days = [d for d in market.days if str(d) >= PRICES_FROM]
     meta = {"snapshot": snapshot, "first_day": str(days[0]), "last_day": str(days[-1]),
+            "trading_days": len(days), "continuous_from": PRICES_FROM,
             "holdout": [str(holdout.HOLDOUT_START), str(holdout.HOLDOUT_END)],
             # The page's suite selector reads these, never a copy of its own.
             "suites": [s.doc() for s in suites.SUITES.values()],
             "degraded_days": [d for d in market.issues.get("degraded_days", [])
-                              if d >= PRICES_FROM]}
+                              if date.fromisoformat(d) in keep]}
     (out / "data" / "market.json").write_text(json.dumps(meta, indent=1))
     missing = [f for f in PY_FILES if not (out / f).exists()]
     if missing:
@@ -116,14 +177,14 @@ def inline_hist(page: Path) -> None:
     page.write_text(html.replace("<!--HIST-->", f"<script>\n{js}</script>"))
 
 
-def build_board(out: Path, market, snapshot: str) -> None:
+def build_board(out: Path, refs: dict, snapshot: str) -> None:
     if out.exists():
         shutil.rmtree(out)
     (out / "icaif").mkdir(parents=True)
     for dst, src in BOARD_FILES.items():
         shutil.copy2(data.ROOT / src, out / dst)
     inline_hist(out / "index.html")
-    refs = write_references(out, market, snapshot)
+    refs = write_references(out, refs, snapshot)
     (out / "manifest.json").write_text(json.dumps(
         {"files": BOARD_PY, "module": "boardapp", "references": refs,
          "meta": {"holdout": [str(holdout.HOLDOUT_START), str(holdout.HOLDOUT_END)],
@@ -147,12 +208,25 @@ REFERENCES = {
 }
 
 
-def write_references(out: Path, market, snapshot: str) -> list[str]:
+def score_references(market) -> dict:
+    """Every suite's references, {suite: {name: per-window DataFrame}}, on the full market.
+
+    Natively, here: inv_vol_hold_75 reads information bars, which neither page ships.
+    """
+    out = {}
+    for suite in suites.SUITES.values():
+        out[suite.name] = {name: holdout.rolling_runs(factory, market, suite)[0]
+                           for name, (factory, _) in REFERENCES.items()}
+        print(f"references scored on {suite.name}: {len(out[suite.name]['cash'])} windows")
+    return out
+
+
+def write_references(out: Path, scored: dict, snapshot: str) -> list[str]:
     (out / "references").mkdir()
     start, end = holdout.HOLDOUT_START, holdout.HOLDOUT_END
     paths = []
     for name, (factory, note) in REFERENCES.items():
-        wins, _ = holdout.rolling_runs(factory, market, suites.DEFAULT)
+        wins = scored[suites.DEFAULT][name]
         entry = leaderboard.make_entry(
             name, leaderboard.REFERENCE, wins, span=(start, end), sizing=leaderboard.BOARD_SIZING,
             market_snapshot=snapshot, author="baseline", note=note, submitted_at="")
@@ -215,19 +289,22 @@ print(json.dumps(loaded))
     print(f"imports from the build only: {r.stdout.strip()}")
 
 
-def parity(out: Path) -> None:
-    """The page's entry point, on the shipped CSVs, must score a file as the CLI does.
+def parity(out: Path, full) -> None:
+    """The page's entry point, on the shipped prices, must score every suite as the CLI does.
 
     A file that rebalances only at rounds 1 and 4 exercises holds as well as trades,
     and its weights differ by window, so a window scored with another's decisions shows.
     """
-    full = markets.research_market("alpaca")
     webapp._MARKET = webapp.load_market(out)
-    trimmed = webapp._MARKET[0]
-    if not (trimmed.exec_prices.equals(full.exec_prices.loc[trimmed.exec_prices.index])
-            and trimmed.closes.equals(full.closes.loc[trimmed.closes.index])):
-        sys.exit("shipped prices are not bit-identical to the full market's")
-    spans, _ = holdout.window_spans(full, holdout.HOLDOUT_START, holdout.HOLDOUT_END)
+    problems = price_file_problems(webapp._MARKET[0], full)
+    if problems:
+        sys.exit("the shipped price file would score differently:\n  " + "\n  ".join(problems))
+    for suite in suites.SUITES.values():
+        _parity_suite(out, full, suite)
+
+
+def _parity_suite(out: Path, full, suite) -> None:
+    spans, _ = holdout.suite_spans(full, suite)
     windows = {}
     for i, (ws, span) in enumerate(spans.items()):
         w = {t: (1 / 40 if (j + i) % 3 else 1 / 50) for j, t in enumerate(full.tickers)}
@@ -235,11 +312,13 @@ def parity(out: Path) -> None:
         windows[str(ws)] = [{"round_id": holdout.round_id(d, r["round"]), "cash": cash, "weights": w}
                             for d in span for r in calendar.rounds_for(d) if r["round"] in (1, 4)]
     probe = out.parent / "space_parity.json"
-    probe.write_text(json.dumps({"strategy": "parity", "windows": windows}))
-    dec = holdout.load_decisions(probe, full)
+    probe.write_text(json.dumps({"strategy": "parity", "suite": suite.name, "windows": windows}))
+    dec = holdout.load_decisions(probe, full, suite)
     a_roll, _ = holdout.rolling(dec, full)
-    page = json.loads(webapp.score(str(probe), "", "", False, "pre_fee", suites.DEFAULT))
+    page = json.loads(webapp.score(str(probe), "", "", False, "pre_fee", suite.name))
     probe.unlink()
+    if "rejected" in page:
+        sys.exit(f"the page rejected the {suite.name} parity file: {page['rejected']}")
     b_roll = page["windows"]
     # Prices are bitwise equal; the last digits differ only because numpy's dot product
     # sums in an order that depends on memory layout. Anything above 1e-12 is data.
@@ -252,8 +331,8 @@ def parity(out: Path) -> None:
                      for (_, row), w in zip(a_roll.iterrows(), b_roll)
                      for k in holdout.METRICS if not close(row[k], w[k])})
     if diff:
-        sys.exit(f"the page's entry point scores differently from the CLI: {diff}")
-    print(f"page entry point matches the CLI: {len(b_roll)} windows (to 1e-12)")
+        sys.exit(f"the page's entry point scores {suite.name} differently from the CLI: {diff}")
+    print(f"page entry point matches the CLI on {suite.name}: {len(b_roll)} windows (to 1e-12)")
 
 
 def main() -> None:
@@ -276,8 +355,8 @@ def main() -> None:
     print(f"built {args.out}: prices {meta['first_day']}..{meta['last_day']} "
           f"from {meta['snapshot']}")
     check(args.out)
-    parity(args.out)
-    build_board(args.board_out, market, snapshot)
+    parity(args.out, market)
+    build_board(args.board_out, score_references(market), snapshot)
     check_board(args.board_out)
     if args.push:
         space_hub.publish(args.out, args.repo_id, "private")

@@ -136,8 +136,11 @@ six-month continuous run: the contest never scores one.
   in the browser on Pyodide 0.29.5. A full file (every round of every window) scores
   natively in ~2 s; expect several times that in the browser.
 - **What it ships.** `tools/build_holdout_space.py [--push]` rebuilds it from a fixed list
-  of files: the harness modules and 2026 fill prices only. It checks that the page's
-  entry point matches the CLI before uploading.
+  of files: the harness modules and fill prices only, from Dec 2025 on plus each fixed
+  suite's windows session by session (236 days), nothing between them. Before uploading
+  it checks that every suite's windows on the shipped prices are the full market's,
+  round for round and bit for bit, and that the page's entry point scores each suite as
+  the CLI does. The references are scored on every suite at build time.
 - **Parity.** In-browser results agree with native to within 1e-13.
 - **Pyodide trap.** Pyodide must load `tzdata` as well. Without it, every `tz_localize`
   retries a failed import, and scoring is 30× slower.

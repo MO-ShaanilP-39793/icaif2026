@@ -321,7 +321,11 @@
       $("status").textContent = "Ready.";
       $("go").disabled = false;
       const m = data.meta;
-      $("prices").textContent = `Prices: Alpaca :30 fills, ${m.first_day} to ${m.last_day} (${m.snapshot}).`;
+      // Not "first to last day": the file has a gap between the fixed suites' 2025 windows
+      // and the continuous stretch, and a range would claim the months in between.
+      $("prices").textContent = `Prices: Alpaca :30 fills, ${m.continuous_from || m.first_day} to ${m.last_day}` +
+        (m.continuous_from && m.first_day < m.continuous_from ? ", plus the fixed suites' earlier windows" : "") +
+        ` (${m.snapshot}).`;
       // The holdout span comes from the build (icaif/holdout.py), never a copy in this page.
       [$("start").value, $("end").value] = m.holdout;
       boardSources.span = m.holdout;
