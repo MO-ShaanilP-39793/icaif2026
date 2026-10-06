@@ -108,6 +108,13 @@
   .tabs button[aria-selected="true"] { color: var(--ink); border-bottom-color: var(--accent); }
   .tabs button:hover { color: var(--ink); }
   .tabs .count { font-weight: 400; color: var(--muted); font-variant-numeric: tabular-nums; }
+  .picker { display: flex; flex-wrap: wrap; gap: 8px 12px; align-items: center; margin: 0 0 12px; }
+  .picker select, .picker button { font: inherit; color: var(--ink); background: var(--panel);
+                                   border: 1px solid var(--line); border-radius: 6px; padding: 5px 10px; }
+  .picker button { cursor: pointer; }
+  .picker button:disabled { color: var(--muted); cursor: default; }
+  tr.sep td { padding: 8px 10px 4px; font-size: 12px; color: var(--muted); border-bottom: 1px solid var(--line); }
+  tr.agentic .sname { font-style: italic; }
   [hidden] { display: none !important; }
 </style>
 </head>
@@ -127,6 +134,7 @@
 
   <nav class="tabs" role="tablist" aria-label="Panels">
     <button role="tab" id="tab-main" aria-controls="panel-main" aria-selected="true">Main board <span id="count-main" class="count"></span></button>
+    <button role="tab" id="tab-window" aria-controls="panel-window" aria-selected="false">By window <span id="count-window" class="count"></span></button>
     <button role="tab" id="tab-agentic" aria-controls="panel-agentic" aria-selected="false">Agentic panel <span id="count-agentic" class="count"></span></button>
   </nav>
 
@@ -142,6 +150,18 @@
     <span>Bins are shared down each column; each histogram is scaled to its own tallest bar. Hover a bar for its range and count.</span>
   </div>
   <div id="excluded"></div>
+  </section>
+
+  <section id="panel-window" role="tabpanel" aria-labelledby="tab-window" hidden>
+  <p class="sub" style="margin: 0 0 12px">Pick one 15-day window to see the whole field as the contest
+    would have scored it. These are the same per-window ranks the main board's score averages.</p>
+  <div class="picker">
+    <button id="win-prev" aria-label="Previous window">◂</button>
+    <select id="win-select" aria-label="Window"></select>
+    <button id="win-next" aria-label="Next window">▸</button>
+    <span id="win-note" class="muted"></span>
+  </div>
+  <div class="panel scroll"><table id="window"></table></div>
   </section>
 
   <section id="panel-agentic" role="tabpanel" aria-labelledby="tab-agentic" hidden>
@@ -173,6 +193,10 @@
       Only each strategy's newest version is ranked; every version is listed above.
       Submissions scored under the earlier format, one six-month run replayed into every
       window, are listed but not ranked.</p>
+    <p>The By window tab shows one window's ranking on its own. A single window is one draw:
+      neighbouring windows share 14 of 15 days, and a strategy's board place is its mean across
+      all of them. Agentic entries that covered a window are listed under the field with the place
+      they would have taken in it; they move no one else's place.</p>
     <p>An agentic entry's place in a window is its rank among the main board's entrants in that
       window plus itself, under the same rules. A tied rank shares the average, so a metric's rank
       can fall between two places.</p>
@@ -295,6 +319,7 @@
         `${esc(why)}: ${names.map(esc).join(", ")}</div>`).join("") + "</div>" : "";
 
     renderAgentic(b.agentic || { rows: [], excluded: [] });
+    setupWindows(b);
     $("count-main").textContent = b.entrants;
     $("count-agentic").textContent = (b.agentic || { rows: [] }).rows.length;
 
@@ -338,6 +363,56 @@
       p.excluded.map((e) => `<div>${esc(e.strategy)}: ${esc(e.reason)}</div>`).join("") + "</div>" : "";
   }
 
+  // One window's field, as ranked behind the board's score (`by_window` in
+  // icaif/leaderboard.py), never re-ranked here: a ranking in JS could drift from the rules'.
+  // Agentic entries are appended with their own place against that field, not ranked in it.
+  let windows = [], boardRank = {}, agentsIn = {};
+  function setupWindows(b) {
+    windows = b.by_window || [];
+    boardRank = Object.fromEntries(b.rows.map((r) => [r.strategy, r.rank]));
+    agentsIn = {};
+    for (const a of (b.agentic || { rows: [] }).rows)
+      for (const w of a.windows) (agentsIn[w.window_start + "|" + w.window_end] ||= []).push({ ...w, strategy: a.strategy });
+    const disjoint = new Set((b.rows[0] ? b.rows[0].disjoint : []).map((w) => w.window_start));
+    const sel = $("win-select");
+    sel.innerHTML = windows.map((w, i) => {
+      const n = (agentsIn[w.window_start + "|" + w.window_end] || []).length;
+      return `<option value="${i}">${span([w.window_start, w.window_end])}` +
+        `${disjoint.has(w.window_start) ? " · non-overlapping" : ""}${n ? ` · ${n} agentic` : ""}</option>`;
+    }).join("");
+    $("count-window").textContent = windows.length;
+    const m = location.hash.match(/^#window=(\d{4}-\d{2}-\d{2})$/);
+    const at = m ? windows.findIndex((w) => w.window_start === m[1]) : -1;
+    showWindow(at >= 0 ? at : windows.length - 1, false);
+  }
+
+  function showWindow(i, link = true) {
+    if (!windows.length) { $("window").innerHTML = `<tbody><tr><td class="muted">No windows.</td></tr></tbody>`; return; }
+    i = Math.max(0, Math.min(windows.length - 1, i));
+    const w = windows[i], ord = (n) => n + (n % 100 >= 11 && n % 100 <= 13 ? "th" : ["th", "st", "nd", "rd"][n % 10] || "th");
+    const rk = (v) => Number.isInteger(v) ? ord(v) : v.toFixed(1);
+    $("win-select").value = String(i);
+    $("win-prev").disabled = i === 0; $("win-next").disabled = i === windows.length - 1;
+    $("win-note").textContent = `window ${i + 1} of ${windows.length} · ${w.rows.length} entrants`;
+    const cells = (r) => `<td class="score"><span class="big">${r.overall_score.toFixed(2)}</span></td>` +
+      METRICS.map((k) => `<td class="num">${fmtFull(k, r[k])} <span class="rk">· ${rk(r["rank_" + k])}</span></td>`).join("");
+    const head = `<thead><tr><th>Place</th><th>Strategy</th><th>Score<span class="range">mean rank, lower is better</span></th>` +
+      METRICS.map((k) => `<th>${LABELS[k]}<span class="range">${HIGHER[k]} · rank</span></th>`).join("") + `</tr></thead>`;
+    const field = w.rows.map((r) => `<tr class="${r.kind}${r.position === 1 ? " top" : ""}"><td class="rank">${r.position}</td>` +
+      `<td class="name"><span class="sname">${esc(r.strategy)}</span>${r.kind === "reference" ? '<span class="chip">reference</span>' : ""}` +
+      `<div class="by">board #${boardRank[r.strategy]}</div></td>${cells(r)}</tr>`).join("");
+    const agents = agentsIn[w.window_start + "|" + w.window_end] || [];
+    const extra = agents.length ? `<tr class="sep"><td colspan="${3 + METRICS.length}">Agentic entries in this window, ` +
+      `each placed against the field above plus itself</td></tr>` +
+      agents.map((a) => `<tr class="agentic"><td class="rank">${ord(a.position)}<div class="pm">of ${a.of}</div></td>` +
+        `<td class="name"><span class="sname">${esc(a.strategy)}</span><span class="chip">agentic</span></td>${cells(a)}</tr>`).join("") : "";
+    $("window").innerHTML = head + "<tbody>" + field + extra + "</tbody>";
+    if (link) history.replaceState(null, "", "#window=" + w.window_start);
+  }
+  $("win-select").onchange = (e) => showWindow(Number(e.target.value));
+  $("win-prev").onclick = () => showWindow(Number($("win-select").value) - 1);
+  $("win-next").onclick = () => showWindow(Number($("win-select").value) + 1);
+
   // The windows that share no day, each with its place and score against the whole field
   // in that window: the same ranks the board's score averages, shown one by one.
   function disjointTable(r) {
@@ -354,16 +429,18 @@
       METRICS.map((k) => `<td>${fmtFull(k, mean(k))}</td>`).join("") + `</tr></tbody></table>`;
   }
 
-  // Two panels, one visible; the hash keeps the choice linkable (…/#agentic).
+  // Three panels, one visible; the hash keeps the choice linkable (…/#agentic, …/#window=<start>).
   function showTab(name) {
-    for (const t of ["main", "agentic"]) {
+    for (const t of ["main", "window", "agentic"]) {
       $("tab-" + t).setAttribute("aria-selected", String(t === name));
       $("panel-" + t).hidden = t !== name;
     }
   }
   $("tab-main").onclick = () => { showTab("main"); history.replaceState(null, "", location.pathname); };
   $("tab-agentic").onclick = () => { showTab("agentic"); history.replaceState(null, "", "#agentic"); };
+  $("tab-window").onclick = () => { showTab("window"); if (windows.length) showWindow(Number($("win-select").value)); };
   if (location.hash === "#agentic") showTab("agentic");
+  if (location.hash.startsWith("#window")) showTab("window");
 
   HIST.installTooltips();
   start().catch((err) => fail(`Could not load the board: ${err.message}`));

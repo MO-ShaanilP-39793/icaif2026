@@ -212,9 +212,10 @@ def standings(entries: list[dict]) -> dict:
     for i, start in enumerate(board_windows):
         m = pd.DataFrame({n: e["windows"][i] for n, e in field.items()}).T[METRICS].astype(float)
         # Rounded as rankplay does: float dust must not split what the kit's Decimals tie.
-        r = ranking.rank_window(m.round(12))
-        per_window.append(r[["overall_score", "position"]].assign(window=start))
-    ranks = pd.concat(per_window).rename_axis("strategy").reset_index()
+        per_window.append(ranking.rank_window(m.round(12)))
+    ranks = pd.concat([r[["overall_score", "position"]].assign(window=start)
+                       for r, start in zip(per_window, board_windows)]
+                      ).rename_axis("strategy").reset_index()
     disjoint_ranks = [per_window[i] for i in disjoint]
     g = ranks.groupby("strategy")
 
@@ -256,6 +257,18 @@ def standings(entries: list[dict]) -> dict:
     rows.sort(key=lambda r: (r["mean_overall_score"], -r["mean_window_cumulative_return"]))
     for i, r in enumerate(rows, start=1):
         r["rank"] = i
+    # Every window's whole field, in place order: the same ranks the score averages, so a
+    # reader picking one window sees the contest as it would have scored that window. Read
+    # off `per_window`, never re-ranked: a second ranking pass could drift from the score.
+    by_window = [
+        {"window_start": w["window_start"], "window_end": w["window_end"],
+         "rows": [{"strategy": name, "kind": field[name]["kind"],
+                   "position": int(r.loc[name, "position"]),
+                   "overall_score": float(r.loc[name, "overall_score"]),
+                   **{f"rank_{k}": float(r.loc[name, f"rank_{k}"]) for k in METRICS},
+                   **{k: field[name]["windows"][i][k] for k in METRICS}}
+                  for name in r.sort_values(["position", "overall_score"]).index]}
+        for i, (w, r) in enumerate(zip(refs[0]["windows"], per_window))]
     history = sorted(
         ({"strategy": e["strategy"], "author": e["author"], "submitted_at": e["submitted_at"],
           "status": _status(e, latest, field),
@@ -267,7 +280,7 @@ def standings(entries: list[dict]) -> dict:
             "bins": edges,
             "independent_windows": n_independent,
             "entrants": len(rows), "rows": rows, "excluded": excluded, "history": history,
-            "agentic": panel}
+            "by_window": by_window, "agentic": panel}
 
 
 def agentic_standings(entries: list[dict], field: dict, board_windows: list[dict],

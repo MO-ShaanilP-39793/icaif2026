@@ -164,6 +164,27 @@ def test_a_resubmission_ranks_and_its_old_format_versions_still_count_as_looks()
     assert [h["status"] for h in b["history"]] == ["ranked", "old format"]
 
 
+
+def test_a_picked_window_shows_the_same_ranks_the_board_score_averages():
+    """The by-window view is read as "how the contest would have scored this window". If its
+    places came from anywhere but the ranks behind the score, a strategy could read first in
+    every window it is picked in and still sit low on the board, with nothing to say why."""
+    a = _entry("a", [(0.02, 2.0, 0.01, 0.05), (-0.01, -1.0, 0.03, 0.05), (0.03, 3.0, 0.01, 0.05)])
+    b = lb.standings([CASH, EW, a])
+    assert [(w["window_start"], w["window_end"]) for w in b["by_window"]] == WINDOWS
+    for i, w in enumerate(b["by_window"]):
+        m = pd.DataFrame({e["strategy"]: e["windows"][i] for e in (CASH, EW, a)}).T
+        want = ranking.rank_window(m[lb.METRICS].astype(float))
+        assert [r["position"] for r in w["rows"]] == sorted(want["position"])
+        for r in w["rows"]:
+            assert r["position"] == want.loc[r["strategy"], "position"]
+            assert r["overall_score"] == pytest.approx(want.loc[r["strategy"], "overall_score"])
+            assert r["cumulative_return"] == m.loc[r["strategy"], "cumulative_return"]
+    for row in b["rows"]:
+        scores = [r["overall_score"] for w in b["by_window"] for r in w["rows"]
+                  if r["strategy"] == row["strategy"]]
+        assert row["mean_overall_score"] == pytest.approx(sum(scores) / len(scores))
+
 # ----------------------------------------------------------------------------- agentic panel
 
 AGENT = {"model": "grok-4.7", "desk": "free", "calls": 15, "cost_usd": 1.15,
