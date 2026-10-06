@@ -71,18 +71,21 @@ def load_earnings(market) -> EarningsCalendar:
 # v2's calls a window and their size per role. Input: the system prompt and payload
 # measured on the free run of 2026-01-21 with real names (`--desk v2 --on 2026-01-21
 # --real-names`), plus what the earlier roles would write (about 2,000 characters a
-# report, 2,500 a debate turn, 1,500 each for the proposal, code's compile and the
-# review), at 3.5 characters a token. Output: the six Grok 4.7 free-desk runs averaged
-# $0.067 a call on 31,357-character prompts, which leaves about 7,000 output tokens a
-# call at effort high, reasoning included; effort medium is taken as half, unmeasured.
-# The earnings analyst is asked only on mornings a name reports (all 15 in Jan 21's
-# window, an earnings season; about 10 is typical). Measured costs replace these after
-# the first paid window.
+# report, 2,500 a debate turn, 1,500 each for the proposal, code's compile, the review
+# and the event case, 3,000 of reasons for the reflection), at 3.5 characters a token.
+# Output: the six Grok 4.7 free-desk runs averaged $0.067 a call on 31,357-character
+# prompts, which leaves about 7,000 output tokens a call at effort high, reasoning
+# included; effort medium is taken as half, unmeasured. The earnings analyst is asked
+# only on mornings a name reports (all 15 in Jan 21's window, an earnings season; about
+# 10 is typical). Trigger rounds were 30 in that window and 23 a window on average over
+# all 167 (v1's rule desk, the same triggers); reflection runs on mornings with something
+# settled (11 there). Measured costs replace these after the first paid window.
 V2_CALLS = {  # role: (calls a window, input tokens a call, output tokens a call)
-    "market": (15, 1_600, 3_500), "earnings": (10, 2_400, 3_500), "news": (15, 6_900, 3_500),
-    "quant": (15, 5_800, 3_500), "bull": (30, 8_000, 3_500), "bear": (30, 8_800, 3_500),
-    "trader": (15, 10_300, 3_500), "risk": (15, 11_700, 7_000), "pm": (15, 11_600, 7_000)}
-V2_DEEP = ("risk", "pm")
+    "market": (15, 1_600, 3_500), "earnings": (10, 2_400, 3_500), "news": (15, 7_000, 3_500),
+    "quant": (15, 5_900, 3_500), "bull": (30, 8_500, 3_500), "bear": (30, 9_200, 3_500),
+    "trader": (15, 10_700, 3_500), "risk": (15, 12_100, 7_000), "pm": (15, 12_000, 7_000),
+    "event": (25, 3_000, 3_500), "event_pm": (25, 3_400, 7_000), "reflect": (12, 6_600, 7_000)}
+V2_DEEP = ("risk", "pm", "event_pm", "reflect")
 
 
 def v2_estimate(n_windows: int, quick: str, deep: str) -> tuple[int, float, dict]:
@@ -412,7 +415,8 @@ def main() -> None:
         chain = [dict(e, window=str(w)) for w, d in zip(starts, desks) for e in d.chain]
         (log_dir / "chain.jsonl").write_text("\n".join(json.dumps(e, default=str) for e in chain))
         ch = pd.DataFrame(chain)
-        ch["role_kind"] = ch["role"].str.split("_").str[0]
+        ch["role_kind"] = ch["role"].where(~ch["role"].str[-1].str.isdigit(),
+                                           ch["role"].str.rsplit("_", n=1).str[0])   # bull_2 -> bull
         print("\nv2 calls by role and source:")
         print(ch.groupby(["role_kind", "source"]).size().unstack(fill_value=0).to_string())
         sizes = ch.groupby("role_kind")[["system_chars", "payload_chars", "latency_s"]].agg(["mean", "max"])

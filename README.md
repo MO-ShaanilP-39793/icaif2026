@@ -683,7 +683,9 @@ through a 3% fall) led to a small firm instead of one role per decision. Each mo
 four analysts report in parallel (market, earnings and events, news, quant), a bull (for
 changing the book) and a bear (against each change) argue for two rounds, the trader
 writes a trade list, the risk manager checks it, and the PM approves, amends or holds.
-Rounds 2-7 trade nothing yet; triggers and the nightly reflection are next.
+In rounds 2-7 the desk sleeps unless code fires a trigger for a held name (results at
+the next open, a 3-sigma move, a new 8-K): then the event analyst and the PM decide that
+name alone. Each morning a reflection grades what is now settled and writes lessons.
 
 What code owns, each with tests:
 
@@ -711,8 +713,21 @@ What code owns, each with tests:
   earlier). A late, failed or invalid role is skipped and the desk goes on; a failed PM,
   or a list code refuses, means no trade, or the 75% inverse-vol book before the first
   buy. Every skip and fallback is counted.
-- **Two tiers**: quick (analysts, debate, trader; Grok 4.7 at medium) and deep (risk
-  manager, PM; at high), each role cached under its own key and costed per role.
+- **Two tiers**: quick (analysts, debate, trader, event analyst; Grok 4.7 at medium) and
+  deep (risk manager, PM, reflection; at high), each role cached under its own key and
+  costed per role.
+- **Triggers**: v1's three, on held names, each with its tag. The PM's list at a trigger
+  may name only the triggered names and set no exposure, or it is refused: anything
+  wider is a morning decision taken without the analysts, the debate or the risk manager.
+- **Settlements and lessons** (`V2Desk._settle`): code measures each line the PM traded
+  after the entry, from its fill to the close of the next session (weight times move, in
+  bp of NAV, fees apart: a sale before results that then rise is a cost), and each name
+  held through its results. Only the names a list named are graded: a fill also moves
+  every other name by the drift between the close its weight was valued at and the open
+  it fills at. A deep role reads the settlements beside the reasons given at the time
+  and writes at most four lessons into the journal, citing the settlements they rest on.
+  It runs in the analysts' slot, as of the prior close, so the chain is no longer, and
+  the lessons stay in that window's journal.
 
 `agent_replay.py --desk v2 --ledgers-only` answers every role in code (`v2.HoldBrain`) and
 requires the desk to trade exactly as `inv_vol_hold_75`: it does in all 167 windows. The
@@ -721,7 +736,9 @@ for the market analyst, 20,000 for the quant, 24,000 for news, and 18,000 to 20,
 for the debate, trader, risk manager and PM before what earlier roles write. With the v1
 runs' Grok output (about 7,000 tokens a call at high effort, reasoning included), that is
 about 160 calls and $7 a window ($6-9 by how much medium effort writes), against the
-free desk's $1.15.
+free desk's $1.15. Triggers and reflection add about 60 calls and $3 (30 trigger rounds
+and 11 reflections on Jan 21's earnings-season window; 23 trigger rounds a window on
+average over all 167): about $10 a window, $110 for the 11-window evaluation.
 
 **Replays read macro since 2026-10-06.** `agent_replay.py` never passed `macro` to any
 desk, so every replay before then (the free desk's Run C included) decided without the

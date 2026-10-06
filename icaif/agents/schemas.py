@@ -225,3 +225,41 @@ class PMDecision(_Strict):
 
 SCHEMAS.update(analyst=AnalystReport, earnings_report=EarningsReport, debate=DebateTurn,
                risk=RiskReview, pm=PMDecision)
+
+
+class EventCase(_Strict):
+    """The event analyst's case for one triggered name."""
+
+    name: str
+    lean: Literal["hold", "add", "trim", "exit"]
+    case: str = Field(max_length=600, description="Why, knowing whether the move has happened.")
+
+
+class EventReport(_Strict):
+    summary: str = Field(max_length=600)
+    cases: list[EventCase] = Field(max_length=30)
+
+
+class TriggerDecision(_Strict):
+    """The PM's decision on the triggered names alone: hold, or trade them by a list that
+    names no other name and sets no exposure."""
+
+    action: Literal["hold", "trade"]
+    trade_list: Optional[TradeList] = Field(
+        description="Required for trade: lines for the triggered names only. Null for hold.")
+    rationale: str = Field(max_length=1000)
+
+
+class Lesson(_Strict):
+    text: str = Field(max_length=300, description="What to do differently, or keep doing.")
+    settlements: list[str] = Field(max_length=6, description="The ids of the settlements it rests on.")
+
+
+class Reflection(_Strict):
+    """After a close: what the settled decisions say, as at most four lessons."""
+
+    summary: str = Field(max_length=800)
+    lessons: list[Lesson] = Field(max_length=4)
+
+
+SCHEMAS.update(event_report=EventReport, trigger=TriggerDecision, reflection=Reflection)

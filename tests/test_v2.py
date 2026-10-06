@@ -74,8 +74,9 @@ def test_a_v2_desk_answered_by_code_trades_exactly_as_the_hold():
     pd.testing.assert_frame_equal(got.ledger, want.ledger)
     assert got.metrics() == want.metrics()
     assert d.fallbacks == {"pm:failed": 1, "entry:hold_book": 1}
-    assert {e["role"] for e in d.chain} == {"market", "quant", "bull_1", "bear_1", "bull_2",
-                                            "bear_2", "trader", "risk", "pm"}
+    assert {e["role"] for e in d.chain if e["round"] == 1} == {
+        "market", "quant", "bull_1", "bear_1", "bull_2", "bear_2", "trader", "risk", "pm"}
+    assert {e["role"] for e in d.chain if e["round"] > 1} <= {"event", "event_pm"}
 
 
 def test_an_approved_entry_list_trades_exactly_the_weights_it_states():
@@ -128,7 +129,7 @@ def test_a_failed_pm_holds_after_entry_and_buys_the_hold_book_only_before_it():
     got = sim.run(d, m, START, N)
     pd.testing.assert_frame_equal(got.ledger, sim.run(HOLD(), m, START, N).ledger)
     assert d.fallbacks["entry:hold_book"] == 1 and d.fallbacks["pm:hold"] == N - 1
-    assert all(e["source"] == "fallback" for e in d.log)
+    assert all(e["source"] == "fallback" for e in d.log if e["role"] == "pm")
 
 
 def test_a_pm_list_code_refuses_is_no_trade_never_a_repaired_one():
@@ -258,9 +259,10 @@ def test_no_morning_payload_changes_when_every_later_bar_is_rewritten():
         sim.run(_desk(rec, earnings=EarningsCalendar(events.iloc[:1], m.days),
                       earnings_history=EarningsHistory.from_market(ev, m)), m, START, 3)
         # Keyed, not listed: the analysts ask in parallel, so the order they reach the
-        # brain is the threads', not the desk's.
-        runs.append({(r, p["clock"]["day"]): p for r, _, p, _ in rec.seen})
-    assert len(runs[0]) == 3 * 9 + 3 and runs[0] == runs[1]      # earnings asked each morning
+        # brain is the threads', not the desk's. Only what was asked by the cut.
+        runs.append({(r, p["clock"]["day"], p["clock"]["round"]): p for r, _, p, _ in rec.seen
+                     if (p["clock"]["day"], p["clock"]["round"]) <= (3, 1)})
+    assert len(runs[0]) >= 3 * 9 + 3 and runs[0] == runs[1]      # earnings asked each morning
 
 
 class _Restarted:

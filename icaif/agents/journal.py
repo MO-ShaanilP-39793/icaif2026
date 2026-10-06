@@ -90,6 +90,12 @@ class Journal:
         self.marked_to: Optional[str] = None    # bars ended by this time are in the marks
         self.start_nav: Optional[float] = None
         self.peak_nav: Optional[float] = None
+        # The v2 desk's reflection (agents/v2.py): each decision's outcome once code can
+        # measure it, and the lessons drawn from them. Kept here because the journal is
+        # what persists between live rounds; v1 desks leave both empty, and `memory`
+        # never shows them, so nothing a v1 role reads changes.
+        self.settlements: list[dict] = []
+        self.lessons: list[dict] = []
         self._open: Optional[dict] = None       # this round's entry, until close_round
 
     # ------------------------------------------------------------------ persistence
@@ -99,7 +105,7 @@ class Journal:
             "version": VERSION, "rounds": self.rounds, "positions": self.positions,
             "closed": self.closed, "issues": self.issues, "orders": self.orders,
             "book": self.book, "marked_to": self.marked_to, "start_nav": self.start_nav,
-            "peak_nav": self.peak_nav})
+            "peak_nav": self.peak_nav, "settlements": self.settlements, "lessons": self.lessons})
 
     @classmethod
     def from_json(cls, value) -> "Journal":
@@ -111,7 +117,7 @@ class Journal:
             return j
         value = copy.deepcopy(value)
         for k in ("rounds", "positions", "closed", "issues", "orders", "book", "marked_to",
-                  "start_nav", "peak_nav"):
+                  "start_nav", "peak_nav", "settlements", "lessons"):
             if k in value:
                 setattr(j, k, value[k])
         return j

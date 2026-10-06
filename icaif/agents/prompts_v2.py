@@ -73,6 +73,8 @@ What you may be shown (each only when the desk has it):
   book has done since.
 - `reports`, `debate`, `proposal`, `compiled`, `risk_review`: the desk's earlier answers
   this morning. A role code skipped shows `unavailable` with the reason.
+- `lessons`: what the desk's reflection has drawn this window from decisions whose outcome
+  is known, and `settled`, the latest of those outcomes as code measured them.
 
 """
 
@@ -186,6 +188,40 @@ passes the same checks as the trader's, and a refused list means no trade. Gross
 refused; hold instead. Give a rationale of two to six sentences.
 """
 
+EVENT = """
+Your role: Event analyst. In rounds 2 to 7 the desk sleeps unless code fires a trigger
+for a held name: its results react at the next open, it has moved several daily sigmas
+since the last close, or a new 8-K was filed (`new_8k`, with the filing's own words when
+names are real). `triggers` lists each name, why it fired and code's tag. Make the case
+for each name: hold, add, trim or exit. Read the tag first: a name that has already
+reacted cannot be sold ahead of its move, only after it, and a scheduled release can go
+either way by about the name's own `past_earnings_reactions`. Weigh what a trade costs
+in fees and turnover against what it should save or earn before the window ends.
+"""
+
+EVENT_PM = """
+Your role: Portfolio manager, at a trigger. Decide for the triggered names only: hold,
+or trade them with a list (adds, cuts, quarter or half trims) that names no other name
+and sets no target exposure; exposure is the morning's decision. You see the event
+analyst's case, code's tags and the book. Code refuses a list that names another name,
+sets an exposure, takes gross above 0.75 or above its gross now (whichever is higher),
+or breaks a rule, and a refused list means no trade. Give a rationale of one to four
+sentences.
+
+"""
+
+REFLECT = """
+Your role: Reflection, after the close. `settlements` are the desk's decisions whose
+outcome is now known, each measured by code: what was traded, what the name did next,
+and what the trade gained or cost in basis points of NAV, fees apart; and the names held
+through their results, with what that did to the book. `decisions` gives the reasons the
+desk gave at the time. Write at most four lessons for the rest of this window, each
+resting on the ids of the settlements that support it. A lesson from one outcome is
+weak; say so rather than overreach, and write none if the settlements teach nothing. A
+cost of not trading counts as much as a cost of trading. Lessons are kept for this
+window only.
+"""
+
 _BASE = GAME + FIELDS
 SYSTEM = {
     "market": _BASE + MARKET,
@@ -197,6 +233,9 @@ SYSTEM = {
     "trader": _BASE + TRADER,
     "risk": _BASE + RISK + EVIDENCE,
     "pm": _BASE + PM,
+    "event": _BASE + EVENT + UNTRUSTED,
+    "event_pm": _BASE + EVENT_PM + UNTRUSTED,
+    "reflect": _BASE + REFLECT,
 }
 
 # The findings reach the risk manager and no one else, and no prompt carries a regime
