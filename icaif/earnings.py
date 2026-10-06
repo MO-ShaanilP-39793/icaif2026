@@ -89,67 +89,95 @@ def _eastern_hours(ts: pd.Timestamp) -> float:
     return -ts.tz_convert(calendar.TZ).utcoffset().total_seconds() / 3600
 
 
+EIGHT_K = ("8-K", "8-K/A")
+
+
+def _utc(t: str) -> pd.Timestamp:
+    ts = pd.Timestamp(t)
+    return ts.tz_localize("UTC") if ts.tzinfo is None else ts.tz_convert("UTC")
+
+
+def _back_by_offset(t: str) -> str:
+    """A time EDGAR served late by the Eastern offset, moved back by the offset in force."""
+    sent = _utc(t)
+    guess = sent - pd.Timedelta(hours=_eastern_hours(sent))
+    return (sent - pd.Timedelta(hours=_eastern_hours(guess))).strftime("%Y-%m-%dT%H:%M:%S.000Z")
+
+
 def checked_times(client, cik: int, block: dict, sleep: float = 0.12,
                   checks: Optional[list] = None) -> dict:
-    """The block, its acceptance times made to agree with EDGAR's own filing pages.
+    """The block, its 8-Ks' acceptance times made to agree with EDGAR's own filing pages.
 
-    Since about 2026-10-06 the submissions JSON serves some filers' times late by
+    Since about 2026-10-06 the submissions JSON serves filers' older filings late by
     exactly Eastern's UTC offset (JPM's 06:30:38 ET results as 14:30:38Z, i.e. 10:30
-    ET; AAPL, AMZN, BAC, CVX, GS, META, NEE, NKE and UNH alike, every filing since
-    2025 checked), while the filing's index page still states 06:30:38. Read as sent,
-    a pre-market release lands after the open, on the next session's reaction, and the
-    live merge with the snapshot holds every such filing twice, the copy four hours
-    late firing a second "new 8-K".
+    ET), while each filing's index page still states the true time. On Oct 6 it was
+    every filing of AAPL, AMZN, BAC, CVX, GS, JPM, META, NEE, NKE and UNH since 2025;
+    by that evening filings accepted that day came back right and the older ones did not,
+    so JPM's and BAC's blocks were right at the top and late below. Read as sent, a
+    pre-market release lands after the open, on the next session's reaction, and the live
+    merge with the snapshot holds every such filing twice, the late copy firing a second
+    "new 8-K".
 
-    So each block is checked against its filing pages every time it is read, never from
-    a cache: a correction kept after EDGAR mends its feed would move every filing four
-    hours before it existed. The newest filing's page agrees: the block is returned as
-    sent, one request. It is late by exactly the offset: the oldest filing's page must
-    say the same before every time is moved back by the offset in force at it, since a
-    correction is the direction that can show a filing early, and a block left as sent
-    at worst shows one late. Anything else raises: a gap of another size, or two pages
-    that disagree, is a fault nobody has measured, and the snapshot (live) or a stop
-    (tools) is better than a guess. Two probes a block cost a live round's 30-name read
-    23 s on top of 16 s, against its 45 s budget; one where the feed is right keeps it
-    near the budget's half.
+    Only the 8-K entries are checked and corrected, the only ones either reader keeps;
+    every other entry is returned as sent. Each read is checked anew, never from a cache:
+    a correction kept after EDGAR mends its feed would move filings hours before they
+    existed. The newest and oldest 8-K's pages are read every time (a block checked at
+    the top only passed JPM's late 8-Ks as right). Both agree: as sent. Both late by the
+    offset: every 8-K moved back by the offset in force at it. Newest right and oldest
+    late: the boundary is found by bisection, each step a page read, and only the 8-Ks
+    below it are moved. Anything else raises: a gap of another size, or a newest late
+    over an oldest right, is a fault nobody has measured, and the snapshot (live) or a
+    stop (tools) is better than a guess.
     """
     times, accs = block.get("acceptanceDateTime", []), block.get("accessionNumber", [])
-    idx = [i for i in range(len(times)) if times[i] and i < len(accs) and accs[i]]
+    forms = block.get("form", [])
+    idx = [i for i in range(len(times))
+           if times[i] and i < len(accs) and accs[i] and i < len(forms) and forms[i] in EIGHT_K]
     if not idx:
         return block
-    kinds = []
-    for i in dict.fromkeys((idx[0], idx[-1])):
-        if kinds == ["as_sent"]:
-            break
-        sent = pd.Timestamp(times[i])
-        sent = sent.tz_localize("UTC") if sent.tzinfo is None else sent.tz_convert("UTC")
-        true = index_accepted(client, cik, accs[i]).tz_convert("UTC")
-        time.sleep(sleep)
-        gap = (sent - true).total_seconds() / 3600
-        if gap == 0:
-            kinds.append("as_sent")
-        elif gap == _eastern_hours(true):
-            kinds.append("late_by_offset")
-        else:
-            raise EdgarTimeError(f"CIK {cik} {accs[i]}: EDGAR JSON {times[i]} is {gap:+.2f}h "
-                                 f"from its filing page ({true})")
-    if len(set(kinds)) > 1:
-        raise EdgarTimeError(f"CIK {cik}: one filing page agrees with the JSON and another "
-                             f"is late by the Eastern offset; not correcting a mixed block")
+    probes = {}
+
+    def kind(j):
+        i = idx[j]
+        if j not in probes:
+            true = index_accepted(client, cik, accs[i]).tz_convert("UTC")
+            time.sleep(sleep)
+            gap = (_utc(times[i]) - true).total_seconds() / 3600
+            if gap == 0:
+                probes[j] = "as_sent"
+            elif gap == _eastern_hours(true):
+                probes[j] = "late_by_offset"
+            else:
+                raise EdgarTimeError(f"CIK {cik} {accs[i]}: EDGAR JSON {times[i]} is {gap:+.2f}h "
+                                     f"from its filing page ({true})")
+        return probes[j]
+
+    newest, oldest = kind(0), kind(len(idx) - 1)
+    if newest == "late_by_offset" and oldest == "as_sent":
+        raise EdgarTimeError(f"CIK {cik}: the newest 8-K is late and the oldest is right; "
+                             "not a pattern measured, not corrected")
+    if oldest == "as_sent":
+        first_late = len(idx)
+    elif newest == "late_by_offset":
+        first_late = 0
+    else:   # right at the top, late below: bisect for the first late 8-K
+        lo, hi = 0, len(idx) - 1
+        while hi - lo > 1:
+            mid = (lo + hi) // 2
+            if kind(mid) == "late_by_offset":
+                hi = mid
+            else:
+                lo = mid
+        first_late = hi
     if checks is not None:
-        checks.append({"cik": int(cik), "times": kinds[0], "probes": len(kinds)})
-    if kinds[0] == "as_sent":
+        checks.append({"cik": int(cik), "eight_ks": len(idx), "late": len(idx) - first_late,
+                       "probes": len(probes),
+                       "times": "as_sent" if first_late == len(idx) else "late_by_offset"})
+    if first_late == len(idx):
         return block
-    fixed = []
-    for t in times:
-        if not t:
-            fixed.append(t)
-            continue
-        sent = pd.Timestamp(t)
-        sent = sent.tz_localize("UTC") if sent.tzinfo is None else sent.tz_convert("UTC")
-        guess = sent - pd.Timedelta(hours=_eastern_hours(sent))
-        true = sent - pd.Timedelta(hours=_eastern_hours(guess))
-        fixed.append(true.strftime("%Y-%m-%dT%H:%M:%S.000Z"))
+    fixed = list(times)
+    for i in idx[first_late:]:
+        fixed[i] = _back_by_offset(times[i])
     return {**block, "acceptanceDateTime": fixed}
 
 

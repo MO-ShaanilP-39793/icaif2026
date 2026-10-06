@@ -65,21 +65,18 @@ def test_a_block_edgar_sends_right_is_never_moved():
     right = ["2026-07-14T10:30:38.000Z", "2026-01-13T11:45:10.000Z"]
     edgar = _Edgar(right, TRUE)
     assert _read(edgar) == ["2026-07-14 06:30:38", "2026-01-13 06:45:10"]
-    assert sum("-index.htm" in u for u in edgar.asked) == 1   # checked on this read, not cached
-    late = _Edgar(["2026-07-14T14:30:38.000Z", "2026-01-13T16:45:10.000Z"], TRUE)
-    _read(late)
-    assert sum("-index.htm" in u for u in late.asked) == 2    # a correction is confirmed first
+    assert sum("-index.htm" in u for u in edgar.asked) == 2   # both ends, on this read: no cache
 
 
 def test_a_gap_of_any_other_size_or_a_mixed_block_stops_the_read():
-    """Only the measured fault is corrected. A 3-hour gap, or one filing page agreeing and
-    another not, is something nobody has measured; guessed at, it could move filings
+    """Only the measured fault is corrected. A 3-hour gap, or a late newest 8-K over a right
+    oldest one, is something nobody has measured; guessed at, it could move filings
     earlier than they were public."""
     off_by_3 = ["2026-07-14T13:30:38.000Z", "2026-01-13T14:45:10.000Z"]
     with pytest.raises(earnings.EdgarTimeError, match="from its filing page"):
         _read(_Edgar(off_by_3, TRUE))
     mixed = ["2026-07-14T14:30:38.000Z", "2026-01-13T11:45:10.000Z"]
-    with pytest.raises(earnings.EdgarTimeError, match="mixed block"):
+    with pytest.raises(earnings.EdgarTimeError, match="not a pattern measured"):
         _read(_Edgar(mixed, TRUE))
 
 
@@ -97,3 +94,26 @@ def test_a_live_round_falls_back_to_the_snapshot_when_edgar_times_cannot_be_trus
     assert meta["source"] == "snapshot" and meta["stale"]
     assert "EdgarTimeError" in meta["edgar_error"]
     assert list(events["ticker"]) == ["AAPL"]
+
+
+def test_a_block_right_at_the_top_and_late_below_moves_only_the_late_8ks():
+    """By the evening of Oct 6, EDGAR served filings accepted that day right and every older
+    one late, so JPM's newest filing agreed with its page while its January results did
+    not. Checked at the top only, the whole block passed and the late 8-Ks stayed late;
+    moved whole, the right ones would have gone four hours before they existed."""
+    true = [f"2026-10-0{d} 0{h}:30:00" for d, h in ((6, 9), (6, 8), (5, 7), (2, 6), (1, 6), (1, 5))]
+    accs = [f"0000019617-26-00000{i}" for i in range(len(true))]
+    sent = [pd.Timestamp(t).tz_localize("America/New_York").tz_convert("UTC") for t in true]
+    sent = [(ts + pd.Timedelta(hours=4 if i >= 2 else 0)).strftime("%Y-%m-%dT%H:%M:%S.000Z")
+            for i, ts in enumerate(sent)]
+    edgar = _Edgar(sent, dict(zip(accs, true)))
+    edgar.block = {"form": ["8-K"] * 6 + ["424B2"], "items": ["8.01"] * 6 + [""],
+                   "acceptanceDateTime": sent + ["2026-01-01T12:00:00.000Z"],
+                   "accessionNumber": accs + ["0000019617-26-999999"],
+                   "primaryDocument": ["d.htm"] * 7}
+    checks = []
+    fixed = earnings.checked_times(edgar, CIK, edgar.block, sleep=0, checks=checks)
+    got = filings.parse_events(fixed)["accepted"].dt.strftime("%Y-%m-%d %H:%M:%S")
+    assert sorted(got) == sorted(true)
+    assert fixed["acceptanceDateTime"][6] == "2026-01-01T12:00:00.000Z"   # not an 8-K: as sent
+    assert checks[0]["late"] == 4 and checks[0]["probes"] <= 2 + 3

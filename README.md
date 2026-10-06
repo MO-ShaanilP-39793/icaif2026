@@ -251,10 +251,12 @@ needs `SEC_USER_AGENT="<name> <email>"` in the environment.
 Since about 2026-10-06 the submissions JSON has served 10 of our names' times late by
 exactly Eastern's UTC offset (AAPL, AMZN, BAC, CVX, GS, JPM, META, NEE, NKE, UNH; JPM's
 06:30:38 ET results as 10:30 ET), while each filing's index page states the true time.
-Every block read is checked on that read, never from a cache. If the newest filing's page
-agrees, the block is used as sent. If it is late by the offset, the oldest filing's page
-must agree before every time is corrected. Any other gap raises, and live falls back to
-the snapshot. The Oct 1 snapshot and texts fetched before Oct 6 are unaffected.
+By that evening, filings accepted the same day came back right and older ones still
+late. Only 8-Ks are checked and corrected, on every read, never from a cache. The newest
+and oldest 8-K's pages are always read. If both agree the block is used as sent, and if
+both are late every 8-K is corrected. If only the older ones are late, the boundary is
+bisected and only the 8-Ks below it move. Any other gap raises, and live falls back to the
+snapshot. The Oct 1 snapshot and texts fetched before Oct 6 are unaffected.
 
 ## Daily-model features (`tools/daily_feature_report.py`)
 
