@@ -382,6 +382,7 @@
       const body = p.rows.map((r) => {
         const a = r.agent;
         const meta = `${esc(a.model)} · ${a.calls} calls · $${Number(a.cost_usd).toFixed(2)}` +
+          (a.cache_hits ? ` (${a.cache_hits} answers from cache, not in the cost)` : "") +
           (a.fallbacks ? ` · ${a.fallbacks} fallback(s)` : "") + ` · ${esc(r.author)} · ${when(r.submitted_at)}` +
           (r.versions > 1 ? ` · v${r.versions}` : "");
         const top = `<tr class="agent-head"><td colspan="${3 + METRICS.length}"><span class="sname">${esc(r.strategy)}</span>` +
@@ -437,6 +438,7 @@
       const ref = r.kind === "reference", ag = r.kind === "agentic";
       const by = ref ? "reference strategy" : ag
         ? `${esc(r.agent.model)} · ${r.agent.calls} calls · $${Number(r.agent.cost_usd).toFixed(2)}` +
+          (r.agent.cache_hits ? ` (${r.agent.cache_hits} answers from cache, not in the cost)` : "") +
           (r.agent.fallbacks ? ` · ${r.agent.fallbacks} fallback(s)` : "") +
           ` · ${esc(r.author)} · ${when(r.submitted_at)}${r.versions > 1 ? ` · v${r.versions}` : ""}`
         : `${esc(r.author)} · ${when(r.submitted_at)}${r.versions > 1 ? ` · v${r.versions}` : ""}`;

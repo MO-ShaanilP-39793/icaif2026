@@ -164,6 +164,15 @@ across windows as a histogram. Bins are shared down a column, so shapes compare 
   included, counts as a look). In a fixed suite agentic entries rank
   in the one field beside submissions and references, with their model, calls and cost;
   on the holdout they stay on their own panel, since they cover a few of ~109 windows.
+- **Agent replays** go on with `tools/submit_agentic.py TAG [TAG ...] --suite official4
+  --name N --desk "..." [--dry]`, one tag per window run (`icaif/replay_entry.py`). It
+  publishes the desk's metrics from each `windows.csv` and the spend from each `<tag>.out`
+  (every model's line summed, cached answers counted separately), never decisions or
+  reasoning. It reads the live board first and refuses a missing or doubled suite window,
+  runs of different desks or models, a run with no spend line, or a window whose
+  inv_vol_hold_75 differs from the board's (replay and board price on separate snapshots).
+  Window ends are the board's. The four v1 runs (`v1_free_gemini_<date>`) combine
+  cleanly: 60 calls, $2.92, 1 fallback, every window matching the board's prices.
   Two views: *by strategy*, each entrant's place in each of the four windows (sortable by
   any window's place), and *by window*, one window's whole field, sortable by any metric
   (the same table as the holdout's By window tab).
