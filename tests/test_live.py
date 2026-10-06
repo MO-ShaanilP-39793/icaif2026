@@ -285,7 +285,7 @@ def test_live_edgar_adds_recent_filings_to_the_snapshot_without_doubling_any(tmp
                  ).to_parquet(tmp_path / "earnings_2026-09-01.parquet")
     calls = []
 
-    def fake_fetch(symbols, sleep=0.12, recent_only=False):
+    def fake_fetch(symbols, sleep=0.12, recent_only=False, checks=None):
         calls.append(recent_only)
         return pd.DataFrame({"ticker": ["AAPL", "AAPL", "AAPL"],
                              "accepted": [old, pd.Timestamp("2026-09-25 16:30", tz=ny),

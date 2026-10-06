@@ -105,7 +105,8 @@ def parse_events(block: dict, documents: bool = False) -> pd.DataFrame:
 
 
 def fetch(tickers: list[str], sleep: float = 0.12, recent_only: bool = False,
-          timeout: float = 60, budget_s: Optional[float] = None) -> tuple[pd.DataFrame, list[str]]:
+          timeout: float = 60, budget_s: Optional[float] = None,
+          checks: Optional[list] = None) -> tuple[pd.DataFrame, list[str]]:
     """(ticker, accepted, items, amended) for every event 8-K, and names with no CIK.
 
     `recent_only` reads each name's latest block alone (`earnings.submission_blocks`): a
@@ -124,7 +125,7 @@ def fetch(tickers: list[str], sleep: float = 0.12, recent_only: bool = False,
             if cik is None:
                 missing.append(t)
                 continue
-            blocks = earnings.submission_blocks(client, cik, t, sleep, recent_only)
+            blocks = earnings.submission_blocks(client, cik, t, sleep, recent_only, checks)
             frames.append(pd.concat([parse_events(b, documents=recent_only) for b in blocks],
                                     ignore_index=True).assign(ticker=t, cik=cik))
     out = pd.concat(frames, ignore_index=True).drop_duplicates()
@@ -228,7 +229,7 @@ def document_text(client, cik: int, accession: str, document: str, sleep: float 
     return html_text(body) if "<" in body[:2000] else " ".join(body.split())
 
 
-INDEX_URL = "https://www.sec.gov/Archives/edgar/data/{cik}/{acc}/{accession}-index.htm"
+INDEX_URL = earnings.INDEX_URL
 # Items whose main document points at a press release in Exhibit 99.1 instead of saying
 # what happened.
 EXHIBIT_ITEMS = {"2.02", "7.01"}

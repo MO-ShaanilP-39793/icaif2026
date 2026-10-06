@@ -247,6 +247,15 @@ HOLX, IPG, JNPR, K, MRO and WBA. Before the renames, BK, FI, MMC and SATS were a
 Earnings dates come from EDGAR 8-K item 2.02 acceptance times (`earnings.py`). This
 needs `SEC_USER_AGENT="<name> <email>"` in the environment.
 
+**EDGAR's JSON times are checked against its filing pages** (`earnings.checked_times`).
+Since about 2026-10-06 the submissions JSON has served 10 of our names' times late by
+exactly Eastern's UTC offset (AAPL, AMZN, BAC, CVX, GS, JPM, META, NEE, NKE, UNH; JPM's
+06:30:38 ET results as 10:30 ET), while each filing's index page states the true time.
+Every block read is checked on that read, never from a cache. If the newest filing's page
+agrees, the block is used as sent. If it is late by the offset, the oldest filing's page
+must agree before every time is corrected. Any other gap raises, and live falls back to
+the snapshot. The Oct 1 snapshot and texts fetched before Oct 6 are unaffected.
+
 ## Daily-model features (`tools/daily_feature_report.py`)
 
 `daily_features.build` gives one row per (date, name) in the day's universe: 718k rows,

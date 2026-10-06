@@ -174,13 +174,15 @@ def load_events(symbols: list[str], now: pd.Timestamp) -> tuple[pd.DataFrame, di
             events, missing = earnings.fetch(symbols)
             meta = {"source": "edgar", "stale": False, "no_cik": missing}
         else:
-            recent, missing = earnings.fetch(symbols, recent_only=True)
+            checks = []
+            recent, missing = earnings.fetch(symbols, recent_only=True, checks=checks)
             base = pd.read_parquet(snapshots[-1])
             events = (pd.concat([base.loc[base["ticker"].isin(symbols), ["ticker", "accepted"]],
                                  recent[["ticker", "accepted"]]], ignore_index=True)
                       .drop_duplicates().sort_values(["ticker", "accepted"]).reset_index(drop=True))
             meta = {"source": "edgar", "stale": False, "no_cik": missing,
-                    "fetched": "recent filings", "history": str(snapshots[-1])}
+                    "fetched": "recent filings", "history": str(snapshots[-1]),
+                    "times_corrected": sum(c["times"] != "as_sent" for c in checks)}
     else:
         # "earnings_2*", not "earnings_*": the Yahoo calendar's earnings_calendar_<date>
         # sorts after every dated EDGAR snapshot and is a different table (scheduled
@@ -227,11 +229,13 @@ def load_filings(tickers: list[str], now: pd.Timestamp, text_dir: Path, *,
     meta = {"snapshot": path.name, "source": "snapshot", "stale": True}
     if os.environ.get("SEC_USER_AGENT", "").strip():
         try:
+            checks = []
             recent, missing = (fetch(tickers, recent_only=True) if fetch is not None else
                                filings.fetch(tickers, recent_only=True, timeout=EDGAR_TIMEOUT_S,
-                                             budget_s=EDGAR_BUDGET_S))
+                                             budget_s=EDGAR_BUDGET_S, checks=checks))
             events = filings.merge(events, recent)
-            meta.update(source="edgar", stale=False, recent_rows=len(recent), no_cik=missing)
+            meta.update(source="edgar", stale=False, recent_rows=len(recent), no_cik=missing,
+                        times_corrected=sum(c["times"] != "as_sent" for c in checks))
         except Exception as err:  # noqa: BLE001 - the snapshot stands in, flagged
             meta["edgar_error"] = f"{type(err).__name__}: {err}"
     else:

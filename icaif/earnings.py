@@ -13,7 +13,9 @@ up as an empty result rather than an error.
 """
 
 import os
+import re
 import time
+from typing import Optional
 
 import numpy as np
 import pandas as pd
@@ -22,6 +24,8 @@ from icaif import calendar
 
 TICKERS_URL = "https://www.sec.gov/files/company_tickers.json"
 SUBMISSIONS_URL = "https://data.sec.gov/submissions/{name}"
+INDEX_URL = "https://www.sec.gov/Archives/edgar/data/{cik}/{acc}/{accession}-index.htm"
+_ACCEPTED = re.compile(r'Accepted</div>\s*<div class="info">([^<]+)<')
 EARNINGS_ITEM = "2.02"
 MARKET_OPEN = pd.Timestamp("09:30").time()
 # A company that re-registers gets a new CIK, and the current ticker map points only at
@@ -67,9 +71,92 @@ def parse_filings(block: dict) -> pd.DataFrame:
     return pd.DataFrame({"accepted": accepted.dt.tz_convert(calendar.TZ)})
 
 
+class EdgarTimeError(RuntimeError):
+    """A block's acceptance times disagree with its filing pages in a way not corrected."""
+
+
+def index_accepted(client, cik: int, accession: str) -> pd.Timestamp:
+    """The acceptance time a filing's own index page states, in Eastern time."""
+    url = INDEX_URL.format(cik=int(cik), acc=accession.replace("-", ""), accession=accession)
+    m = _ACCEPTED.search(client.get(url).raise_for_status().text)
+    if not m:
+        raise EdgarTimeError(f"no acceptance time on {url}")
+    return pd.Timestamp(m.group(1).strip()).tz_localize(calendar.TZ, ambiguous=True)
+
+
+def _eastern_hours(ts: pd.Timestamp) -> float:
+    """Hours Eastern time is behind UTC at `ts`: 4 in summer, 5 in winter."""
+    return -ts.tz_convert(calendar.TZ).utcoffset().total_seconds() / 3600
+
+
+def checked_times(client, cik: int, block: dict, sleep: float = 0.12,
+                  checks: Optional[list] = None) -> dict:
+    """The block, its acceptance times made to agree with EDGAR's own filing pages.
+
+    Since about 2026-10-06 the submissions JSON serves some filers' times late by
+    exactly Eastern's UTC offset (JPM's 06:30:38 ET results as 14:30:38Z, i.e. 10:30
+    ET; AAPL, AMZN, BAC, CVX, GS, META, NEE, NKE and UNH alike, every filing since
+    2025 checked), while the filing's index page still states 06:30:38. Read as sent,
+    a pre-market release lands after the open, on the next session's reaction, and the
+    live merge with the snapshot holds every such filing twice, the copy four hours
+    late firing a second "new 8-K".
+
+    So each block is checked against its filing pages every time it is read, never from
+    a cache: a correction kept after EDGAR mends its feed would move every filing four
+    hours before it existed. The newest filing's page agrees: the block is returned as
+    sent, one request. It is late by exactly the offset: the oldest filing's page must
+    say the same before every time is moved back by the offset in force at it, since a
+    correction is the direction that can show a filing early, and a block left as sent
+    at worst shows one late. Anything else raises: a gap of another size, or two pages
+    that disagree, is a fault nobody has measured, and the snapshot (live) or a stop
+    (tools) is better than a guess. Two probes a block cost a live round's 30-name read
+    23 s on top of 16 s, against its 45 s budget; one where the feed is right keeps it
+    near the budget's half.
+    """
+    times, accs = block.get("acceptanceDateTime", []), block.get("accessionNumber", [])
+    idx = [i for i in range(len(times)) if times[i] and i < len(accs) and accs[i]]
+    if not idx:
+        return block
+    kinds = []
+    for i in dict.fromkeys((idx[0], idx[-1])):
+        if kinds == ["as_sent"]:
+            break
+        sent = pd.Timestamp(times[i])
+        sent = sent.tz_localize("UTC") if sent.tzinfo is None else sent.tz_convert("UTC")
+        true = index_accepted(client, cik, accs[i]).tz_convert("UTC")
+        time.sleep(sleep)
+        gap = (sent - true).total_seconds() / 3600
+        if gap == 0:
+            kinds.append("as_sent")
+        elif gap == _eastern_hours(true):
+            kinds.append("late_by_offset")
+        else:
+            raise EdgarTimeError(f"CIK {cik} {accs[i]}: EDGAR JSON {times[i]} is {gap:+.2f}h "
+                                 f"from its filing page ({true})")
+    if len(set(kinds)) > 1:
+        raise EdgarTimeError(f"CIK {cik}: one filing page agrees with the JSON and another "
+                             f"is late by the Eastern offset; not correcting a mixed block")
+    if checks is not None:
+        checks.append({"cik": int(cik), "times": kinds[0], "probes": len(kinds)})
+    if kinds[0] == "as_sent":
+        return block
+    fixed = []
+    for t in times:
+        if not t:
+            fixed.append(t)
+            continue
+        sent = pd.Timestamp(t)
+        sent = sent.tz_localize("UTC") if sent.tzinfo is None else sent.tz_convert("UTC")
+        guess = sent - pd.Timedelta(hours=_eastern_hours(sent))
+        true = sent - pd.Timedelta(hours=_eastern_hours(guess))
+        fixed.append(true.strftime("%Y-%m-%dT%H:%M:%S.000Z"))
+    return {**block, "acceptanceDateTime": fixed}
+
+
 def submission_blocks(client, cik: int, ticker: str, sleep: float = 0.12,
-                      recent_only: bool = False) -> list[dict]:
-    """Every filings block EDGAR holds for a name, former CIKs included.
+                      recent_only: bool = False, checks: Optional[list] = None) -> list[dict]:
+    """Every filings block EDGAR holds for a name, former CIKs included, each with its
+    acceptance times checked against EDGAR's filing pages (`checked_times`).
 
     `recent_only` reads the current CIK's latest block alone (its last 1,000 filings
     or at least a year): one request a name instead of one per page of history. That
@@ -80,17 +167,17 @@ def submission_blocks(client, cik: int, ticker: str, sleep: float = 0.12,
     former = () if recent_only else FORMER_CIKS.get(ticker.upper(), ())
     for c in (cik, *former):
         sub = client.get(SUBMISSIONS_URL.format(name=f"CIK{c:010d}.json")).raise_for_status().json()
-        blocks.append(sub["filings"]["recent"])
+        blocks.append(checked_times(client, c, sub["filings"]["recent"], sleep, checks))
         for extra in ([] if recent_only else sub["filings"].get("files", [])):
             time.sleep(sleep)
-            blocks.append(client.get(SUBMISSIONS_URL.format(name=extra["name"]))
-                          .raise_for_status().json())
+            page = client.get(SUBMISSIONS_URL.format(name=extra["name"])).raise_for_status().json()
+            blocks.append(checked_times(client, c, page, sleep, checks))
         time.sleep(sleep)
     return blocks
 
 
-def fetch(tickers: list[str], sleep: float = 0.12,
-          recent_only: bool = False) -> tuple[pd.DataFrame, list[str]]:
+def fetch(tickers: list[str], sleep: float = 0.12, recent_only: bool = False,
+          checks: Optional[list] = None) -> tuple[pd.DataFrame, list[str]]:
     """(ticker, accepted) for every earnings 8-K, and the tickers EDGAR has no CIK for.
 
     Delisted names are missing from the current ticker map; they have no Yahoo prices
@@ -105,7 +192,7 @@ def fetch(tickers: list[str], sleep: float = 0.12,
             if cik is None:
                 missing.append(t)
                 continue
-            blocks = submission_blocks(client, cik, t, sleep, recent_only)
+            blocks = submission_blocks(client, cik, t, sleep, recent_only, checks)
             events = pd.concat([parse_filings(b) for b in blocks], ignore_index=True)
             frames.append(events.assign(ticker=t))
             time.sleep(sleep)  # the SEC allows 10 requests a second
