@@ -721,8 +721,13 @@ for the market analyst, 20,000 for the quant, 24,000 for news, and 18,000 to 20,
 for the debate, trader, risk manager and PM before what earlier roles write. With the v1
 runs' Grok output (about 7,000 tokens a call at high effort, reasoning included), that is
 about 160 calls and $7 a window ($6-9 by how much medium effort writes), against the
-free desk's $1.15. Replays now give v2's market analyst `macro`; v1's replays never
-loaded it.
+free desk's $1.15.
+
+**Replays read macro since 2026-10-06.** `agent_replay.py` never passed `macro` to any
+desk, so every replay before then (the free desk's Run C included) decided without the
+block its prompt says it may get. It now loads it for every desk and stops if the FOMC
+calendar is missing. The rule desk ignores it (still 167 of 167); an LLM replay re-asks,
+since its cached answers were given without it.
 
 ## Credentials
 

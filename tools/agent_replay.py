@@ -296,14 +296,17 @@ def main() -> None:
         make = lambda: cache  # noqa: E731 - one brain across windows, so the budget is global
         live_brains = [shared]
 
-    history = context = fomc = None
-    if args.desk == "v2":
-        # The market analyst reads macro (as of the prior close, `macro.readings`), which
-        # v1's replays never loaded; v1 is left as it ran.
-        from icaif import external, macro
+    # Macro (the market, VIX, yields, sectors as of the prior close; FOMC timing), for every
+    # desk. Until 2026-10-06 this tool never passed it, so every replay before then,
+    # Run C's included, decided without the macro block its prompt describes as "may
+    # include", and nothing said it was missing. A missing file raises here rather than
+    # replay without it again.
+    from icaif import external, macro
 
-        history = EarningsHistory.from_market(events, market)
-        context, fomc = macro.wide(external.load("yahoo_daily_context")), macro.FomcCalendar.load()
+    context, fomc = macro.wide(external.load("yahoo_daily_context")), macro.FomcCalendar.load()
+    if fomc is None:
+        raise SystemExit("no FOMC calendar in data/external; run tools/enrich_data.py")
+    history = EarningsHistory.from_market(events, market) if args.desk == "v2" else None
 
     def v2_desk():
         return V2Desk(v2_brains, v2cfg, earnings_history=history, scores=scores, earnings=earnings,
@@ -339,7 +342,7 @@ def main() -> None:
         closes = market.recent_closes(pd.Timestamp("2100-01-01", tz="America/New_York"), 10 ** 7)
         for s in starts:
             d = desk(make, cfg, scores=scores, earnings=earnings, vol=har, filings=filings,
-                     universe_scores=universe_scores, news_dir=news_dir)()
+                     universe_scores=universe_scores, news_dir=news_dir, context=context, fomc=fomc)()
             got = sim.run(d, market, s, windows.WINDOW_DAYS)
             want = sim.run(qs.CANDIDATES["q_riskparity_entry_regime"](), market, s, windows.WINDOW_DAYS)
             if not got.ledger.equals(want.ledger):
@@ -367,7 +370,7 @@ def main() -> None:
 
     desks = []
     desk_kw = dict(scores=scores, earnings=earnings, vol=har, filings=filings,
-                   universe_scores=universe_scores, news_dir=news_dir)
+                   universe_scores=universe_scores, news_dir=news_dir, context=context, fomc=fomc)
 
     def factory():
         d = (v2_desk() if args.desk == "v2" else
