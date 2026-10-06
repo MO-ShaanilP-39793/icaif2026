@@ -16,6 +16,15 @@ deliberate:
 An entry is a result, not a decisions file: its per-window metrics, from `holdout`. Only the newest version of each strategy name ranks. Older
 versions are kept and counted, so the number of looks at the holdout stays visible.
 Every look is a chance to tune against it.
+
+**The agentic panel** (`AGENTIC` entries) holds LLM desks replayed on a few of the
+board's windows, since a paid agent run over all ~109 is days and dollars. Such an entry
+never enters the main ranking: a mean over one window beside means over 109 would read
+as the same kind of number. Instead, in each window it covers, it is ranked against the
+main board's whole field in that window, and only that field: agentic entries are never
+ranked against each other, so adding one moves no other entry's place on either panel.
+Each carries how its windows were chosen, because a window picked for the agent's
+strength ranks it higher than the board's own windows would.
 """
 
 import re
@@ -33,6 +42,10 @@ METRICS = list(ranking.METRICS)
 BOARD_SIZING = "pre_fee"
 REFERENCE = "reference"
 SUBMITTED = "submitted"
+AGENTIC = "agentic"
+# What an agentic entry must say about itself: a place in a window means little without
+# the model, the desk, what the run cost and how its windows were picked.
+AGENT_FIELDS = ("model", "desk", "calls", "cost_usd", "window_choice")
 
 
 def disjoint_windows(windows: list[dict]) -> list[int]:
@@ -115,10 +128,16 @@ def slug(name: str) -> str:
 def make_entry(strategy: str, kind: str, windows_df: pd.DataFrame, *,
                span: tuple, sizing: str, market_snapshot: str, author: str = "",
                note: str = "", decisions_sha256: str | None = None,
-               submitted_at: str | None = None) -> dict:
+               submitted_at: str | None = None, agent: dict | None = None) -> dict:
     held = {c: int(windows_df[c].sum()) if c in windows_df else 0
             for c in ("missing_rounds", "invalid_rounds")}
-    return {
+    if (kind == AGENTIC) != (agent is not None):
+        raise EntryError("an agentic entry needs its agent fields, and only it has them")
+    if agent is not None:
+        missing = [k for k in AGENT_FIELDS if k not in agent]
+        if missing:
+            raise EntryError(f"agent fields missing: {missing}")
+    return {**({"agent": agent} if agent is not None else {}),
         "schema": SCHEMA, "kind": kind, "strategy": strategy, "author": author,
         "note": note,
         "submitted_at": submitted_at or datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
@@ -148,8 +167,11 @@ def standings(entries: list[dict]) -> dict:
     n_independent = max(1, len(disjoint))
 
     ref_names = {r["strategy"] for r in refs}
+    agentic = [e for e in entries if e.get("kind") == AGENTIC]
     latest, versions, excluded, old_format = {}, {}, [], {}
     for e in entries:
+        if e.get("kind") == AGENTIC:
+            continue   # its own panel, below; never the main ranking
         name = e["strategy"]
         if e["kind"] == SUBMITTED and name in ref_names:
             # Checked before `latest`: sharing the name key, a submission would otherwise
@@ -240,7 +262,70 @@ def standings(entries: list[dict]) -> dict:
           **{f"mean_window_{k}": _mean_window(e, k) for k in METRICS}}
          for e in entries if e.get("kind") == SUBMITTED),
         key=lambda h: h["submitted_at"], reverse=True)
+    panel = agentic_standings(agentic, field, refs[0]["windows"], ref_names)
     return {"span": board_span, "sizing": BOARD_SIZING, "windows": len(board_windows),
             "bins": edges,
             "independent_windows": n_independent,
-            "entrants": len(rows), "rows": rows, "excluded": excluded, "history": history}
+            "entrants": len(rows), "rows": rows, "excluded": excluded, "history": history,
+            "agentic": panel}
+
+
+def agentic_standings(entries: list[dict], field: dict, board_windows: list[dict],
+                      ref_names: set) -> dict:
+    """Each agentic entry's place in each of its windows, against the main field alone.
+
+    `field` is the main board's ranked entries (newest versions and references). An
+    entry is left off, with the reason, if it names a reference, misses its agent
+    fields, uses another sizing, or covers a window the board does not have (same start
+    and end): a window outside the board has no field to be ranked in.
+    """
+    index = {(w["window_start"], w["window_end"]): i for i, w in enumerate(board_windows)}
+    latest, versions, excluded = {}, {}, []
+    for e in entries:
+        name = e["strategy"]
+        versions[name] = versions.get(name, 0) + 1
+        if name in ref_names or name in field:
+            excluded.append({"strategy": name, "reason": "uses the name of a main-board entry"})
+            continue
+        if e.get("schema") != SCHEMA:
+            excluded.append({"strategy": name, "reason": _old_schema(e)})
+            continue
+        if name not in latest or latest[name]["submitted_at"] < e["submitted_at"]:
+            latest[name] = e
+    rows = []
+    for name, e in latest.items():
+        missing = [k for k in AGENT_FIELDS if k not in (e.get("agent") or {})]
+        why = None
+        if missing:
+            why = f"no {', '.join(missing)} in its agent fields"
+        elif e["sizing"] != BOARD_SIZING:
+            why = f"sizing {e['sizing']} is not the board's {BOARD_SIZING}"
+        elif not e["windows"]:
+            why = "no windows"
+        else:
+            off = [w["window_start"] for w in e["windows"]
+                   if (w["window_start"], w["window_end"]) not in index]
+            if off:
+                why = f"windows not on the board: {', '.join(off)}"
+        if why:
+            excluded.append({"strategy": name, "reason": why})
+            continue
+        per = []
+        for w in e["windows"]:
+            i = index[(w["window_start"], w["window_end"])]
+            m = pd.DataFrame({n: f["windows"][i] for n, f in field.items()}).T[METRICS]
+            m.loc[name] = {k: w[k] for k in METRICS}
+            r = ranking.rank_window(m.astype(float).round(12))
+            per.append({"window_start": w["window_start"], "window_end": w["window_end"],
+                        "position": int(r.loc[name, "position"]), "of": len(m),
+                        "overall_score": float(r.loc[name, "overall_score"]),
+                        **{f"rank_{k}": float(r.loc[name, f"rank_{k}"]) for k in METRICS},
+                        **{k: w[k] for k in METRICS}})
+        rows.append({"strategy": name, "author": e["author"], "note": e["note"],
+                     "submitted_at": e["submitted_at"], "versions": versions[name],
+                     "agent": e["agent"], "windows": per,
+                     "missing_rounds": e["missing_rounds"], "invalid_rounds": e["invalid_rounds"],
+                     "mean_overall_score": float(pd.Series([p["overall_score"] for p in per]).mean()),
+                     "mean_position": float(pd.Series([p["position"] for p in per]).mean())})
+    rows.sort(key=lambda r: (r["mean_overall_score"], r["strategy"]))
+    return {"rows": rows, "excluded": excluded}

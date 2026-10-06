@@ -162,3 +162,60 @@ def test_a_resubmission_ranks_and_its_old_format_versions_still_count_as_looks()
     assert row["versions"] == 2 and row["mean_window_cumulative_return"] == 0.01
     assert b["excluded"] == []
     assert [h["status"] for h in b["history"]] == ["ranked", "old format"]
+
+
+# ----------------------------------------------------------------------------- agentic panel
+
+AGENT = {"model": "grok-4.7", "desk": "free", "calls": 15, "cost_usd": 1.15,
+         "window_choice": "picked for its earnings"}
+
+
+def _agentic(name, windows, metrics, at="2026-10-05T10:00:00Z", agent=AGENT):
+    wins = pd.DataFrame([{"window_start": s, "window_end": e, **dict(zip(lb.METRICS, m))}
+                         for (s, e), m in zip(windows, metrics)])
+    return lb.make_entry(name, lb.AGENTIC, wins, span=windows[0], sizing="pre_fee",
+                         market_snapshot="snap", author="a", submitted_at=at, agent=agent)
+
+
+def test_an_agentic_entry_never_moves_the_main_board_and_never_meets_another_agent():
+    """A one-window agent beside 109-window means would read as the same kind of number,
+    and two agents ranked against each other would each move the other's place."""
+    a = _entry("a", [(0.02, 2.0, 0.01, 0.05)] * 3)
+    g1 = _agentic("grok_free", [WINDOWS[1]], [(0.06, 10.0, 0.01, 0.03)])
+    g2 = _agentic("grok_levered", [WINDOWS[1]], [(0.10, 12.0, 0.0, 0.0)])
+    base = lb.standings([CASH, EW, a])
+    with_agents = lb.standings([CASH, EW, a, g1, g2])
+    assert with_agents["rows"] == base["rows"] and with_agents["excluded"] == base["excluded"]
+    panel = {r["strategy"]: r for r in with_agents["agentic"]["rows"]}
+    alone = lb.standings([CASH, EW, a, g1])["agentic"]["rows"][0]
+    assert panel["grok_free"]["windows"] == alone["windows"]          # g2 changed nothing
+    assert panel["grok_free"]["windows"][0]["of"] == 4                 # the field + itself
+
+
+def test_an_agentic_place_is_its_rank_against_the_main_field_in_that_window():
+    a = _entry("a", [(0.02, 2.0, 0.01, 0.05)] * 3)
+    g = _agentic("grok", [WINDOWS[2]], [(0.03, 3.0, 0.0, 0.0)])
+    w = lb.standings([CASH, EW, a, g])["agentic"]["rows"][0]["windows"][0]
+    m = pd.DataFrame({e["strategy"]: e["windows"][2] for e in (CASH, EW, a)}).T[lb.METRICS]
+    m.loc["grok"] = {k: g["windows"][0][k] for k in lb.METRICS}
+    want = ranking.rank_window(m.astype(float))
+    assert w["position"] == want.loc["grok", "position"]
+    assert w["overall_score"] == pytest.approx(want.loc["grok", "overall_score"])
+
+
+def test_an_agentic_entry_off_the_boards_windows_or_without_its_story_is_named_not_ranked():
+    """A window the board lacks has no field to rank in; a place without the model, cost
+    and how the window was chosen invites a reading the run cannot support."""
+    off = _agentic("off", [("2026-01-03", "2026-01-24")], [(0.01, 1.0, 0.0, 0.0)])
+    bare = _agentic("bare", [WINDOWS[0]], [(0.01, 1.0, 0.0, 0.0)])
+    bare["agent"] = {k: v for k, v in AGENT.items() if k != "window_choice"}
+    clash = _agentic("ew_hold", [WINDOWS[0]], [(0.01, 1.0, 0.0, 0.0)])
+    p = lb.standings([CASH, EW, off, bare, clash])["agentic"]
+    assert p["rows"] == []
+    why = {e["strategy"]: e["reason"] for e in p["excluded"]}
+    assert "not on the board" in why["off"] and "window_choice" in why["bare"]
+    assert "main-board" in why["ew_hold"]
+    with pytest.raises(lb.EntryError):
+        _agentic("x", [WINDOWS[0]], [(0, 0, 0, 0)], agent={"model": "m"})
+    with pytest.raises(lb.EntryError):
+        _entry("y", [(0, 0, 0, 0)] * 3, agent=AGENT)

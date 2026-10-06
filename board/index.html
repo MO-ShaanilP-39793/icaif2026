@@ -95,6 +95,19 @@
                                  border-bottom: 1px solid var(--line-2); white-space: nowrap; }
   table.disj thead th { position: static; background: none; }
   table.disj tr.mean td { font-weight: 600; border-bottom: 0; }
+  .agent-head td { padding-top: 14px; border-bottom: 0; }
+  .agent-desc { color: var(--ink-2); font-size: 12.5px; max-width: 900px; margin-top: 3px; }
+  .choice { display: inline-block; margin-top: 6px; padding: 3px 8px; border-radius: 6px; font-size: 12px;
+            background: var(--warn-bg); color: var(--warn); }
+  td.place { white-space: nowrap; font-variant-numeric: tabular-nums; }
+  td.num { white-space: nowrap; font-variant-numeric: tabular-nums; }
+  td.num .rk { color: var(--muted); font-size: 12px; }
+  .tabs { display: flex; gap: 4px; margin: 0 0 12px; border-bottom: 1px solid var(--line); }
+  .tabs button { font: inherit; font-weight: 600; color: var(--muted); background: none; border: 0;
+                 border-bottom: 2px solid transparent; padding: 8px 12px; margin-bottom: -1px; cursor: pointer; }
+  .tabs button[aria-selected="true"] { color: var(--ink); border-bottom-color: var(--accent); }
+  .tabs button:hover { color: var(--ink); }
+  .tabs .count { font-weight: 400; color: var(--muted); font-variant-numeric: tabular-nums; }
   [hidden] { display: none !important; }
 </style>
 </head>
@@ -112,6 +125,12 @@
 
   <div class="facts" id="facts"></div>
 
+  <nav class="tabs" role="tablist" aria-label="Panels">
+    <button role="tab" id="tab-main" aria-controls="panel-main" aria-selected="true">Main board <span id="count-main" class="count"></span></button>
+    <button role="tab" id="tab-agentic" aria-controls="panel-agentic" aria-selected="false">Agentic panel <span id="count-agentic" class="count"></span></button>
+  </nav>
+
+  <section id="panel-main" role="tabpanel" aria-labelledby="tab-main">
   <div class="panel scroll">
     <div id="status">Loading…</div>
     <table id="board" hidden></table>
@@ -123,6 +142,16 @@
     <span>Bins are shared down each column; each histogram is scaled to its own tallest bar. Hover a bar for its range and count.</span>
   </div>
   <div id="excluded"></div>
+  </section>
+
+  <section id="panel-agentic" role="tabpanel" aria-labelledby="tab-agentic" hidden>
+  <p class="sub" style="margin: 0 0 12px">LLM desks replayed on a few of the board's windows. Each is ranked
+    against the main board in those windows only, never against other agents, and moves no main-board
+    place. Read each place beside how its windows were chosen.</p>
+  <div class="panel scroll"><div id="agentic-status" class="muted" style="padding: 14px">No agentic entries yet.</div>
+    <table id="agentic" hidden></table></div>
+  <div id="agentic-excluded"></div>
+  </section>
 
   <h2>Every submission</h2>
   <details class="panel" style="padding: 10px 14px"><summary>Newest first, including superseded versions</summary>
@@ -144,6 +173,9 @@
       Only each strategy's newest version is ranked; every version is listed above.
       Submissions scored under the earlier format, one six-month run replayed into every
       window, are listed but not ranked.</p>
+    <p>An agentic entry's place in a window is its rank among the main board's entrants in that
+      window plus itself, under the same rules. A tied rank shares the average, so a metric's rank
+      can fall between two places.</p>
   </div>
 </main>
 
@@ -262,6 +294,10 @@
       [...byReason].map(([why, names]) => `<div>${names.length} ${names.length === 1 ? "entry" : "entries"}, ` +
         `${esc(why)}: ${names.map(esc).join(", ")}</div>`).join("") + "</div>" : "";
 
+    renderAgentic(b.agentic || { rows: [], excluded: [] });
+    $("count-main").textContent = b.entrants;
+    $("count-agentic").textContent = (b.agentic || { rows: [] }).rows.length;
+
     $("history").innerHTML = "<thead><tr><th>Submitted (UTC)</th><th>Strategy</th><th>Author</th>" +
       METRICS.map((k) => `<th>${LABELS[k]}, mean window</th>`).join("") + "<th></th></tr></thead><tbody>" +
       (b.history.length ? b.history.map((h) => `<tr><td>${esc(h.submitted_at.replace("T", " ").replace("Z", ""))}</td>` +
@@ -269,6 +305,37 @@
         METRICS.map((k) => `<td>${fmtFull(k, h["mean_window_" + k])}</td>`).join("") +
         `<td class="muted">${esc(h.status)}</td></tr>`).join("")
         : `<tr><td colspan="7" class="muted">Nothing submitted yet.</td></tr>`) + "</tbody>";
+  }
+
+  // One block per agentic entry: what it is, then its place in each window it covers,
+  // against the main board's field in that window (icaif/leaderboard.py).
+  function renderAgentic(p) {
+    const ord = (n) => n + (n % 100 >= 11 && n % 100 <= 13 ? "th" : ["th", "st", "nd", "rd"][n % 10] || "th");
+    const short = (iso) => new Date(iso + "T12:00:00Z").toLocaleDateString(undefined, { day: "numeric", month: "short", year: "numeric" });
+    if (p.rows.length) {
+      const head = `<thead><tr><th>Window</th><th>Place</th><th>Score</th>` +
+        METRICS.map((k) => `<th>${LABELS[k]}<span class="range">${HIGHER[k]} · rank in field</span></th>`).join("") + `</tr></thead>`;
+      const body = p.rows.map((r) => {
+        const a = r.agent;
+        const meta = `${esc(a.model)} · ${a.calls} calls · $${Number(a.cost_usd).toFixed(2)}` +
+          (a.fallbacks ? ` · ${a.fallbacks} fallback(s)` : "") + ` · ${esc(r.author)} · ${when(r.submitted_at)}` +
+          (r.versions > 1 ? ` · v${r.versions}` : "");
+        const top = `<tr class="agent-head"><td colspan="${3 + METRICS.length}"><span class="sname">${esc(r.strategy)}</span>` +
+          `<span class="chip">agentic</span><div class="by">${meta}</div>` +
+          `<div class="agent-desc">${esc(a.desk)}</div>${r.note ? `<div class="note">${esc(r.note)}</div>` : ""}` +
+          `<div class="choice">Windows: ${esc(a.window_choice)}</div></td></tr>`;
+        const rows = r.windows.map((w) => `<tr><td class="place">${short(w.window_start)} – ${short(w.window_end)}</td>` +
+          `<td class="place"><span class="big">${ord(w.position)}</span> <span class="pm">of ${w.of}</span></td>` +
+          `<td class="num">${w.overall_score.toFixed(2)}</td>` +
+          METRICS.map((k) => `<td class="num">${fmtFull(k, w[k])} <span class="rk">· ${Number.isInteger(w["rank_" + k]) ? ord(w["rank_" + k]) : w["rank_" + k].toFixed(1)}</span></td>`).join("") +
+          `</tr>`).join("");
+        return top + rows;
+      }).join("");
+      $("agentic").innerHTML = head + "<tbody>" + body + "</tbody>";
+      $("agentic").hidden = false; $("agentic-status").hidden = true;
+    }
+    $("agentic-excluded").innerHTML = p.excluded.length ? `<div class="note-box"><strong>Not on the panel</strong>` +
+      p.excluded.map((e) => `<div>${esc(e.strategy)}: ${esc(e.reason)}</div>`).join("") + "</div>" : "";
   }
 
   // The windows that share no day, each with its place and score against the whole field
@@ -286,6 +353,17 @@
       `<td>${r.mean_disjoint_overall_score.toFixed(2)}</td>` +
       METRICS.map((k) => `<td>${fmtFull(k, mean(k))}</td>`).join("") + `</tr></tbody></table>`;
   }
+
+  // Two panels, one visible; the hash keeps the choice linkable (…/#agentic).
+  function showTab(name) {
+    for (const t of ["main", "agentic"]) {
+      $("tab-" + t).setAttribute("aria-selected", String(t === name));
+      $("panel-" + t).hidden = t !== name;
+    }
+  }
+  $("tab-main").onclick = () => { showTab("main"); history.replaceState(null, "", location.pathname); };
+  $("tab-agentic").onclick = () => { showTab("agentic"); history.replaceState(null, "", "#agentic"); };
+  if (location.hash === "#agentic") showTab("agentic");
 
   HIST.installTooltips();
   start().catch((err) => fail(`Could not load the board: ${err.message}`));
