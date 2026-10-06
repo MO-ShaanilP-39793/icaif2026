@@ -59,6 +59,8 @@ def main() -> None:
     ap.add_argument("--as-of", default=None, help="replay as of this ET time (default: now)")
     ap.add_argument("--out", type=Path, default=None, help="phase dir (default output/live/dryrun-<ts>)")
     ap.add_argument("--shadow", choices=["claude", "rule", "none"], default="rule")
+    ap.add_argument("--model", default=runner.brains.DEFAULT_MODEL, choices=runner.brains.ALLOWED_MODELS,
+                    help="the LLM behind --shadow claude (grok-4.7 asks Bedrock)")
     ap.add_argument("--no-scores", action="store_true")
     args = ap.parse_args()
     imports = time.perf_counter() - T0
@@ -75,8 +77,8 @@ def main() -> None:
     start, real0 = now, pd.Timestamp.now(tz=calendar.TZ)
     clock = lambda: start + (pd.Timestamp.now(tz=calendar.TZ) - real0)  # noqa: E731
 
-    cfg = runner.Config(phase=phase, shadow=args.shadow, out=args.out, scoring=not args.no_scores,
-                        window_days=15)
+    cfg = runner.Config(phase=phase, shadow=args.shadow, model=args.model, out=args.out,
+                        scoring=not args.no_scores, window_days=15)
     book = None
     if args.portfolio:
         parsed = P.parse(json.loads(args.portfolio.read_text()))

@@ -43,6 +43,7 @@ import pandas as pd  # noqa: E402
 
 from icaif import calendar, live, runner  # noqa: E402
 from icaif import portfolio as P  # noqa: E402
+from icaif.agents import brains  # noqa: E402
 from icaif.agents.journal import Journal  # noqa: E402
 
 
@@ -50,14 +51,16 @@ def _cfg(args, phase=None) -> runner.Config:
     return runner.Config(phase=phase or args.phase, submit=args.submit, shadow=args.shadow,
                          live=getattr(args, "live", False),
                          out=Path(args.out) if getattr(args, "out", None) else None,
-                         scoring=not args.no_scores)
+                         scoring=not args.no_scores, model=args.model)
 
 
 def _common(p):
     p.add_argument("--submit", choices=["rule", "agent"], default="rule",
                    help="whose book is submitted (default rule; the agent shadows)")
     p.add_argument("--shadow", choices=["claude", "rule", "none"], default="claude",
-                   help="the agent desk's brain (claude spends; capped per phase)")
+                   help="the agent desk's brain (claude = the LLM in --model; spends, capped per phase)")
+    p.add_argument("--model", default=brains.DEFAULT_MODEL, choices=brains.ALLOWED_MODELS,
+                   help="the shadow's LLM (grok-4.7 asks Bedrock with the AWS login)")
     p.add_argument("--no-scores", action="store_true", help="skip the daily model (shadow only)")
     p.add_argument("--out", default=None, help="phase directory (default output/live/<phase>)")
 

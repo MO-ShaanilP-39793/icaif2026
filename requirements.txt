@@ -18,3 +18,5 @@ scikit-learn==1.7.2
 # The agent desk's Claude brain (icaif/agents/brains.py). Imported lazily: the rule
 # desk and every test run without it.
 anthropic==1.9.0
+# The Grok brain asks Bedrock (BedrockBrain) with the AWS SSO login. Imported lazily too.
+boto3==1.43.102

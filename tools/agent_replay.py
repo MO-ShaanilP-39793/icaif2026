@@ -3,6 +3,7 @@
     .venv/bin/python tools/agent_replay.py                          # rule brain: free
     .venv/bin/python tools/agent_replay.py --ledgers-only           # the same check, ~3 min
     .venv/bin/python tools/agent_replay.py --brain claude --max-calls 60 --yes
+    .venv/bin/python tools/agent_replay.py --brain claude --model grok-4.7 --yes   # Bedrock
 
 The rule brain is the sanity check: its desk must tie `q_riskparity_entry_regime` (the quant
 candidate it stands for) in every window, or the desk's plumbing, not its judgement,
@@ -141,7 +142,11 @@ def main() -> None:
         if not (args.yes or args.offline):
             print("re-run with --yes to spend it, or --offline to use cached answers only")
             return
-        shared = brains.ClaudeBrain(args.model, args.effort, max_calls=args.max_calls)
+        problem = brains.credentials_problem(args.model)
+        if problem and not args.offline:
+            raise SystemExit(f"{problem}: every call would fall back to the rule, and the "
+                             "replay would score the rule desk as the LLM's")
+        shared = brains.make(args.model, args.effort, max_calls=args.max_calls)
         cache = brains.CachedBrain(shared, OUT / "cache", offline=args.offline)
         make = lambda: cache  # noqa: E731 - one brain across windows, so the budget is global
         live_brains = [shared]

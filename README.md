@@ -287,7 +287,10 @@ buys risk parity at the regime-blended exposure, then holds. The LLM desk decide
 its own paper book, and its decision is logged beside the submitted one. The fallback
 chain is the agent's book, then the rule's, then no submission. `--submit rule` (the
 default, and Validation's) puts in the rule's book. `--submit agent` waits for the
-Roadmap's step-6 gate.
+Roadmap's step-6 gate. The shadow's LLM is `--model` (default `claude-opus-5`, which
+needs `ANTHROPIC_API_KEY`); `--model grok-4.7` asks Grok 4.7 on Bedrock with the AWS SSO
+login, which lapses, so each round warns when it can't be used. The same flag picks the
+model in `tools/agent_replay.py` and `tools/live_dry_run.py`.
 
 ```bash
 .venv/bin/python tools/live_dry_run.py --round 1            # one round's book, now, nothing uploaded

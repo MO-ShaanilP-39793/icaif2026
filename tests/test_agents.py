@@ -8,9 +8,10 @@ import pytest
 from icaif import calendar, quant_strategies as qs, sim
 from icaif import weights as W
 from icaif.agents import brains
-from icaif.agents.brains import BrainError, CachedBrain, ClaudeBrain, RuleBrain
+from icaif.agents.brains import BedrockBrain, BrainError, CachedBrain, ClaudeBrain, RuleBrain
 from icaif.agents.desk import Desk, DeskConfig
-from icaif.agents.schemas import EntryDecision, EventDecision, Exclusion, NameCall, ReviewDecision
+from icaif.agents.schemas import (EntryDecision, EventDecision, Exclusion, FreeDecision, NameCall,
+                                  ReviewDecision)
 from tests.test_quant import _bars, _days
 from tests.test_sim import TICKERS, _market
 
@@ -315,6 +316,138 @@ def test_the_call_budget_stops_spending_and_the_desk_keeps_trading_on_the_rule()
     desk, res = _run(brain, n=3)
     assert [e["source"] for e in desk.log] == ["brain", "fallback", "fallback"]
     assert res.invalid_rounds == []
+
+
+# ----------------------------------------------------------------------------- BedrockBrain
+
+class FakeBedrock:
+    """Stands in for boto3's bedrock-runtime client: records the request, returns a reply."""
+
+    def __init__(self, reply):
+        self.reply, self.requests = reply, []
+
+    def converse(self, **kw):
+        self.requests.append(kw)
+        if isinstance(self.reply, Exception):
+            raise self.reply
+        return self.reply
+
+
+def _converse(answer, stop="end_turn"):
+    content = [{"reasoningContent": {"reasoningText": {"text": "..."}}}]
+    if answer is not None:
+        content.append({"text": answer if isinstance(answer, str) else json.dumps(answer)})
+    return {"output": {"message": {"role": "assistant", "content": content}}, "stopReason": stop,
+            "usage": {"inputTokens": 1000, "outputTokens": 200, "cacheReadInputTokens": 4000,
+                      "cacheWriteInputTokens": 0},
+            "ResponseMetadata": {"RequestId": "req-1"}}
+
+
+ENTRY = {"shape": "risk_parity", "views": "none", "exposure": 0.7, "avoid": [], "rationale": "calm"}
+
+
+def test_a_grok_request_constrains_the_answer_to_the_schema_and_sends_the_effort_xai_validates():
+    """Without the schema format the model may answer in prose, which no schema checks.
+    A forced tool call is not a substitute: Bedrock drops its nulls, so every hold fails
+    validation and falls back. An effort sent anywhere but `reasoning.effort` is an
+    unknown field Bedrock drops in silence, so every replay would run at the default
+    effort while logging "high"."""
+    fake = FakeBedrock(_converse(ENTRY))
+    brain = brains.make("grok-4.7", "high")
+    brain._client = fake
+    got = brain.decide("entry", "SYSTEM", {"a": 1}, EntryDecision, timeout=30)
+    req = fake.requests[0]
+    assert isinstance(brain, brains.BedrockBrain) and got == EntryDecision.model_validate(ENTRY)
+    assert req["modelId"] == "us.xai.grok-4.7"
+    fmt = req["outputConfig"]["textFormat"]
+    assert fmt["type"] == "json_schema" and "toolConfig" not in req
+    assert json.loads(fmt["structure"]["jsonSchema"]["schema"]) == brains.bedrock_schema(EntryDecision)
+    assert req["additionalModelRequestFields"] == {"reasoning": {"effort": "high"}}
+    assert brain.cost() == pytest.approx((1000 * 2.20 + 200 * 6.60 + 4000 * 0.55) / 1e6)
+    assert brain.records[0]["request_id"] == "req-1"
+
+
+def test_a_grok_answer_outside_the_schema_is_a_fallback_not_a_repaired_book():
+    """Converse does not constrain decoding the way Anthropic's output_format does, so
+    an exposure past the cap can come back; coercing it would trade a book Grok never chose."""
+    bad = dict(ENTRY, exposure=1.7)
+    for reply in (_converse(bad), _converse(None), _converse(ENTRY, stop="max_tokens"),
+                  _converse(None, stop="content_filtered"), _converse("I would hold."),
+                  RuntimeError("ExpiredTokenException")):
+        brain = BedrockBrain(client=FakeBedrock(reply))
+        with pytest.raises(BrainError):
+            brain.decide("entry", "S", {}, EntryDecision, timeout=5)
+    desk, _ = _run(BedrockBrain(client=FakeBedrock(_converse(bad))), n=1)
+    assert desk.log[0]["source"] == "fallback" and "fails EntryDecision" in desk.log[0]["reason"]
+
+
+def test_grok_is_sent_no_numeric_bound_and_each_bound_is_still_stated_and_enforced():
+    """Bedrock's constrained decoding snapped every bounded number to a bound: each
+    free-desk weight came back 0.30 and the entry exposure at its cap, whatever Grok's
+    rationale argued. Sent as words, the bound informs; pydantic still enforces it."""
+    import json as _json
+
+    for schema in (EntryDecision, ReviewDecision, EventDecision, FreeDecision):
+        text = _json.dumps(brains.bedrock_schema(schema))
+        assert not any(f'"{k}"' in text for k in brains.BOUNDS), schema.__name__
+    sent = brains.bedrock_schema(EntryDecision)["properties"]["exposure"]
+    assert "Must be >= 0.3 and <= 0.95." in sent["description"]
+    assert "maximum" in _json.dumps(EntryDecision.model_json_schema())   # the model keeps it
+    over = dict(ENTRY, exposure=0.99)
+    with pytest.raises(BrainError):
+        BedrockBrain(client=FakeBedrock(_converse(over))).decide("entry", "S", {}, EntryDecision, 5)
+
+
+def test_a_grok_hold_keeps_the_nulls_the_schema_requires():
+    """The smoke test's failure: a hold states exposure and reason as null. Read from a
+    tool call, Bedrock had dropped them and the answer failed; read as JSON text, they stand."""
+    hold = {"action": "hold", "exposure": None, "reason": None, "exit": [], "trim": [], "rationale": "calm"}
+    brain = BedrockBrain(client=FakeBedrock(_converse(hold)))
+    got = brain.decide("review", "S", {}, ReviewDecision, timeout=5)
+    assert got.action == "hold" and got.exposure is None
+
+
+def test_the_grok_budget_stops_spending_and_the_desk_keeps_trading_on_the_rule():
+    brain = BedrockBrain(client=FakeBedrock(_converse(ENTRY)), max_calls=1)
+    desk, res = _run(brain, n=3)
+    assert [e["source"] for e in desk.log] == ["brain", "fallback", "fallback"]
+    assert res.invalid_rounds == []
+
+
+def test_each_model_goes_to_its_own_provider_and_answers_never_share_a_cache_entry():
+    """A cache keyed without the provider would hand Opus's answer to a Grok replay."""
+    assert isinstance(brains.make("claude-opus-5"), ClaudeBrain)
+    assert isinstance(brains.make("grok-4.7"), BedrockBrain)
+    assert set(brains.ALLOWED_MODELS) == set(brains.CLAUDE_MODELS) | set(brains.BEDROCK_MODELS)
+    assert set(brains.PRICES) == set(brains.ALLOWED_MODELS)
+    with pytest.raises(ValueError):
+        brains.make("grok-4")       # not on Bedrock: refused, not sent to Anthropic
+    with pytest.raises(ValueError):
+        ClaudeBrain(model="grok-4.7")
+    keys = {CachedBrain.key(brains.make(m).name, "entry", "S", {}, EntryDecision) for m in ("claude-opus-5", "grok-4.7")}
+    assert len(keys) == 2
+
+
+def test_a_missing_key_or_lapsed_aws_login_is_named_before_the_shadow_falls_back(monkeypatch):
+    """Every failed call falls back to the rule, so a lapsed login reads as an LLM that
+    agrees with the rule in every round unless something says otherwise."""
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    assert "ANTHROPIC_API_KEY" in brains.credentials_problem("claude-opus-5")
+    import boto3
+
+    class NoCreds:
+        def get_credentials(self):
+            return None
+
+    class Lapsed:
+        def get_credentials(self):
+            return SimpleNamespace(get_frozen_credentials=lambda: (_ for _ in ()).throw(
+                RuntimeError("Token has expired and refresh failed")))
+
+    monkeypatch.setattr(boto3, "Session", NoCreds)
+    assert "aws sso login" in brains.credentials_problem("grok-4.7")
+    monkeypatch.setattr(boto3, "Session", Lapsed)
+    assert "expired" in brains.credentials_problem("grok-4.7")
 
 
 # ----------------------------------------------------------------------------- free desk

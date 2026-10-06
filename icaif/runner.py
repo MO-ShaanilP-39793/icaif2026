@@ -110,6 +110,8 @@ class Config:
             raise ValueError(f"submit must be 'rule' or 'agent', not {self.submit!r}")
         if self.shadow not in ("claude", "rule", "none"):
             raise ValueError(f"shadow must be 'claude', 'rule' or 'none', not {self.shadow!r}")
+        if self.model not in brains.ALLOWED_MODELS:
+            raise ValueError(f"model must be one of {brains.ALLOWED_MODELS}, not {self.model!r}")
         if self.live and self.phase not in PHASES:
             raise ValueError(f"only {PHASES} can go live; {self.phase!r} is a dry run's")
         self.out = Path(self.out) if self.out else LIVE_OUT / self.phase
@@ -433,7 +435,7 @@ def make_brain(cfg: Config, st: State):
     left = cfg.shadow_cost_cap - float(st.data.get("spent_usd", 0.0))
     if left <= 0:
         return _Spent(cfg.shadow_cost_cap)
-    return brains.ClaudeBrain(cfg.model, cfg.effort, max_cost=left)
+    return brains.make(cfg.model, cfg.effort, max_cost=left)
 
 
 def run_desk(name: str, brain, cfg: Config, st: State, mkt: sim.Market, r: Round,
@@ -851,8 +853,9 @@ def _agent(cfg, r, st, doors, rec, mkt, book, current, *, reserve_s, entered_now
             rec[f"{label}_scores"] = doors.score(cfg, r, doors.now(), left())
         inputs, meta = doors.inputs(cfg, mkt, r)
         brain = Recording(doors.brain(cfg, st))
-        if cfg.shadow == "claude" and not os.environ.get("ANTHROPIC_API_KEY"):
-            rec["warnings"].append(f"{label}: ANTHROPIC_API_KEY is unset; every role falls back to the rule")
+        problem = brains.credentials_problem(cfg.model) if cfg.shadow == "claude" else None
+        if problem:
+            rec["warnings"].append(f"{label}: {problem}; every role falls back to the rule")
         budget = min(cfg.agent_budget_s, max(left(), 0))
         w, info = run_desk("agent", brain, cfg, st, mkt, r, book, entered_now=entered_now,
                            inputs=inputs, budget_s=budget)
@@ -862,7 +865,7 @@ def _agent(cfg, r, st, doors, rec, mkt, book, current, *, reserve_s, entered_now
         return None, False
     finally:
         if brain is not None:
-            if isinstance(brain.inner, brains.ClaudeBrain):
+            if isinstance(brain.inner, brains.PAID):
                 st.data["spent_usd"] = float(st.data.get("spent_usd", 0.0)) + brain.inner.cost()
             if brain.calls:
                 write_atomic(cfg.out / r.id / f"{label}_calls.json",
@@ -939,7 +942,7 @@ def say(msg: str, out: Optional[Path] = None) -> None:
 def worker_argv(cfg: Config, row: dict, schedule_path: Path, as_of=None) -> list[str]:
     argv = [sys.executable, str(TOOL), "round", "--phase", cfg.phase, "--round-id", row["id"],
             "--schedule", str(schedule_path), "--submit", cfg.submit, "--shadow", cfg.shadow,
-            "--out", str(cfg.out)]
+            "--model", cfg.model, "--out", str(cfg.out)]
     if cfg.live:
         argv.append("--live")
     if not cfg.scoring:
