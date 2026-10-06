@@ -746,6 +746,26 @@ block its prompt says it may get. It now loads it for every desk and stops if th
 calendar is missing. The rule desk ignores it (still 167 of 167); an LLM replay re-asks,
 since its cached answers were given without it.
 
+**Evaluation tools** (chunk 4). `tools/memory_probe.py --on <day>` asks the model for a
+window's results reactions (told they are) and its 20 largest daily moves (by name and
+date only), and calls the window remembered if the guesses' signs beat the rate their
+up/down mixes give by chance, or correlate with the moves, at 5% one-sided
+(`icaif/memprobe.py`). A model that says "up" to everything in a rising window agrees
+often and is not flagged. In simulation a guesser is flagged in 11% of windows. A set
+of fewer than 5 moves is not asked, and a probe the model did not answer reads
+"unanswered", never clean. It prints the cost and stops without `--yes`.
+
+`tools/board_rank.py <tag> ...` places a replay's strategies on the holdout board,
+window by window, against the board's whole field plus each strategy alone, as the
+agentic panel does (`icaif/boardrank.py`, which ranks with `leaderboard.standings`
+itself). It first requires the replay's `inv_vol_hold_75` to equal the board's
+reference to 1e-9 in all four metrics. On Run C's three windows it matched to 1e-16, and
+the free desk's Jan 21 place, 12 of 39, is the panel's. The rule is a board entry, so
+when its metrics match it takes its board place rather than tie with its own copy.
+Across tags it prints each strategy's score minus the hold's and the rule's, with the SE
+over windows that share no day: the gate's test. Windows past the board's span (Jul-Sep)
+are listed with their metrics only.
+
 ## Credentials
 
 Registration returns `TEAM_ID` and a **one-time team token that is never reset**.
