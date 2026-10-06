@@ -23,10 +23,10 @@ a role is shown, never what the rule decides, so the rule desk still equals its
 candidate trade for trade.
 
 Roadmap step 5 adds news and profit booking. The Risk review and the Event analyst read
-each held name's headlines (live only) and every role its recent 8-K filings, and a new
-8-K for a held name wakes the Event analyst beside earnings and the 3-sigma move. Both
-roles can trim a held name (a quarter or half of it, with a cause), floored at
-`trim.MIN_TRIM` of NAV and capped at `max_trims` a window. The rule's own trim
+each held name's headlines (live, or a real-names replay) and every role its recent 8-K
+filings, and a new 8-K for a held name wakes the Event analyst beside earnings and the
+3-sigma move. Both roles can trim a held name (a quarter or half of it, with a cause),
+floored at `trim.MIN_TRIM` of NAV and capped at `max_trims` a window. The rule's own trim
 (`trim.TrimRule`) is passed in only once it has won its gate; without it the rule
 proposes no trim and the rule desk is still its candidate.
 """
@@ -65,6 +65,17 @@ class DeskConfig:
     rebalance_min_turnover: float = 0.02
     sigma_trigger: float = 3.0  # |move since yesterday's close| in daily sigmas
     anonymize: bool = False
+    # Show each role the rule's answer and ask it to adopt it unless it has a reason
+    # (True), or withhold it and keep it as the fallback alone (False). Anchored, a
+    # replay scores the rule with an LLM allowed to object; unanchored, the LLM's own call.
+    anchored: bool = True
+    # Tell each role what our backtests found (True), or only the game, its costs and its
+    # inputs (False; unanchored only). Told that holding wins, an LLM may hold because it
+    # was told to, and a replay could not separate that from its own judgement.
+    evidence: bool = True
+    # Show the regime model's turbulence odds and persistence (True), or only the raw
+    # readings it is fitted on (False). The rule still reads the model for its fallback.
+    regime: bool = True
     seed: int = 0
     round_budget_s: float = 360.0
     timeouts: dict = field(default_factory=lambda: {"entry": 240.0, "review": 120.0,
@@ -178,6 +189,10 @@ class Desk:
         free desk); otherwise the payload's `rule_proposal` is both.
         """
         rule = schema.model_validate(rule if rule is not None else payload["rule_proposal"])
+        if not self.cfg.anchored:
+            # Withheld from the brain, kept as the fallback. RuleBrain reads it from the
+            # payload, so an unanchored rule desk answers by falling back: the same book.
+            payload = {k: v for k, v in payload.items() if k != "rule_proposal"}
         left = self.cfg.round_budget_s - (time.perf_counter() - self._t_round)
         timeout = min(self.cfg.timeouts[role], left)
         t0 = time.perf_counter()
@@ -186,7 +201,8 @@ class Desk:
             source, reason = "fallback", f"round budget spent ({left:.0f}s left)"
         else:
             try:
-                decision = self.brain.decide(role, prompts.SYSTEM[role], payload, schema, timeout)
+                system = prompts.system(role, self.cfg.anchored, self.cfg.evidence)
+                decision = self.brain.decide(role, system, payload, schema, timeout)
                 self._only_tradeable(decision)
                 check(decision)
             except (BrainError, ValueError, KeyError, TypeError) as err:
@@ -286,7 +302,7 @@ class Desk:
                      if self.filings is not None else None),
             news=self._headlines(ctx, role, held, triggered),
             calendar_date=str(ctx.day), positions=self._name_fields(),
-            universe=self._universe(ctx, role))
+            universe=self._universe(ctx, role), regime=self.cfg.regime)
         obs["memory"] = self._memory()
         obs.update(extra)
         return obs

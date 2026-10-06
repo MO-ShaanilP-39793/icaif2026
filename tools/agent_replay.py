@@ -41,6 +41,7 @@ from icaif import baselines, compiler, data, markets, quant_strategies as qs, si
 from icaif.agents import brains, signals  # noqa: E402
 from icaif.agents import journal as J  # noqa: E402
 from icaif.agents.desk import DeskConfig, EarningsCalendar, desk  # noqa: E402
+from icaif.agents.free import FreeDesk  # noqa: E402
 
 OUT = data.ROOT / "output" / "agent"
 # Rough per-call size: ~9k input tokens (prompt + 30-name observation), ~2.5k output
@@ -81,6 +82,44 @@ def eight_k_wakes(filings: pd.DataFrame, market, starts) -> float:
     return float(sum(n) / max(len(n), 1))
 
 
+def real_name_sources(market, starts, codes: pd.DataFrame):
+    """The 8-Ks with their texts and the headline archive for a real-names replay.
+
+    Both are fetched per window (`tools/replay_sources.py`), and a window outside what
+    was fetched stops the run: it would replay as a desk shown no headlines and no
+    filing text, and its score would read as the LLM ignoring news it never saw.
+    """
+    from icaif import alpaca_news, calendar
+    from icaif import filings as F
+    from icaif.agents import observe
+
+    texts = []
+    for s in starts:
+        days = market.days[market.days.index(s): market.days.index(s) + windows.WINDOW_DAYS]
+        first = calendar.rounds_for(days[0])[0]["deadline"]
+        last = calendar.rounds_for(days[-1])[-1]["deadline"]
+        gap = alpaca_news.uncovered(first - pd.Timedelta(hours=observe.HEADLINE_HOURS), last,
+                                    list(market.tickers))
+        if gap:
+            raise SystemExit(f"window {s}: {gap}")
+        try:
+            texts.append(F.load_texts(first - pd.Timedelta(days=7), last))
+        except FileNotFoundError as err:
+            raise SystemExit(f"window {s}: {err}") from err
+    texts = pd.concat(texts, ignore_index=True)
+    texts = texts[texts["ticker"].isin(market.tickers)]
+    print(f"real names: {len(texts)} 8-Ks with {texts['text'].notna().sum()} texts; "
+          f"headlines from {alpaca_news.ARCHIVE}")
+    return F.merge(codes, texts), alpaca_news.ARCHIVE
+
+
+def name_of(args) -> str:
+    if args.desk == "free":
+        return f"free_{args.arm}_{args.brain}{'_noregime' if args.no_regime else ''}"
+    return (f"desk_{args.brain}{'_unanchored' if args.unanchored else ''}"
+            f"{'_noevidence' if args.no_evidence else ''}{'_noregime' if args.no_regime else ''}")
+
+
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--brain", choices=["rule", "claude"], default="rule")
@@ -91,7 +130,21 @@ def main() -> None:
     ap.add_argument("--windows", type=int, default=None, help="at most this many windows")
     ap.add_argument("--no-review", action="store_true", help="entry and events only (~15x fewer calls)")
     ap.add_argument("--no-events", action="store_true")
-    ap.add_argument("--real-names", action="store_true", help="do not anonymise (post-cutoff windows only)")
+    ap.add_argument("--real-names", action="store_true",
+                    help="do not anonymise (post-cutoff windows only); reads headlines and 8-K texts")
+    ap.add_argument("--on", default=None,
+                    help="one window starting on this session (any session, as the leaderboard's are)")
+    ap.add_argument("--desk", choices=["levered", "free"], default="levered",
+                    help="levered: roles pull levers the compiler turns into weights; free: the "
+                         "model writes the whole book each morning (icaif/agents/free.py)")
+    ap.add_argument("--arm", choices=["blank", "informed"], default="blank",
+                    help="free desk: blank (no evidence, no rule) or informed")
+    ap.add_argument("--unanchored", action="store_true",
+                    help="levered desk: withhold the rule's answer (kept as the fallback only)")
+    ap.add_argument("--no-evidence", action="store_true",
+                    help="with --unanchored: the prompts carry no backtest findings")
+    ap.add_argument("--no-regime", action="store_true",
+                    help="hide the regime model's read (turbulence odds, persistence) from every role")
     ap.add_argument("--max-calls", type=int, default=None)
     ap.add_argument("--offline", action="store_true", help="answer only from the cache")
     ap.add_argument("--yes", action="store_true", help="confirm spending on a claude replay")
@@ -99,8 +152,14 @@ def main() -> None:
     ap.add_argument("--ledgers-only", action="store_true",
                     help="rule brain: check its ledger equals the candidate's in every window, then stop")
     args = ap.parse_args()
-    if args.ledgers_only and args.brain != "rule":
-        raise SystemExit("--ledgers-only checks the rule desk; it takes no --brain claude")
+    if args.ledgers_only and (args.brain != "rule" or args.desk != "levered"):
+        raise SystemExit("--ledgers-only checks the levered rule desk; it takes no --brain claude "
+                         "or --desk free")
+    if args.no_evidence and not args.unanchored:
+        raise SystemExit("--no-evidence needs --unanchored: the anchored prompt calls the rule "
+                         "the backtested one")
+    if args.unanchored and args.desk != "levered":
+        raise SystemExit("--unanchored is the levered desk's; the free desk's blank arm has no rule")
 
     t0 = time.time()
     market = markets.research_market()
@@ -112,24 +171,34 @@ def main() -> None:
         starts = [s for s in starts if s <= date.fromisoformat(args.end)]
     if args.windows:
         starts = starts[: args.windows]
+    if args.on:
+        on = date.fromisoformat(args.on)
+        if on not in market.days:
+            raise SystemExit(f"{on} is not a session in the market")
+        starts = [on]
     cfg = DeskConfig(review=not args.no_review, events=not args.no_events,
-                     anonymize=not args.real_names)
+                     anonymize=not args.real_names, anchored=not args.unanchored,
+                     evidence=not args.no_evidence, regime=not args.no_regime)
     earnings = load_earnings(market)
     filings = load_filings(market)
+    news_dir = None
+    if args.real_names:
+        filings, news_dir = real_name_sources(market, starts, filings)
     scores = compiler.load_daily_scores()
     universe_scores = signals.UniverseScores.load()
     # The walk-forward over the bars the windows trade on: forecasts from its first
     # fittable quarter (2016-07), each made before its session opened.
     har = signals.VolForecasts.from_bars(market.info_bars, market.tickers)
 
-    tag = args.tag or f"{args.brain}_{'noreview_' if args.no_review else ''}{len(starts)}w"
+    tag = args.tag or f"{name_of(args)}_{'noreview_' if args.no_review else ''}{len(starts)}w"
     log_dir = OUT / tag
 
     if args.brain == "rule":
         make = brains.RuleBrain
         live_brains = []
     else:
-        per_window = (1 + (0 if args.no_review else 14)
+        per_window = (windows.WINDOW_DAYS if args.desk == "free" else
+                      1 + (0 if args.no_review else 14)
                       + (0 if args.no_events else 2 + eight_k_wakes(filings, market, starts)))
         n_calls = per_window * len(starts)
         if args.max_calls:
@@ -156,7 +225,7 @@ def main() -> None:
         closes = market.recent_closes(pd.Timestamp("2100-01-01", tz="America/New_York"), 10 ** 7)
         for s in starts:
             d = desk(make, cfg, scores=scores, earnings=earnings, vol=har, filings=filings,
-                     universe_scores=universe_scores)()
+                     universe_scores=universe_scores, news_dir=news_dir)()
             got = sim.run(d, market, s, windows.WINDOW_DAYS)
             want = sim.run(qs.CANDIDATES["q_riskparity_entry_regime"](), market, s, windows.WINDOW_DAYS)
             if not got.ledger.equals(want.ledger):
@@ -183,23 +252,25 @@ def main() -> None:
         return
 
     desks = []
+    desk_kw = dict(scores=scores, earnings=earnings, vol=har, filings=filings,
+                   universe_scores=universe_scores, news_dir=news_dir)
 
     def factory():
-        d = desk(make, cfg, scores=scores, earnings=earnings, vol=har, filings=filings,
-                 universe_scores=universe_scores)()
+        d = (FreeDesk(make(), args.arm, cfg, **desk_kw) if args.desk == "free"
+             else desk(make, cfg, **desk_kw)())
         desks.append(d)
         return d
 
     field = windows.run_field(baselines.FIELD, market, starts)
     cands = {"inv_vol_hold_75": baselines.scaled(baselines.InverseVolHold, 0.75),
              "q_riskparity_entry_regime": qs.CANDIDATES["q_riskparity_entry_regime"],
-             f"desk_{args.brain}": factory}
+             name_of(args): factory}
     res = pd.concat([windows.rank_against_field(windows.run_field({n: f}, market, starts), field)
                      for n, f in cands.items()], ignore_index=True)
     piv = res.pivot(index="window", columns="strategy", values="overall_score")
-    name = f"desk_{args.brain}"
+    name = name_of(args)
 
-    if args.brain == "rule" and not (piv[name] == piv["q_riskparity_entry_regime"]).all():
+    if args.brain == "rule" and args.desk == "levered" and not (piv[name] == piv["q_riskparity_entry_regime"]).all():
         bad = piv.index[piv[name] != piv["q_riskparity_entry_regime"]].tolist()
         raise SystemExit(f"rule desk differs from q_riskparity_entry_regime in {len(bad)} windows "
                          f"(first {bad[:3]}): the desk's plumbing is off; not reporting")

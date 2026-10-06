@@ -13,10 +13,19 @@ the dated snapshot (`tools/filings_events.py`); a live round adds each name's la
 filings from EDGAR (`fetch(recent_only=True)`), so an 8-K filed this morning is in the
 observation by the next round rather than after the next snapshot.
 
-**Filing text is live only.** A filing's own words name the company and its people, so
-replays show the item codes alone (anonymised: "director or officer change" names no
-one). Live, `document_text` reads the filing's main document for the Event analyst; it is
-external text, cleaned and capped where it is shown (`agents/untrusted.py`).
+**Filing text needs real names.** A filing's own words name the company and its people,
+so anonymised replays show the item codes alone ("director or officer change" names no
+one). Live, and in a replay with real names (`tools/replay_sources.py` writes the texts),
+`filing_text` reads what the filing says for the Event analyst; it is external text,
+cleaned and capped where it is shown (`agents/untrusted.py`).
+
+**An earnings 8-K's numbers are in its exhibit.** Item 2.02's main document says only that
+a press release "is furnished as Exhibit 99.1", so read alone it gave the analyst a
+boilerplate paragraph on every results day, the one day the text matters most. For 2.02
+and 7.01 (Reg FD, the same pattern) `filing_text` reads the press release exhibit when the
+filing has one; its first 1,200 characters carry the headline numbers. Filers label it
+EX-99.1 or plain EX-99 (GE, NextEra and Pfizer in Jan 2026): matched on 99.1 alone, those
+three results days fell back to the cover note.
 
 Needs SEC_USER_AGENT, as `earnings.py` does.
 """
@@ -25,11 +34,12 @@ import html
 import re
 import time
 from html.parser import HTMLParser
+from pathlib import Path
 from typing import Optional
 
 import pandas as pd
 
-from icaif import calendar, earnings
+from icaif import calendar, data, earnings
 
 ITEMS = {
     "1.01": "material agreement",
@@ -216,3 +226,85 @@ def document_text(client, cik: int, accession: str, document: str, sleep: float 
     body = client.get(url).raise_for_status().text
     time.sleep(sleep)
     return html_text(body) if "<" in body[:2000] else " ".join(body.split())
+
+
+INDEX_URL = "https://www.sec.gov/Archives/edgar/data/{cik}/{acc}/{accession}-index.htm"
+# Items whose main document points at a press release in Exhibit 99.1 instead of saying
+# what happened.
+EXHIBIT_ITEMS = {"2.02", "7.01"}
+_ROW = re.compile(r"<tr[^>]*>(.*?)</tr>", re.S | re.IGNORECASE)
+_CELL = re.compile(r"<td[^>]*>(.*?)</td>", re.S | re.IGNORECASE)
+_HREF = re.compile(r'href="([^"]+)"', re.IGNORECASE)
+_TAGS = re.compile(r"<[^>]+>")
+# EDGAR's SGML wrapper, read as text: "EX-99.1 2 msft-ex99_1.htm EX-99.1 ".
+_WRAPPER = re.compile(r"^EX-99(?:\.\d+)?\s+\d+\s+\S+\s+EX-99(?:\.\d+)?\s+", re.IGNORECASE)
+_EX99 = re.compile(r"^EX-99(?:\.(\d+))?$")
+
+
+def press_release(found: dict[str, str]) -> Optional[str]:
+    """The press release among a filing's exhibits: EX-99.1, else EX-99, else the
+    lowest-numbered EX-99.x."""
+    if "EX-99.1" in found:
+        return found["EX-99.1"]
+    if "EX-99" in found:
+        return found["EX-99"]
+    numbered = sorted((int(m.group(1)), t) for t in found if (m := _EX99.match(t)) and m.group(1))
+    return found[numbered[0][1]] if numbered else None
+
+
+def exhibits(index_html: str) -> dict[str, str]:
+    """{document type: file name} from a filing's index page (EX-99.1 -> its .htm)."""
+    out = {}
+    for row in _ROW.findall(index_html):
+        cells = [html.unescape(_TAGS.sub("", c)).strip() for c in _CELL.findall(row)]
+        hrefs = _HREF.findall(row)
+        if len(cells) >= 4 and hrefs and cells[3]:
+            out.setdefault(cells[3].upper(), hrefs[0].rsplit("/", 1)[-1])
+    return out
+
+
+def filing_text(client, cik: int, accession: str, document: str, items: str,
+                sleep: float = 0.12) -> str:
+    """What the filing says: the press release for a results or Reg FD 8-K that has one, the
+    main document otherwise (and if the index cannot be read, since the codes still say
+    what kind of event it was)."""
+    codes = {i.strip() for i in str(items).split(",")}
+    if codes & EXHIBIT_ITEMS:
+        acc = str(accession).replace("-", "")
+        url = INDEX_URL.format(cik=int(cik), acc=acc, accession=accession)
+        try:
+            index = client.get(url).raise_for_status().text
+            time.sleep(sleep)
+            doc = press_release(exhibits(index))
+        except Exception:  # noqa: BLE001 - the main document still says something
+            doc = None
+        if doc:
+            return _WRAPPER.sub("", document_text(client, cik, accession, doc, sleep))
+    return document_text(client, cik, accession, document, sleep)
+
+
+# Replay texts (`tools/replay_sources.py`): one file per fetched span, named by it. Not
+# `edgar_8k_*`: the snapshot loaders take the last file of that pattern by name, and
+# "edgar_8k_t..." sorts after every dated snapshot, which would swap the 8-K history for
+# a few weeks of texts without an error.
+TEXTS_DIR = data.ROOT / "data" / "external" / "edgar_texts"
+
+
+def texts_path(lo: pd.Timestamp, hi: pd.Timestamp, directory: Path = TEXTS_DIR) -> Path:
+    return Path(directory) / f"texts_{pd.Timestamp(lo):%Y-%m-%dT%H%M}_{pd.Timestamp(hi):%Y-%m-%dT%H%M}.parquet"
+
+
+def load_texts(lo: pd.Timestamp, hi: pd.Timestamp, directory: Optional[Path] = None) -> pd.DataFrame:
+    """The 8-Ks with text of one fetched span covering [lo, hi]; raises if none does.
+
+    A span never fetched would replay as filings without words, which reads as the
+    analyst ignoring the text rather than never being shown it.
+    """
+    lo, hi = pd.Timestamp(lo), pd.Timestamp(hi)
+    directory = Path(directory or TEXTS_DIR)
+    for f in sorted(directory.glob("texts_*.parquet")):
+        a, b = (pd.Timestamp(x).tz_localize(calendar.TZ) for x in f.stem.removeprefix("texts_").split("_"))
+        if a <= lo and b >= hi:
+            return pd.read_parquet(f)
+    raise FileNotFoundError(f"no 8-K texts fetched for {lo:%Y-%m-%d %H:%M} to {hi:%Y-%m-%d %H:%M} "
+                            f"in {directory}; run tools/replay_sources.py")

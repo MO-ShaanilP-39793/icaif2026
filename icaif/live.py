@@ -252,7 +252,7 @@ def load_filings(tickers: list[str], now: pd.Timestamp, text_dir: Path, *,
                 if read_text is None and client is None:
                     client = earnings._client(EDGAR_TIMEOUT_S)
                 body = (read_text(r) if read_text is not None else
-                        filings.document_text(client, r.cik, r.accession, r.document))
+                        filings.filing_text(client, r.cik, r.accession, r.document, r.items))
                 texts[r.accession] = body[:TEXT_KEEP_CHARS]
                 text_dir.mkdir(parents=True, exist_ok=True)
                 # Whole or not at all: a worker killed mid-write would otherwise leave a

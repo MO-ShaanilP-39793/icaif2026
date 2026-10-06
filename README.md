@@ -557,9 +557,9 @@ for a held name wakes the Event analyst beside earnings and the 3-sigma move.
 
 | Input | Who reads it | Replays | Live | Point in time by |
 | --- | --- | --- | --- | --- |
-| Headlines (`headlines`) | review, analyst; held names only | never (they name the company) | the archive, plus a fetch at the round | first fetch that carried it |
+| Headlines (`headlines`) | review, analyst; held names only | real-names only: Alpaca (Benzinga) history | the Yahoo archive, plus a fetch at the round | Yahoo: first fetch that carried it; Alpaca: the story's last edit |
 | 8-K item labels (`recent_8k_filings`) | every role, every name | dated snapshot, codes only | snapshot + EDGAR's newest | EDGAR acceptance |
-| A new 8-K (`triggers[].new_8k`) | analyst, held names | as above | as above, with the filing's text | EDGAR acceptance |
+| A new 8-K (`triggers[].new_8k`) | analyst, held names | as above; real-names adds the text | as above, with the filing's text | EDGAR acceptance |
 
 - **Headlines count from when we had them, not their pubDate** (`news.known_at`). Yahoo's
   pubDate runs after our first fetch for 108 of the first 2,070 headlines, by up to 2.2 h,
@@ -585,6 +585,17 @@ for a held name wakes the Event analyst beside earnings and the 3-sigma move.
   left to the Strategist. Over the 167 windows the analyst is now asked 23.4 times a
   window; of the names it was woken for, 3,606 were 8-Ks, 1,835 3-sigma moves and 1,162
   earnings. The paid replay's estimate (`agent_replay.py`) counts the 8-Ks.
+
+**Real-names replays read news too** (`tools/replay_sources.py --on <day>`, then
+`agent_replay.py --on <day> --real-names`). The Yahoo archive starts on 2026-09-29, so for
+an earlier window the tool fetches the 30 names' Alpaca news (Benzinga, free account;
+replays only, live stays Yahoo) and every 8-K with its text. An earnings 8-K's text is its
+press release (EX-99.1, or EX-99 for GE, NextEra and Pfizer), since the main document only
+says one is attached. A replay whose window lies outside what was fetched stops rather
+than run without news. Only for windows past the model's training data: asked for the 22
+post-earnings moves of Jan 21 to Feb 10, 2026, Grok 4.7 got 10 directions right, every
+guess under 1.5%, against moves up to 21%. For Jan 21 to Feb 10 that is 2,022 stories and
+41 8-Ks, and a review or analyst call grows to about 44,000 characters.
 
 **External text is data, never instructions** (`icaif/agents/untrusted.py`). Headlines and
 filing text reach a role only inside `source_text`, cleaned of control and format

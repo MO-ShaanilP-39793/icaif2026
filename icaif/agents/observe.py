@@ -12,8 +12,9 @@ random name codes (S01-S30, sorted by code, so even the alphabetical order of re
 tickers is gone), dates become "day k of 15", no price level appears, macro levels
 become z-scores and changes (`macro.readings`), and headlines, which name companies,
 are dropped. 8-K events stay as item labels: "director or officer change" names no
-one, while the filing's own text would, so that is live only too. Only windows after the
-model's training cutoff can be replayed with real names and still count. Our own
+one, while the filing's own text would, so that needs real names too. Only windows after
+the model's training cutoff can be replayed with real names and still count; those read
+Alpaca's historical headlines and the window's 8-K texts (`tools/replay_sources.py`). Our own
 signals (HAR vols, the score's rank, sessions to earnings) are numbers about a code and
 stay too.
 
@@ -154,6 +155,12 @@ class BookState:
     entered: bool = False
 
 
+# The regime model's read of the market. Shown to an LLM, it is a label the LLM adopts:
+# in the Feb 26 - Mar 18, 2026 sell-off the free desk cited "calm regime, turbulence
+# odds 1.7%" every morning while its book fell 3%, and stayed 93% invested.
+REGIME_FIELDS = ("p_turbulent_next_session", "regime_persistence_days")
+
+
 @dataclass
 class Readings:
     """The market-level numbers the rule and the agents both read (unrounded)."""
@@ -239,7 +246,7 @@ def observation(closes: pd.DataFrame, rd: Readings, book: BookState, anon: Anony
                 filings: Optional[dict] = None,
                 calendar_date: Optional[str] = None,
                 positions: Optional[dict] = None,
-                universe: Optional[dict] = None) -> dict:
+                universe: Optional[dict] = None, regime: bool = True) -> dict:
     """`signals`: today's {"names": {ticker: {field: value}}, "market": {...}} from
     `Desk._signals`; `at_entry`: the same fields as they stood on the entry day, shown
     with an `_at_entry` suffix so a change since entry is a comparison the agent reads,
@@ -248,7 +255,8 @@ def observation(closes: pd.DataFrame, rd: Readings, book: BookState, anon: Anony
     held name (`Journal.name_fields`: entry day, gain since entry and its peak);
     `universe`: `universe_block`, the whole universe's ranking, shown as context;
     `news`: {ticker: `headline_rows`} for the names whose headlines this role reads
-    (never shown anonymised); `filings`: `filings.recent` per name."""
+    (never shown anonymised); `filings`: `filings.recent` per name; `regime` False drops
+    the HMM's read (`REGIME_FIELDS`) and keeps the raw readings it is fitted on."""
     tickers = list(closes.columns)
     rets = rd.returns
     tail = rets.tail(qs.SHAPE_DAYS)
@@ -326,6 +334,9 @@ def observation(closes: pd.DataFrame, rd: Readings, book: BookState, anon: Anony
         },
         "names": names,
     }
+    if not regime:
+        for k in REGIME_FIELDS:
+            obs["market"].pop(k)
     if macro is not None:
         obs["macro"] = macro
     if universe is not None:

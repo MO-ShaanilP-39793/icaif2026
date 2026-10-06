@@ -8,6 +8,12 @@ the prompt:
 - **informed**: the same, plus what our backtests found and the backtested book
   (`rule_proposal`) as the bar to beat.
 
+**News, with real names.** The free desk can buy any of the 30, so with real names it
+reads headlines for every name (the titles that name each company), not only for names
+it holds, and the text of each 8-K accepted since its last decision (`new_filings`; on
+day 1, the last 24 hours). Shown only held names' news, it would have been asked to pick
+a book blind to the news about everything it did not already own.
+
 Code keeps what must never be wrong, as in the desk: the observation is point in time,
 the answer is validated (known codes, each weight at most 30%, a book summing to at
 most 100%; rejected rather than rescaled), and anything invalid, late, refused or over
@@ -15,10 +21,12 @@ budget becomes the fallback: the inverse-vol book at 75% on day 1, then hold. Th
 fallback is the book we would submit, so a failing Opus costs nothing against it.
 """
 
+import dataclasses
+
 import numpy as np
 import pandas as pd
 
-from icaif import baselines, compiler, quant_strategies as qs
+from icaif import baselines, compiler, filings as F, quant_strategies as qs
 from icaif import weights as W
 from icaif.agents import observe
 from icaif.agents.desk import Desk, DeskConfig
@@ -32,8 +40,9 @@ class FreeDesk(Desk):
     def __init__(self, brain, arm: str, config=None, **kw):
         if arm not in ARMS:
             raise ValueError(f"arm must be one of {sorted(ARMS)}")
-        cfg = config or DeskConfig(anonymize=True)
+        cfg = dataclasses.replace(config or DeskConfig(anonymize=True))   # never the caller's
         cfg.timeouts = {**cfg.timeouts, ARMS[arm]: cfg.timeouts.get("entry", 240.0)}
+        cfg.headline_roles = (*cfg.headline_roles, ARMS[arm])
         super().__init__(brain, cfg, **kw)
         self.arm, self.role = arm, ARMS[arm]
 
@@ -54,6 +63,15 @@ class FreeDesk(Desk):
                             for t in tickers if w[t] > 0],
                 "rationale": "rule: inverse-vol at 75%, bought once"}
 
+    def _new_filings(self, ctx) -> dict:
+        """{code: 8-Ks accepted since the last decision, with their text}, real names only."""
+        after, self._filings_to = self._filings_to, pd.Timestamp(ctx.deadline)
+        if self.filings is None or self.anon.enabled:
+            return {}
+        after = after if after is not None else pd.Timestamp(ctx.deadline) - pd.Timedelta(hours=24)
+        return {self.anon.code(t): observe.filing_rows(g, ctx.deadline, real=True)
+                for t, g in F.new(self.filings, after, ctx.deadline).groupby("ticker")}
+
     def _decide(self, ctx, tickers):
         """Once a day, at round 1; `Desk.__call__` keeps the clock and the journal."""
         if ctx.round != 1:
@@ -71,7 +89,10 @@ class FreeDesk(Desk):
         rd = observe.readings(closes, self.hmm)
         rule = self._rule(ctx, tickers)
         extra = {"rule_proposal": rule} if self.arm == "informed" else {}
-        payload = self._payload(closes, rd, ctx, self.role, **extra)
+        new = self._new_filings(ctx)
+        if new:
+            extra["new_filings"] = new
+        payload = self._payload(closes, rd, ctx, self.role, held=list(tickers), **extra)
 
         def check(d: FreeDecision):
             codes = [x.name for x in d.weights]
