@@ -167,7 +167,9 @@ def name_of(args) -> str:
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--brain", choices=["rule", "claude"], default="rule")
-    ap.add_argument("--model", default=brains.DEFAULT_MODEL, choices=brains.ALLOWED_MODELS)
+    ap.add_argument("--model", default=None, choices=brains.ALLOWED_MODELS,
+                    help=f"default {brains.DEFAULT_MODEL}; for --desk v2, the quick roles' model "
+                         "(default V2Config's: Flash quick, Pro deep)")
     ap.add_argument("--effort", default="high", choices=["low", "medium", "high", "xhigh", "max"])
     ap.add_argument("--start", default=None, help="first window start (default: all for rule, 2025-01-01 for claude)")
     ap.add_argument("--end", default=None)
@@ -201,6 +203,8 @@ def main() -> None:
     ap.add_argument("--ledgers-only", action="store_true",
                     help="rule brain: check its ledger equals the candidate's in every window, then stop")
     args = ap.parse_args()
+    if args.desk != "v2":
+        args.model = args.model or brains.DEFAULT_MODEL
     if args.ledgers_only and (args.brain != "rule" or args.desk == "free"):
         raise SystemExit("--ledgers-only checks a code-answered desk (levered or v2); it takes no "
                          "--brain claude or --desk free")
@@ -249,8 +253,10 @@ def main() -> None:
     v2cfg = V2Config(anonymize=not args.real_names)
     tiers = dict(v2cfg.tiers)
     if args.desk == "v2" and args.brain == "claude":
-        deep = args.deep_model or args.model
-        tiers = {"quick": (args.model, args.quick_effort or tiers["quick"][1]),
+        # v2 keeps its own tiers unless asked otherwise: a defaulted --model put every
+        # quick role on Pro, at four times Flash's price, without anyone choosing it.
+        deep = args.deep_model or args.model or tiers["deep"][0]
+        tiers = {"quick": (args.model or tiers["quick"][0], args.quick_effort or tiers["quick"][1]),
                  "deep": (deep, args.deep_effort or tiers["deep"][1])}
         v2cfg.tiers = tiers
     v2_brains = None
