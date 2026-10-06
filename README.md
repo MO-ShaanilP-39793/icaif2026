@@ -675,6 +675,55 @@ The rule desk reading every new input still equals `q_riskparity_entry_regime` t
 trade in all 167 windows, and its journal agrees with its ledger in all 167
 (`agent_replay.py --ledgers-only`, 173 s).
 
+## Desk v2 (`icaif/agents/v2.py`; the "ICAIF agent desk v2" design doc)
+
+The v1 desks' answers on Jan 21 to Feb 10, 2026 (held through 86 questions when told
+holding wins; sold every name before results when told nothing; trusted a "calm" label
+through a 3% fall) led to a small firm instead of one role per decision. Each morning
+four analysts report in parallel (market, earnings and events, news, quant), a bull (for
+changing the book) and a bear (against each change) argue for two rounds, the trader
+writes a trade list, the risk manager checks it, and the PM approves, amends or holds.
+Rounds 2-7 trade nothing yet; triggers and the nightly reflection are next.
+
+What code owns, each with tests:
+
+- **Trigger tags** (`agents/triggers.py`): "upcoming" or "already_reacted" against the
+  fill, not the clock. Fills land at :30 after every deadline, so anything public by the
+  deadline is already in the next fill (round 1 fills at the open, which is the
+  reaction: `minutes_traded` 0). Each tag adds the move since the last close in daily
+  sigmas and the name's last eight earnings reactions, each counted only once its
+  session's close has passed. Releases are grouped into quarters among those known at
+  the decision: grouped over the whole history, a later filing dropped a past reaction.
+- **Trade lists** (`schemas.TradeList`, `agents/tradelist.py`): adds to a stated weight,
+  cuts, quarter or half trims, and a target exposure that scales only the names no line
+  touches. Refused whole, with every reason, never clipped or trimmed of its bad line. A
+  stated weight is submitted as stated: `weights.safe` alone floors 697 of the 300,000
+  six-decimal weights a grid step low (0.000493 became 0.000492).
+- **Turnover** (`agents/budget.py`): in the board's unit (notional / NAV before, summed
+  over rounds), from the journal's fills plus orders not yet filled, shown to every role
+  that trades. Capped only against a runaway (5 books a window): a trade that earns its
+  fee is the PM's call, and the turnover rank is the price it weighs.
+- **Who hears what**: only the risk manager is told our backtest evidence; nobody sees a
+  regime label or the rule's answer. Gross above 0.75 needs the risk manager's sign-off.
+- **Deadlines and fallbacks**: each stage's slot ends a fixed time after the chain starts
+  (`V2Config.slots`, 17 minutes in all: Grok 4.7 took 40-235 s a call in v1, so the
+  runner's 12-minute lead would skip most roles; a live shadow needs round 1 to wake
+  earlier). A late, failed or invalid role is skipped and the desk goes on; a failed PM,
+  or a list code refuses, means no trade, or the 75% inverse-vol book before the first
+  buy. Every skip and fallback is counted.
+- **Two tiers**: quick (analysts, debate, trader; Grok 4.7 at medium) and deep (risk
+  manager, PM; at high), each role cached under its own key and costed per role.
+
+`agent_replay.py --desk v2 --ledgers-only` answers every role in code (`v2.HoldBrain`) and
+requires the desk to trade exactly as `inv_vol_hold_75`: it does in all 167 windows. The
+same run on Jan 21, 2026 with real names measured each role's prompt: 5,500 characters
+for the market analyst, 20,000 for the quant, 24,000 for news, and 18,000 to 20,000
+for the debate, trader, risk manager and PM before what earlier roles write. With the v1
+runs' Grok output (about 7,000 tokens a call at high effort, reasoning included), that is
+about 160 calls and $7 a window ($6-9 by how much medium effort writes), against the
+free desk's $1.15. Replays now give v2's market analyst `macro`; v1's replays never
+loaded it.
+
 ## Credentials
 
 Registration returns `TEAM_ID` and a **one-time team token that is never reset**.

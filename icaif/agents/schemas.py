@@ -161,3 +161,67 @@ class TradeList(_Strict):
 
 
 SCHEMAS["trade_list"] = TradeList
+
+
+class NameView(_Strict):
+    """One name an analyst wants the desk to look at, and which way it leans."""
+
+    name: str
+    lean: Literal["buy", "hold", "trim", "sell", "avoid"]
+    note: str = Field(max_length=300)
+
+
+class AnalystReport(_Strict):
+    """The market, news and quant analysts' answer: a view, never a trade."""
+
+    summary: str = Field(max_length=1200)
+    names: list[NameView] = Field(max_length=30,
+                                  description="Only the names worth the desk's attention today.")
+
+
+class EarningsCall(_Strict):
+    """One name reporting soon: what holding, trimming and exiting would each cost."""
+
+    name: str
+    lean: Literal["hold", "trim", "exit", "buy", "avoid"]
+    hold_cost: str = Field(max_length=250, description="What holding through the release risks.")
+    trim_cost: str = Field(max_length=250, description="What a quarter or half trim costs and saves.")
+    exit_cost: str = Field(max_length=250, description="What selling it all costs and gives up.")
+
+
+class EarningsReport(_Strict):
+    summary: str = Field(max_length=800)
+    calls: list[EarningsCall] = Field(max_length=30)
+
+
+class DebateTurn(_Strict):
+    """A bull's or a bear's turn: the case, and the points the other side must answer."""
+
+    argument: str = Field(max_length=2000)
+    points: list[str] = Field(max_length=6)
+
+
+class RiskReview(_Strict):
+    """The risk manager's check of the trader's list. It approves or objects; it signs off
+    any gross weight above 75%, with a reason, or the desk stays at or under 75%."""
+
+    verdict: Literal["approve", "object"]
+    objections: list[str] = Field(max_length=6)
+    exposure_signoff: Optional[float] = Field(
+        ge=0.75, le=1.0,
+        description="The highest gross weight you sign off, above 0.75; null signs off none.")
+    rationale: str = Field(max_length=1500)
+
+
+class PMDecision(_Strict):
+    """The portfolio manager's decision of record: approve the trader's list, amend it
+    (your own list, in full), or hold. Never weights."""
+
+    action: Literal["approve", "amend", "hold"]
+    trade_list: Optional[TradeList] = Field(
+        description="Required for amend: the whole list to trade instead. Null otherwise.")
+    rationale: str = Field(max_length=1500)
+
+
+SCHEMAS.update(analyst=AnalystReport, earnings_report=EarningsReport, debate=DebateTurn,
+               risk=RiskReview, pm=PMDecision)

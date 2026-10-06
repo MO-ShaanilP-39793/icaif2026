@@ -296,6 +296,18 @@ def make(model: str = DEFAULT_MODEL, effort: str = "high", *, max_calls: Optiona
 PAID = (ClaudeBrain, BedrockBrain)
 
 
+def cost_by_role(brain) -> dict[str, float]:
+    """USD per role from a paid brain's records: the v2 desk asks eleven roles on two
+    tiers, and one total cannot say which of them the money went to."""
+    p_in, p_out, p_read, p_write = PRICES[brain.model]
+    out: dict[str, float] = {}
+    for r in brain.records:
+        out[r["role"]] = out.get(r["role"], 0.0) + (
+            r["input_tokens"] * p_in + r["output_tokens"] * p_out
+            + r["cache_read_input_tokens"] * p_read + r["cache_creation_input_tokens"] * p_write) / 1e6
+    return out
+
+
 def credentials_problem(model: str) -> Optional[str]:
     """Why a paid brain for `model` would fail every call, or None.
 
@@ -324,10 +336,15 @@ class CachedBrain:
     """Wraps a brain; answers from disk when the same question was asked before."""
 
     def __init__(self, inner, directory: Path, offline: bool = False):
+        import threading
+
         self.inner, self.dir, self.offline = inner, Path(directory), offline
         self.dir.mkdir(parents=True, exist_ok=True)
         self.name = f"cached({inner.name})"
         self.hits = self.misses = 0
+        # The v2 analysts ask in parallel; a bare `+=` from threads can lose a count, and
+        # the hits and misses are how a replay says what it paid for.
+        self._lock = threading.Lock()
 
     @staticmethod
     def key(brain_name, role, system, payload, schema) -> str:
@@ -339,11 +356,13 @@ class CachedBrain:
         k = self.key(self.inner.name, role, system, payload, schema)
         path = self.dir / f"{k}.json"
         if path.exists():
-            self.hits += 1
+            with self._lock:
+                self.hits += 1
             return schema.model_validate(json.loads(path.read_text())["answer"])
         if self.offline:
             raise BrainError(f"no cached answer for {role} ({k[:12]}) and the cache is offline")
-        self.misses += 1
+        with self._lock:
+            self.misses += 1
         answer = self.inner.decide(role, system, payload, schema, timeout)
         path.write_text(json.dumps({"role": role, "brain": self.inner.name,
                                     "answer": answer.model_dump()}, indent=1))
