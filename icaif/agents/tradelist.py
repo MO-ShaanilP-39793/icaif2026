@@ -28,7 +28,6 @@ target, or when no name is left to scale and the target differs from the lines' 
 """
 
 from dataclasses import dataclass, field
-from decimal import Decimal
 from typing import Optional
 
 import pandas as pd
@@ -39,6 +38,11 @@ from icaif.agents.schemas import TradeList
 
 MIN_TRADE = TR.MIN_TRIM     # of NAV, the v1 trim floor: one floor for every sale
 HELD = W.GRID               # a weight below this is flooring residue, not a position
+# Far under the grid, far over float error. `weights.safe` floors w / 1e-6, and for 697
+# of the 300,000 six-decimal weights that quotient lands a hair under its integer, so a
+# stated 0.000493 was submitted as 0.000492. Lifted by this first, each grid weight is
+# submitted as stated, and anything off the grid still floors.
+NUDGE = W.GRID * 1e-6
 
 
 class TradeListError(ValueError):
@@ -58,8 +62,10 @@ class Compiled:
 
 
 def on_grid(x: float) -> bool:
-    """At most six decimals, read as the organizer reads a weight (`Decimal(str(w))`)."""
-    return Decimal(repr(float(x))).as_tuple().exponent >= -6
+    """A multiple of 1e-6 to within float error: 0.012345 as JSON parses, and as
+    `weights.safe` writes it (0.012344999999999999), both are on it; 0.0123456 is not."""
+    q = float(x) / W.GRID
+    return abs(q - round(q)) <= 1e-6
 
 
 def compile_trades(tl: TradeList, current: pd.Series, to_ticker: dict, *, budget_left: float,
@@ -150,7 +156,7 @@ def compile_trades(tl: TradeList, current: pd.Series, to_ticker: dict, *, budget
     if errors:
         raise TradeListError(errors)
 
-    weights = W.safe(target.to_dict(), list(target.index))
+    weights = W.safe({t: v + NUDGE if v > 0 else 0.0 for t, v in target.items()}, list(target.index))
     # Checked above to be within the cap and the gross, so `safe` only floors to the grid.
     # A rescale here would be a book other than the one checked.
     assert max(abs(weights[t] - target[t]) for t in target.index) <= W.GRID

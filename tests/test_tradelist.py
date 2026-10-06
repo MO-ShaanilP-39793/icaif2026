@@ -113,6 +113,20 @@ def test_a_quarter_trim_of_a_small_position_is_refused_under_the_minimum_trade()
     assert 0.075 * 0.25 >= MIN_TRADE
 
 
+def test_a_stated_weight_is_submitted_as_stated_not_a_grid_step_lower():
+    """`weights.safe` alone floors 0.000493 / 1e-6 = 492.99999999999994 to 492: the book
+    would trade a number no role stated, in 697 of the 300,000 six-decimal weights."""
+    cur = pd.Series(0.0, index=TICKERS)
+    cur[A] = 0.1
+    for w in (0.007829, 0.008084, 0.012345, 0.29):        # the first two floor low alone
+        got = _go(_tl(adds=[(C, w)]), current=cur)
+        assert got.weights[C] == pytest.approx(w, abs=1e-15)
+        assert got.weights[C] <= w + 1e-15
+    hold = W.safe({C: 0.012345, D: 0.000493 * 20}, TICKERS)      # grid floats as code writes them
+    got = _go(_tl(adds=[(C, hold[C]), (D, hold[D])]), current=cur)
+    assert got.weights[C] == hold[C] and got.weights[D] == hold[D]
+
+
 def test_codes_are_read_through_the_windows_mapping_never_as_tickers():
     anon = Anonymizer(TICKERS, seed=3)
     code = anon.code(C)
