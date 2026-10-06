@@ -113,6 +113,7 @@
                                    border: 1px solid var(--line); border-radius: 6px; padding: 5px 10px; }
   .picker button { cursor: pointer; }
   .picker button:disabled { color: var(--muted); cursor: default; }
+  .picker button[aria-pressed="true"] { color: var(--ink); border-color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent); }
   tr.agentic td { background: var(--warn-bg); }
   tr.agentic .sname { font-style: italic; }
   .picker label { display: inline-flex; gap: 6px; align-items: center; color: var(--ink-2); cursor: pointer; }
@@ -163,8 +164,19 @@
   <section id="panel-official" role="tabpanel" aria-labelledby="tab-official" hidden>
   <p class="sub" style="margin: 0 0 12px" id="off-intro"></p>
   <div class="facts" id="off-facts" style="margin-top: 0"></div>
+  <div class="picker" role="group" aria-label="View">
+    <button id="off-view-strategy" aria-pressed="true">By strategy: its place in each window</button>
+    <button id="off-view-window" aria-pressed="false">By window: the whole field in one</button>
+  </div>
+  <div id="off-by-strategy">
   <div class="panel scroll"><div id="off-status" class="muted" style="padding: 14px">Loading…</div>
     <table id="official" hidden></table></div>
+  </div>
+  <div id="off-by-window" hidden>
+  <div class="picker" id="off-win-picker" role="group" aria-label="Window"></div>
+  <p class="muted" id="off-win-note" style="margin: -4px 0 10px"></p>
+  <div class="panel scroll"><table id="off-window"></table></div>
+  </div>
   <div id="off-caveat" class="note-box" hidden></div>
   <div id="off-excluded"></div>
   <h2>Every submission to this suite</h2>
@@ -414,9 +426,15 @@
     ].map(([k, v, d]) => `<div class="panel fact"><div class="k">${k}</div><div class="v">${esc(v)}</div><div class="d">${esc(d)}</div></div>`).join("");
     $("count-official").textContent = o.entrants;
 
-    const head = `<thead><tr><th>#</th><th>Strategy</th><th>Score<span class="range">mean rank, lower is better</span></th>` +
-      wins.map((w) => `<th>${esc(span(w))}<span class="range">place · score · return</span></th>`).join("") + `</tr></thead>`;
-    const body = o.rows.map((r, i) => {
+    // Sorting by a window's column orders by place in that window; ties keep board order.
+    const order = offSort.key === null ? o.rows.map((_, i) => i)
+      : o.rows.map((_, i) => i).sort((a, b) => placeIn[offSort.key][o.rows[a].strategy].position -
+                                              placeIn[offSort.key][o.rows[b].strategy].position || a - b);
+    const head = `<thead><tr><th>#</th><th>Strategy</th><th><button class="sort" data-w="">Score${offSort.key === null ? " ▴" : ""}` +
+      `<span class="range">mean rank, lower is better</span></button></th>` +
+      wins.map((w, j) => `<th${offSort.key === j ? ' aria-sort="ascending"' : ""}><button class="sort" data-w="${j}">` +
+        `${esc(span(w))}${offSort.key === j ? " ▴" : ""}<span class="range">place · score · return</span></button></th>`).join("") + `</tr></thead>`;
+    const body = order.map((i) => o.rows[i]).map((r) => { const i = o.rows.indexOf(r);
       const ref = r.kind === "reference", ag = r.kind === "agentic";
       const by = ref ? "reference strategy" : ag
         ? `${esc(r.agent.model)} · ${r.agent.calls} calls · $${Number(r.agent.cost_usd).toFixed(2)}` +
@@ -429,7 +447,7 @@
         return `<td class="wcell"><span class="pl">${ord(x.position)}</span> <span class="pm">of ${x.of}</span>` +
           `<div class="sub2">${x.overall_score.toFixed(2)} · ${fmtFull("cumulative_return", x.cumulative_return)}</div></td>`;
       }).join("");
-      return `<tr class="${r.kind}${ag ? " agentic-row" : ""}${i === 0 ? " top" : ""}"><td class="rank">${r.rank}</td>` +
+      return `<tr class="${ag ? "agentic-row" : r.kind}${r.rank === 1 ? " top" : ""}"><td class="rank">${r.rank}</td>` +
         `<td class="name"><span class="sname">${esc(r.strategy)}</span>${ref || ag ? `<span class="chip">${r.kind}</span>` : ""}` +
         `<div class="by">${by}</div>${ag ? `<div class="agent-desc">${esc(r.agent.desk)}</div>` : ""}` +
         `${r.note ? `<div class="note">${esc(r.note)}</div>` : ""}${held}</td>` +
@@ -439,6 +457,10 @@
         `<tr class="detail" id="off-${i}" hidden><td colspan="${3 + wins.length}">${disjointTable(r)}</td></tr>`;
     }).join("");
     $("official").innerHTML = head + "<tbody>" + body + "</tbody>";
+    $("official").querySelectorAll("button.sort").forEach((btn) => btn.onclick = () => {
+      offSort.key = btn.dataset.w === "" ? null : Number(btn.dataset.w);
+      renderOfficial(o);
+    });
     $("official").querySelectorAll("button.disj").forEach((btn) => btn.onclick = () => {
       const row = $("off-" + btn.dataset.i), open = row.hidden;
       row.hidden = !open;
@@ -446,6 +468,7 @@
       btn.textContent = `Metrics by window ${open ? "▾" : "▸"}`;
     });
     $("official").hidden = false; $("off-status").hidden = true;
+    setupOffWindows(o);
     $("off-caveat").hidden = !o.suite.caveat;
     $("off-caveat").textContent = o.suite.caveat;
 
@@ -469,7 +492,6 @@
   let windows = [], boardRank = {}, agentsIn = {};
   // A column's first click sorts it best first, by the rules' direction for that metric;
   // a second click reverses it. Place stays the contest's place whatever the order.
-  let sortKey = "position", sortDesc = false;
   const BEST_DESC = { cumulative_return: true, sharpe_ratio: true };
   function setupWindows(b) {
     windows = b.by_window || [];
@@ -490,19 +512,18 @@
     showWindow(at >= 0 ? at : windows.length - 1, false);
   }
 
-  function showWindow(i, link = true) {
-    if (!windows.length) { $("window").innerHTML = `<tbody><tr><td class="muted">No windows.</td></tr></tbody>`; return; }
-    i = Math.max(0, Math.min(windows.length - 1, i));
-    const w = windows[i], ord = (n) => n + (n % 100 >= 11 && n % 100 <= 13 ? "th" : ["th", "st", "nd", "rd"][n % 10] || "th");
+  // One window's field as a sortable table: the holdout's By window tab and the Earnings
+  // season's window view draw the same thing, so they share this rather than drift apart.
+  // `extra` rows (holdout agents) carry their own place against the field; `by(r)` is the
+  // line under a field row's name.
+  function fieldTable(table, w, st, redraw, by, extra = []) {
+    const ord = (n) => n + (n % 100 >= 11 && n % 100 <= 13 ? "th" : ["th", "st", "nd", "rd"][n % 10] || "th");
     const rk = (v) => Number.isInteger(v) ? ord(v) : v.toFixed(1);
-    $("win-select").value = String(i);
-    $("win-prev").disabled = i === 0; $("win-next").disabled = i === windows.length - 1;
-    $("win-note").textContent = `window ${i + 1} of ${windows.length} · ${w.rows.length} entrants`;
     const cells = (r) => `<td class="score"><span class="big">${r.overall_score.toFixed(2)}</span></td>` +
       METRICS.map((k) => `<td class="num">${fmtFull(k, r[k])} <span class="rk">· ${rk(r["rank_" + k])}</span></td>`).join("");
     const th = (key, label, range) => {
-      const on = key === sortKey, arrow = on ? (sortDesc ? " ▾" : " ▴") : "";
-      return `<th${on ? ` aria-sort="${sortDesc ? "descending" : "ascending"}"` : ""}>` +
+      const on = key === st.key, arrow = on ? (st.desc ? " ▾" : " ▴") : "";
+      return `<th${on ? ` aria-sort="${st.desc ? "descending" : "ascending"}"` : ""}>` +
         `<button class="sort" data-key="${key}">${label}${arrow}<span class="range">${range}</span></button></th>`;
     };
     const head = `<thead><tr>${th("position", "Place", "")}<th>Strategy</th>` +
@@ -511,29 +532,73 @@
     // An agent placed pth sits just above the field's pth: it would take that place and push
     // the rest down one. Only its own row says so; the field keeps the numbers its score
     // averages, which a second agent in the same window would otherwise shift too.
-    const agents = $("win-agents").checked ? (agentsIn[w.window_start + "|" + w.window_end] || []) : [];
-    $("win-agents-label").hidden = !(agentsIn[w.window_start + "|" + w.window_end] || []).length;
     const at = (r) => r.agentic ? r.position - 0.5 : r.position;
-    const val = (r) => sortKey === "position" ? at(r) : r[sortKey];
+    const val = (r) => st.key === "position" ? at(r) : r[st.key];
     // Ties keep the contest's place order, so a sort never reshuffles equal values at random.
-    const rows = [...w.rows, ...agents.map((a) => ({ ...a, agentic: true }))].sort((a, b) =>
-      (sortDesc ? val(b) - val(a) : val(a) - val(b)) || at(a) - at(b));
+    const rows = [...w.rows, ...extra.map((a) => ({ ...a, agentic: true }))].sort((a, b) =>
+      (st.desc ? val(b) - val(a) : val(a) - val(b)) || at(a) - at(b));
     const body = rows.map((r) => r.agentic
       ? `<tr class="agentic"><td class="rank">${r.position}<div class="pm">of ${r.of}</div></td>` +
         `<td class="name"><span class="sname">${esc(r.strategy)}</span><span class="chip">agentic</span>` +
         `<div class="by">against this field plus itself</div></td>${cells(r)}</tr>`
-      : `<tr class="${r.kind}${r.position === 1 ? " top" : ""}"><td class="rank">${r.position}</td>` +
-        `<td class="name"><span class="sname">${esc(r.strategy)}</span>${r.kind === "reference" ? '<span class="chip">reference</span>' : ""}` +
-        `<div class="by">board #${boardRank[r.strategy]}</div></td>${cells(r)}</tr>`).join("");
-    $("window").innerHTML = head + "<tbody>" + body + "</tbody>";
-    $("window").querySelectorAll("button.sort").forEach((btn) => btn.onclick = () => {
+      // A field agent is an entrant like any other: not the shaded `agentic` row, which
+      // marks a holdout agent placed beside a field it is not part of.
+      : `<tr class="${r.kind === "agentic" ? "agentic-row" : r.kind}${r.position === 1 ? " top" : ""}"><td class="rank">${r.position}</td>` +
+        `<td class="name"><span class="sname">${esc(r.strategy)}</span>${r.kind !== "submitted" ? `<span class="chip">${r.kind}</span>` : ""}` +
+        `<div class="by">${by(r)}</div></td>${cells(r)}</tr>`).join("");
+    table.innerHTML = head + "<tbody>" + body + "</tbody>";
+    table.querySelectorAll("button.sort").forEach((btn) => btn.onclick = () => {
       const k = btn.dataset.key;
-      if (k === sortKey) sortDesc = !sortDesc;
-      else { sortKey = k; sortDesc = !!BEST_DESC[k]; }
-      showWindow(i, false);
+      if (k === st.key) st.desc = !st.desc;
+      else { st.key = k; st.desc = !!BEST_DESC[k]; }
+      redraw();
     });
+  }
+
+  const holdoutSort = { key: "position", desc: false };
+  function showWindow(i, link = true) {
+    if (!windows.length) { $("window").innerHTML = `<tbody><tr><td class="muted">No windows.</td></tr></tbody>`; return; }
+    i = Math.max(0, Math.min(windows.length - 1, i));
+    const w = windows[i];
+    $("win-select").value = String(i);
+    $("win-prev").disabled = i === 0; $("win-next").disabled = i === windows.length - 1;
+    $("win-note").textContent = `window ${i + 1} of ${windows.length} · ${w.rows.length} entrants`;
+    // An agent placed pth sits just above the field's pth: it would take that place and push
+    // the rest down one. Only its own row says so; the field keeps the numbers its score
+    // averages, which a second agent in the same window would otherwise shift too.
+    const agents = $("win-agents").checked ? (agentsIn[w.window_start + "|" + w.window_end] || []) : [];
+    $("win-agents-label").hidden = !(agentsIn[w.window_start + "|" + w.window_end] || []).length;
+    fieldTable($("window"), w, holdoutSort, () => showWindow(i, false),
+               (r) => `board #${boardRank[r.strategy]}`, agents);
     if (link) history.replaceState(null, "", "#window=" + w.window_start);
   }
+
+  // The Earnings season's window view: four windows, so one button each rather than a list.
+  // Agents are in this field, ranked like any entrant, so there are no extra rows.
+  const offSort = { key: null };
+  const offWinSort = { key: "position", desc: false };
+  let offData = null, offWin = 0;
+  function setupOffWindows(o) {
+    offData = o;
+    $("off-win-picker").innerHTML = o.by_window.map((w, i) =>
+      `<button data-i="${i}" aria-pressed="${i === offWin}">${esc(span([w.window_start, w.window_end]))}</button>`).join("");
+    $("off-win-picker").querySelectorAll("button").forEach((b) => b.onclick = () => showOffWindow(Number(b.dataset.i)));
+    showOffWindow(offWin);
+  }
+  function showOffWindow(i) {
+    offWin = i;
+    const w = offData.by_window[i], rank = Object.fromEntries(offData.rows.map((r) => [r.strategy, r.rank]));
+    $("off-win-picker").querySelectorAll("button").forEach((b) => b.setAttribute("aria-pressed", String(Number(b.dataset.i) === i)));
+    $("off-win-note").textContent = `${w.rows.length} entrants, each from $1M in cash, ranked under the contest's rules in this window alone.`;
+    fieldTable($("off-window"), w, offWinSort, () => showOffWindow(i), (r) => `Earnings season #${rank[r.strategy]}`);
+  }
+  function offView(name) {
+    $("off-by-strategy").hidden = name !== "strategy"; $("off-by-window").hidden = name !== "window";
+    $("off-view-strategy").setAttribute("aria-pressed", String(name === "strategy"));
+    $("off-view-window").setAttribute("aria-pressed", String(name === "window"));
+  }
+  $("off-view-strategy").onclick = () => offView("strategy");
+  $("off-view-window").onclick = () => offView("window");
   $("win-agents").onchange = () => showWindow(Number($("win-select").value), false);
   $("win-select").onchange = (e) => showWindow(Number(e.target.value));
   $("win-prev").onclick = () => showWindow(Number($("win-select").value) - 1);

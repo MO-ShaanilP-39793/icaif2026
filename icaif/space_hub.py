@@ -1,12 +1,18 @@
 """The holdout's three HuggingFace repos: deploying the pages and submitting entries.
 
-Each repo has one job and a fixed visibility, checked on every write:
+Each repo has one job and a designed visibility, checked on every entry write:
 
 | repo | visibility | holds |
 | --- | --- | --- |
 | Space MO-AI-Inv/icaif2026-holdout | private | the scorer page and its 2026 price file |
 | dataset MO-AI-Inv/icaif2026-holdout-entries | private | the record of every submission |
 | Space MO-AI-Inv/icaif2026-leaderboard | public | the board page, references, entry copies |
+
+A deploy (`publish`) goes through whatever a Space's visibility is, by the owner's
+decision of 2026-10-06: the owner sets visibility on HF and a deploy never changes it. It
+says what it found, loudly when that differs from the design, so a scorer left public is
+named on every deploy rather than discovered. Entry writes still require the designed
+visibility: the dataset is the record and must not be public by accident.
 
 The board is public so that viewing needs no login. It holds only what it shows: the
 ranking code, results and notes. Prices stay in the private scorer, because they are
@@ -61,13 +67,27 @@ def whoami() -> str:
     return _api().whoami()["name"]
 
 
+def _visibility(api, repo_id: str, repo_type: str, designed: str) -> str:
+    """The repo's actual visibility, with a warning when it is not the designed one."""
+    actual = "private" if api.repo_info(repo_id, repo_type=repo_type).private else "public"
+    if actual != designed:
+        print(f"WARNING: {repo_type} {repo_id} is {actual.upper()}, designed {designed}; "
+              "deploying anyway (visibility is set on HF, never by a deploy)")
+    return actual
+
+
 def publish(out, repo_id: str = REPO_ID, visibility: str = "private") -> None:
+    """Mirror a built page into its Space, whatever the Space's visibility (see above).
+
+    `visibility` is the designed one: used when the Space must be created, and compared
+    against, never enforced.
+    """
     from huggingface_hub import CommitOperationAdd, CommitOperationDelete
     from huggingface_hub.utils import RepositoryNotFoundError
 
     api = _api()
     try:
-        _require(api, repo_id, "space", visibility)
+        _visibility(api, repo_id, "space", visibility)
     except RepositoryNotFoundError:
         api.create_repo(repo_id, repo_type="space", space_sdk="static",
                         private=visibility == "private")
@@ -80,8 +100,8 @@ def publish(out, repo_id: str = REPO_ID, visibility: str = "private") -> None:
             if k not in local and not k.startswith(ENTRIES) and k != ".gitattributes"]
     api.create_commit(repo_id, repo_type="space", operations=ops,
                       commit_message="Rebuild the page from icaif2026")
-    _require(api, repo_id, "space", visibility)
-    print(f"deployed https://huggingface.co/spaces/{repo_id} ({visibility}); "
+    actual = _visibility(api, repo_id, "space", visibility)
+    print(f"deployed https://huggingface.co/spaces/{repo_id} ({actual}); "
           f"{sum(1 for k in remote if k.startswith(ENTRIES) and k != INDEX)} entries kept")
 
 

@@ -164,6 +164,9 @@ across windows as a histogram. Bins are shared down a column, so shapes compare 
   included, counts as a look) and the suite's caveat. In a fixed suite agentic entries rank
   in the one field beside submissions and references, with their model, calls and cost;
   on the holdout they stay on their own panel, since they cover a few of ~109 windows.
+  Two views: *by strategy*, each entrant's place in each of the four windows (sortable by
+  any window's place), and *by window*, one window's whole field, sortable by any metric
+  (the same table as the holdout's By window tab).
 - **Submitting needs no sign-in.** Score a file on the private scorer, then use *Submit to
   leaderboard* with a name and a note. The page writes with the scorer Space's
   `SUBMIT_TOKEN` variable, a fine-grained token limited to the entry dataset and the
@@ -176,8 +179,10 @@ across windows as a histogram. Bins are shared down a column, so shapes compare 
 - **Versions.** Only the newest version of a name ranks. Older ones are listed, so the
   number of looks at the holdout stays visible. Entries scored under the old one-run
   format (schema 1) are listed as "old format" and never ranked; resubmit them.
-- **Three repos, fixed visibility** (`icaif/space_hub.py`):
-  - the scorer Space is private, because it carries Alpaca prices and the kit;
+- **Three repos, designed visibility** (`icaif/space_hub.py`):
+  - the scorer Space is designed private, because it carries Alpaca prices and the kit.
+    A deploy goes through whatever its visibility is and warns when it is public
+    (owner's call, 2026-10-06: visibility is set on HF, never by a deploy);
   - the entry dataset `MO-AI-Inv/icaif2026-holdout-entries` is private and is the record;
   - the board Space is public and ships an exact allowlist: ranking code, references,
     entries. A price or kit file in its build stops the deploy.

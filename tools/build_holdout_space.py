@@ -26,8 +26,8 @@ the CLI's numbers, so the only step not checked here is Pyodide itself.
 
 The build also scores the leaderboard's reference strategies natively, since they need
 information bars neither page ships. --push deploys through `space_hub.publish`, which
-checks each Space's visibility and mirrors its folder, but never touches submitted
-entries.
+mirrors each folder whatever the Space's visibility (warning when it is not the designed
+one), and never touches submitted entries.
 """
 
 import argparse
