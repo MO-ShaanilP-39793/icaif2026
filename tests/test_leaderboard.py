@@ -323,3 +323,64 @@ def test_an_entry_naming_a_suite_the_board_lacks_is_named_not_dropped():
     assert b["suites"] == {}
     with pytest.raises(lb.EntryError, match="official9"):
         _entry("y", [(0, 0, 0, 0)] * 3, suite="official9")
+
+
+def _o4_agent(name, per_window, at="2026-10-06T11:00:00Z", agent=AGENT, **kw):
+    return _o4(name, per_window, kind=lb.AGENTIC, submitted_at=at, agent=agent, **kw)
+
+
+def test_in_a_fixed_suite_agents_and_submissions_rank_in_one_field():
+    """official4's point is to compare methods, agents included, on the same four windows.
+    On a side panel two agents would never meet, and each agent's place would come from a
+    field that leaves the other agents out."""
+    x = _o4("x", [(0.02, 2.0, 0.02, 0.02)] * 4)
+    g1 = _o4_agent("v2_gemini", [(0.05, 5.0, 0.01, 0.05)] * 4)
+    g2 = _o4_agent("v1_free", [(0.01, 1.0, 0.0, 0.03)] * 4)
+    o4 = lb.boards([CASH, EW, O4_CASH, O4_EW, x, g1, g2])["suites"]["official4"]
+    rows = {r["strategy"]: r for r in o4["rows"]}
+
+    assert set(rows) == {"cash", "ew_hold", "x", "v2_gemini", "v1_free"}
+    assert o4["agentic"]["rows"] == [] and o4["excluded"] == []
+    assert rows["v2_gemini"]["kind"] == lb.AGENTIC and rows["v2_gemini"]["agent"] == AGENT
+    assert "agent" not in rows["x"]
+    entries = (O4_CASH, O4_EW, x, g1, g2)
+    for i, w in enumerate(o4["by_window"]):
+        m = pd.DataFrame({e["strategy"]: e["windows"][i] for e in entries}).T
+        want = ranking.rank_window(m[lb.METRICS].astype(float))
+        assert {r["strategy"]: r["position"] for r in w["rows"]} == want["position"].to_dict()
+    assert {h["strategy"] for h in o4["history"]} == {"x", "v2_gemini", "v1_free"}
+
+
+def test_the_holdout_keeps_agents_off_its_main_ranking():
+    """On the holdout an agent covers a few of ~109 windows. In the main field its mean
+    over one window would sit beside means over all of them, as the same kind of number."""
+    a = _entry("a", [(0.02, 2.0, 0.01, 0.05)] * 3)
+    g = _agentic("grok", [WINDOWS[1]], [(0.06, 10.0, 0.01, 0.03)])
+    b = lb.boards([CASH, EW, a, g])
+    assert "grok" not in {r["strategy"] for r in b["rows"]}
+    assert [r["strategy"] for r in b["agentic"]["rows"]] == ["grok"]
+
+
+def test_a_fixed_suite_agent_without_its_story_or_sharing_a_name_is_named_not_ranked():
+    """A place without the model and cost invites a reading the run cannot support; an
+    agent and a submission under one name would show one run's numbers beside the other's
+    description, whichever came last."""
+    bare = _o4_agent("bare", [(0.01, 1.0, 0.0, 0.0)] * 4, agent=AGENT)
+    bare["agent"] = {k: v for k, v in AGENT.items() if k != "cost_usd"}
+    sub = _o4("same", [(0.01, 1.0, 0.0, 0.0)] * 4, submitted_at="2026-10-06T09:00:00Z")
+    agent = _o4_agent("same", [(0.02, 2.0, 0.0, 0.0)] * 4)
+    o4 = lb.boards([CASH, EW, O4_CASH, O4_EW, bare, sub, agent])["suites"]["official4"]
+    why = {e["strategy"]: e["reason"] for e in o4["excluded"]}
+    assert {r["strategy"] for r in o4["rows"]} == {"cash", "ew_hold"}
+    assert "cost_usd" in why["bare"] and "share this name" in why["same"]
+
+
+def test_every_official4_version_counts_as_a_look_agents_included():
+    """Four known windows are easy to overfit: each resubmission is another look at them.
+    Counting only the submitted kind would hide how often an agent was re-run and re-entered."""
+    v1 = _o4_agent("desk", [(0.01, 1.0, 0.0, 0.0)] * 4, at="2026-10-06T11:00:00Z")
+    v2 = _o4_agent("desk", [(0.03, 3.0, 0.0, 0.0)] * 4, at="2026-10-07T11:00:00Z")
+    o4 = lb.boards([CASH, EW, O4_CASH, O4_EW, v1, v2])["suites"]["official4"]
+    row = next(r for r in o4["rows"] if r["strategy"] == "desk")
+    assert row["versions"] == 2 and row["mean_window_cumulative_return"] == 0.03
+    assert [h["status"] for h in o4["history"]] == ["ranked", "superseded"]

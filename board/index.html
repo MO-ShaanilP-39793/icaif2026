@@ -118,6 +118,10 @@
   .picker label { display: inline-flex; gap: 6px; align-items: center; color: var(--ink-2); cursor: pointer; }
   th button.sort { font: inherit; color: inherit; background: none; border: 0; padding: 0; cursor: pointer; text-align: left; }
   th button.sort:hover, th[aria-sort] button.sort { color: var(--ink); }
+  td.wcell { white-space: nowrap; font-variant-numeric: tabular-nums; }
+  td.wcell .pl { font-weight: 600; }
+  td.wcell .sub2 { color: var(--muted); font-size: 12px; }
+  tr.agentic-row td.name .sname { font-style: italic; }
   [hidden] { display: none !important; }
 </style>
 </head>
@@ -137,6 +141,7 @@
 
   <nav class="tabs" role="tablist" aria-label="Panels">
     <button role="tab" id="tab-main" aria-controls="panel-main" aria-selected="true">Main board <span id="count-main" class="count"></span></button>
+    <button role="tab" id="tab-official" aria-controls="panel-official" aria-selected="false">Official-like <span id="count-official" class="count"></span></button>
     <button role="tab" id="tab-window" aria-controls="panel-window" aria-selected="false">By window <span id="count-window" class="count"></span></button>
     <button role="tab" id="tab-agentic" aria-controls="panel-agentic" aria-selected="false">Agentic panel <span id="count-agentic" class="count"></span></button>
   </nav>
@@ -153,6 +158,18 @@
     <span>Bins are shared down each column; each histogram is scaled to its own tallest bar. Hover a bar for its range and count.</span>
   </div>
   <div id="excluded"></div>
+  </section>
+
+  <section id="panel-official" role="tabpanel" aria-labelledby="tab-official" hidden>
+  <p class="sub" style="margin: 0 0 12px" id="off-intro"></p>
+  <div class="facts" id="off-facts" style="margin-top: 0"></div>
+  <div class="panel scroll"><div id="off-status" class="muted" style="padding: 14px">Loading…</div>
+    <table id="official" hidden></table></div>
+  <div id="off-caveat" class="note-box" hidden></div>
+  <div id="off-excluded"></div>
+  <h2>Every submission to this suite</h2>
+  <details class="panel" style="padding: 10px 14px"><summary>Newest first, agents included; every version is a look at these windows</summary>
+    <div class="scroll" style="margin-top: 8px"><table id="off-history"></table></div></details>
   </section>
 
   <section id="panel-window" role="tabpanel" aria-labelledby="tab-window" hidden>
@@ -203,6 +220,10 @@
       the place they would have taken in it: each is ranked against the field plus itself, and
       never against another agent. The field's own places and ranks leave them out, so an
       agent sharing a window moves no one else's number.</p>
+    <p>The Official-like tab is a second board on four fixed 15-session windows, the ones
+      most like the Official phase. It has its own references and its own entries, ranked in
+      each window under the same rules and ordered by the mean over the four. Agentic and
+      submitted entries rank there in one field, since an agent can run all four windows.</p>
     <p>An agentic entry's place in a window is its rank among the main board's entrants in that
       window plus itself, under the same rules. A tied rank shares the average, so a metric's rank
       can fall between two places.</p>
@@ -325,6 +346,7 @@
         `${esc(why)}: ${names.map(esc).join(", ")}</div>`).join("") + "</div>" : "";
 
     renderAgentic(b.agentic || { rows: [], excluded: [] });
+    renderOfficial(Object.values(b.suites || {}).find((s) => s.suite.windows.length));
     setupWindows(b);
     $("count-main").textContent = b.entrants;
     $("count-agentic").textContent = (b.agentic || { rows: [] }).rows.length;
@@ -367,6 +389,78 @@
     }
     $("agentic-excluded").innerHTML = p.excluded.length ? `<div class="note-box"><strong>Not on the panel</strong>` +
       p.excluded.map((e) => `<div>${esc(e.strategy)}: ${esc(e.reason)}</div>`).join("") + "</div>" : "";
+  }
+
+  // A fixed suite's board (`boards` in icaif/leaderboard.py): every entrant's place in each
+  // of its few windows, read off `by_window`, never re-ranked here.
+  function renderOfficial(o) {
+    if (!o) {
+      $("off-status").textContent = "This board has no references for a fixed suite yet; the panel appears after the next build.";
+      $("count-official").textContent = "";
+      return;
+    }
+    const ord = (n) => n + (n % 100 >= 11 && n % 100 <= 13 ? "th" : ["th", "st", "nd", "rd"][n % 10] || "th");
+    const wins = o.suite.windows;
+    const placeIn = o.by_window.map((w) => Object.fromEntries(w.rows.map((r) => [r.strategy, { ...r, of: w.rows.length }])));
+    $("off-intro").innerHTML = `${esc(o.suite.title)}: ${wins.length} windows of ${o.suite.n_days} sessions, ` +
+      `${wins.map((w) => esc(span(w))).join(", ")}. Every entrant starts each window from $1M and is ranked ` +
+      `against all the others in it under the contest's rules; the score is the mean over the ${wins.length}. ` +
+      `Agentic and submitted entries rank in one field.`;
+    const kinds = (k) => o.rows.filter((r) => r.kind === k).length;
+    $("off-facts").innerHTML = [
+      ["Entrants", o.entrants, `${kinds("submitted")} submitted · ${kinds("agentic")} agentic · ${kinds("reference")} references`],
+      ["Windows", wins.length, `${o.suite.n_days} sessions each, none sharing a day`],
+      ["Submissions", o.history.length, "every version counts as a look"],
+    ].map(([k, v, d]) => `<div class="panel fact"><div class="k">${k}</div><div class="v">${esc(v)}</div><div class="d">${esc(d)}</div></div>`).join("");
+    $("count-official").textContent = o.entrants;
+
+    const head = `<thead><tr><th>#</th><th>Strategy</th><th>Score<span class="range">mean rank, lower is better</span></th>` +
+      wins.map((w) => `<th>${esc(span(w))}<span class="range">place · score · return</span></th>`).join("") + `</tr></thead>`;
+    const body = o.rows.map((r, i) => {
+      const ref = r.kind === "reference", ag = r.kind === "agentic";
+      const by = ref ? "reference strategy" : ag
+        ? `${esc(r.agent.model)} · ${r.agent.calls} calls · $${Number(r.agent.cost_usd).toFixed(2)}` +
+          (r.agent.fallbacks ? ` · ${r.agent.fallbacks} fallback(s)` : "") +
+          ` · ${esc(r.author)} · ${when(r.submitted_at)}${r.versions > 1 ? ` · v${r.versions}` : ""}`
+        : `${esc(r.author)} · ${when(r.submitted_at)}${r.versions > 1 ? ` · v${r.versions}` : ""}`;
+      const held = r.missing_rounds || r.invalid_rounds ? `<div class="held">held ${r.missing_rounds} missing, ${r.invalid_rounds} invalid round(s)</div>` : "";
+      const cells = placeIn.map((p) => {
+        const x = p[r.strategy];
+        return `<td class="wcell"><span class="pl">${ord(x.position)}</span> <span class="pm">of ${x.of}</span>` +
+          `<div class="sub2">${x.overall_score.toFixed(2)} · ${fmtFull("cumulative_return", x.cumulative_return)}</div></td>`;
+      }).join("");
+      return `<tr class="${r.kind}${ag ? " agentic-row" : ""}${i === 0 ? " top" : ""}"><td class="rank">${r.rank}</td>` +
+        `<td class="name"><span class="sname">${esc(r.strategy)}</span>${ref || ag ? `<span class="chip">${r.kind}</span>` : ""}` +
+        `<div class="by">${by}</div>${ag ? `<div class="agent-desc">${esc(r.agent.desk)}</div>` : ""}` +
+        `${r.note ? `<div class="note">${esc(r.note)}</div>` : ""}${held}</td>` +
+        `<td class="score"><span class="big">${r.mean_overall_score.toFixed(2)}</span> <span class="pm">± ${r.se_overall_score.toFixed(2)}</span>` +
+        `<div class="cap"><span>mean place ${r.mean_position.toFixed(1)} · ${r.wins} window win(s)</span></div>` +
+        `<button class="disj" data-i="${i}" aria-expanded="false">Metrics by window ▸</button></td>${cells}</tr>` +
+        `<tr class="detail" id="off-${i}" hidden><td colspan="${3 + wins.length}">${disjointTable(r)}</td></tr>`;
+    }).join("");
+    $("official").innerHTML = head + "<tbody>" + body + "</tbody>";
+    $("official").querySelectorAll("button.disj").forEach((btn) => btn.onclick = () => {
+      const row = $("off-" + btn.dataset.i), open = row.hidden;
+      row.hidden = !open;
+      btn.setAttribute("aria-expanded", String(open));
+      btn.textContent = `Metrics by window ${open ? "▾" : "▸"}`;
+    });
+    $("official").hidden = false; $("off-status").hidden = true;
+    $("off-caveat").hidden = !o.suite.caveat;
+    $("off-caveat").textContent = o.suite.caveat;
+
+    const byReason = new Map();
+    for (const e of o.excluded) byReason.set(e.reason, [...(byReason.get(e.reason) || []), e.strategy]);
+    $("off-excluded").innerHTML = byReason.size ? `<div class="note-box"><strong>Not ranked</strong>` +
+      [...byReason].map(([why, names]) => `<div>${names.length} ${names.length === 1 ? "entry" : "entries"}, ` +
+        `${esc(why)}: ${names.map(esc).join(", ")}</div>`).join("") + "</div>" : "";
+    $("off-history").innerHTML = "<thead><tr><th>Submitted (UTC)</th><th>Strategy</th><th>Kind</th><th>Author</th>" +
+      METRICS.map((k) => `<th>${LABELS[k]}, mean window</th>`).join("") + "<th></th></tr></thead><tbody>" +
+      (o.history.length ? o.history.map((h) => `<tr><td>${esc(h.submitted_at.replace("T", " ").replace("Z", ""))}</td>` +
+        `<td>${esc(h.strategy)}</td><td>${esc(h.kind)}</td><td>${esc(h.author)}</td>` +
+        METRICS.map((k) => `<td>${fmtFull(k, h["mean_window_" + k])}</td>`).join("") +
+        `<td class="muted">${esc(h.status)}</td></tr>`).join("")
+        : `<tr><td colspan="9" class="muted">Nothing submitted yet.</td></tr>`) + "</tbody>";
   }
 
   // One window's field, as ranked behind the board's score (`by_window` in
@@ -450,7 +544,11 @@
   function disjointTable(r) {
     const n = r.disjoint.length;
     const mean = (k) => r.disjoint.reduce((a, w) => a + w[k], 0) / n;
-    const short = (iso) => new Date(iso + "T12:00:00Z").toLocaleDateString(undefined, { day: "numeric", month: "short" });
+    // The year only when the windows span more than one, as a fixed suite's do: "11 Apr"
+    // alone would not say which April.
+    const years = new Set(r.disjoint.map((w) => w.window_start.slice(0, 4))).size > 1;
+    const short = (iso) => new Date(iso + "T12:00:00Z").toLocaleDateString(undefined,
+      { day: "numeric", month: "short", ...(years ? { year: "numeric" } : {}) });
     return `<table class="disj"><thead><tr><th>Window</th><th>Place</th><th>Score</th>` +
       METRICS.map((k) => `<th>${LABELS[k]}</th>`).join("") + `</tr></thead><tbody>` +
       r.disjoint.map((w) => `<tr><td>${short(w.window_start)} – ${short(w.window_end)}</td>` +
@@ -463,15 +561,17 @@
 
   // Three panels, one visible; the hash keeps the choice linkable (…/#agentic, …/#window=<start>).
   function showTab(name) {
-    for (const t of ["main", "window", "agentic"]) {
+    for (const t of ["main", "official", "window", "agentic"]) {
       $("tab-" + t).setAttribute("aria-selected", String(t === name));
       $("panel-" + t).hidden = t !== name;
     }
   }
   $("tab-main").onclick = () => { showTab("main"); history.replaceState(null, "", location.pathname); };
   $("tab-agentic").onclick = () => { showTab("agentic"); history.replaceState(null, "", "#agentic"); };
+  $("tab-official").onclick = () => { showTab("official"); history.replaceState(null, "", "#official"); };
   $("tab-window").onclick = () => { showTab("window"); if (windows.length) showWindow(Number($("win-select").value)); };
   if (location.hash === "#agentic") showTab("agentic");
+  if (location.hash === "#official") showTab("official");
   if (location.hash.startsWith("#window")) showTab("window");
 
   HIST.installTooltips();

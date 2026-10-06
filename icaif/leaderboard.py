@@ -33,6 +33,13 @@ they did. Ranked together, an official4 entry would face holdout entrants it sha
 window with, and either would be "excluded for other windows" from the other's board
 with nothing saying it belongs to another. `boards` ranks every suite; an entry naming a
 suite the board does not define, or one with no references, is named, never dropped.
+
+**A fixed suite has one field.** Its entries all cover the same few windows, so an agent
+replay can run every one, and the reason for the agentic panel (a mean over one window
+beside means over 109) does not arise. Agentic entries rank there among the submitted
+ones and the references, each with its agent fields, under the same rules. Kept on a side
+panel, the official4 agents would never be compared with each other, which is the
+comparison that suite exists for.
 """
 
 import re
@@ -216,24 +223,30 @@ def standings(entries: list[dict], suite: str = suites.DEFAULT) -> dict:
     n_independent = max(1, len(disjoint))
 
     ref_names = {r["strategy"] for r in refs}
-    agentic = [e for e in entries if e.get("kind") == AGENTIC]
-    latest, versions, excluded, old_format = {}, {}, [], {}
+    # The kinds that rank in the field beside the references (module docstring).
+    entrants = (SUBMITTED, AGENTIC) if definition.fixed else (SUBMITTED,)
+    agentic = [] if definition.fixed else [e for e in entries if e.get("kind") == AGENTIC]
+    latest, versions, excluded, old_format, clashed = {}, {}, [], {}, set()
     for e in entries:
-        if e.get("kind") == AGENTIC:
+        if e.get("kind") not in entrants and e.get("kind") != REFERENCE:
             continue   # its own panel, below; never the main ranking
         name = e["strategy"]
-        if e["kind"] == SUBMITTED and name in ref_names:
+        if e["kind"] in entrants and name in ref_names:
             # Checked before `latest`: sharing the name key, a submission would otherwise
             # replace the anchor every other entry is read against.
             excluded.append({"strategy": name, "reason": "uses a reference strategy's name"})
             continue
-        if e["kind"] == SUBMITTED:
+        if e["kind"] in entrants:
             # Old-format versions count too: each was a look at the holdout.
             versions[name] = versions.get(name, 0) + 1
         if e.get("schema") != SCHEMA:
             old_format.setdefault(name, _old_schema(e))
             continue
-        if e["kind"] == SUBMITTED:
+        if e["kind"] in entrants:
+            if name in latest and latest[name]["kind"] != e["kind"]:
+                # An agent and a submission under one name: either one "superseding" the
+                # other would show one run's numbers under the other's description.
+                clashed.add(name)
             if name in latest and latest[name]["submitted_at"] >= e["submitted_at"]:
                 continue
         elif name in latest:
@@ -246,7 +259,12 @@ def standings(entries: list[dict], suite: str = suites.DEFAULT) -> dict:
     field = {}
     for name, e in latest.items():
         why = None
-        if e["span"] != board_span:
+        missing = [k for k in AGENT_FIELDS if k not in (e.get("agent") or {})]
+        if name in clashed:
+            why = "an agentic and a submitted entry share this name"
+        elif e["kind"] == AGENTIC and missing:
+            why = f"no {', '.join(missing)} in its agent fields"
+        elif e["span"] != board_span:
             why = f"span {e['span']} is not the board's {board_span}"
         elif e["sizing"] != BOARD_SIZING:
             why = f"sizing {e['sizing']} is not the board's {BOARD_SIZING}"
@@ -275,7 +293,8 @@ def standings(entries: list[dict], suite: str = suites.DEFAULT) -> dict:
         scores = g.get_group(name)["overall_score"]
         rows.append({
             "strategy": name, "kind": e["kind"], "author": e["author"], "note": e["note"],
-            "submitted_at": e["submitted_at"] if e["kind"] == SUBMITTED else "",
+            **({"agent": e["agent"]} if e["kind"] == AGENTIC else {}),
+            "submitted_at": e["submitted_at"] if e["kind"] in entrants else "",
             "versions": versions.get(name, 0),
             "mean_overall_score": float(scores.mean()),
             # About 11 independent windows stand behind ~150 overlapping ones, so the SE
@@ -321,10 +340,10 @@ def standings(entries: list[dict], suite: str = suites.DEFAULT) -> dict:
                   for name in r.sort_values(["position", "overall_score"]).index]}
         for i, (w, r) in enumerate(zip(refs[0]["windows"], per_window))]
     history = sorted(
-        ({"strategy": e["strategy"], "author": e["author"], "submitted_at": e["submitted_at"],
-          "status": _status(e, latest, field),
+        ({"strategy": e["strategy"], "kind": e["kind"], "author": e["author"],
+          "submitted_at": e["submitted_at"], "status": _status(e, latest, field),
           **{f"mean_window_{k}": _mean_window(e, k) for k in METRICS}}
-         for e in entries if e.get("kind") == SUBMITTED),
+         for e in entries if e.get("kind") in entrants),
         key=lambda h: h["submitted_at"], reverse=True)
     panel = agentic_standings(agentic, field, refs[0]["windows"], ref_names)
     return {"suite": definition.doc(), "span": board_span, "sizing": BOARD_SIZING,
