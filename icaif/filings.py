@@ -106,13 +106,16 @@ def parse_events(block: dict, documents: bool = False) -> pd.DataFrame:
 
 def fetch(tickers: list[str], sleep: float = 0.12, recent_only: bool = False,
           timeout: float = 60, budget_s: Optional[float] = None,
-          checks: Optional[list] = None) -> tuple[pd.DataFrame, list[str]]:
+          checks: Optional[list] = None, window: Optional[tuple] = None) -> tuple[pd.DataFrame, list[str]]:
     """(ticker, accepted, items, amended) for every event 8-K, and names with no CIK.
 
     `recent_only` reads each name's latest block alone (`earnings.submission_blocks`): a
     request a name, the last year or so, with `cik`, `accession` and `document` for the
     live round to read texts from. `budget_s` raises TimeoutError once spent: a live
     round's caller then shows the snapshot, rather than a slow EDGAR eating its deadline.
+    `window` (first, last), with `recent_only`, adds the history pages and former CIKs a
+    replay of that span needs (`earnings.submission_blocks`); each filing keeps the CIK
+    whose block listed it, which is where its text is.
     """
     frames, missing = [], []
     t0 = time.monotonic()
@@ -125,9 +128,9 @@ def fetch(tickers: list[str], sleep: float = 0.12, recent_only: bool = False,
             if cik is None:
                 missing.append(t)
                 continue
-            blocks = earnings.submission_blocks(client, cik, t, sleep, recent_only, checks)
-            frames.append(pd.concat([parse_events(b, documents=recent_only) for b in blocks],
-                                    ignore_index=True).assign(ticker=t, cik=cik))
+            blocks = earnings.submission_blocks(client, cik, t, sleep, recent_only, checks, window)
+            frames.append(pd.concat([parse_events(b, documents=recent_only).assign(cik=b.get("_cik", cik))
+                                     for b in blocks], ignore_index=True).assign(ticker=t))
     out = pd.concat(frames, ignore_index=True).drop_duplicates()
     cols = ["ticker", "accepted", "items", "amended"]
     if recent_only:

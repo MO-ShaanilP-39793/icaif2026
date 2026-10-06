@@ -63,7 +63,7 @@ def main() -> None:
 
     if not args.no_texts:
         lo = first - pd.Timedelta(days=FILING_DAYS)
-        events, missing = filings.fetch(tickers, recent_only=True)
+        events, missing = filings.fetch(tickers, recent_only=True, window=(lo, last))
         events = events[(events["accepted"] >= lo) & (events["accepted"] <= last)].copy()
         texts, errors = [], []
         with earnings._client(60) as client:

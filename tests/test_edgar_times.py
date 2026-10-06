@@ -117,3 +117,56 @@ def test_a_block_right_at_the_top_and_late_below_moves_only_the_late_8ks():
     assert sorted(got) == sorted(true)
     assert fixed["acceptanceDateTime"][6] == "2026-01-01T12:00:00.000Z"   # not an 8-K: as sent
     assert checks[0]["late"] == 4 and checks[0]["probes"] <= 2 + 3
+
+
+class _History:
+    """A name with a recent block, two older history pages and a former CIK's block."""
+
+    def __init__(self):
+        def block(acc, at):
+            return {"form": ["8-K"], "items": ["2.02"], "acceptanceDateTime": [at],
+                    "accessionNumber": [acc], "primaryDocument": ["r.htm"]}
+        self.subs = {
+            "CIK0000000002.json": {"filings": {
+                "recent": block("0000000002-26-000001", "2026-01-20T11:30:00.000Z"),
+                "files": [{"name": "CIK0000000002-submissions-001.json", "filingFrom": "2025-07-01", "filingTo": "2025-12-31"},
+                          {"name": "CIK0000000002-submissions-002.json", "filingFrom": "2025-01-01", "filingTo": "2025-06-30"}]}},
+            "CIK0000000002-submissions-001.json": block("0000000002-25-000009", "2025-10-14T10:30:00.000Z"),
+            "CIK0000000002-submissions-002.json": block("0000000002-25-000004", "2025-04-11T10:45:00.000Z"),
+            "CIK0000000001.json": {"filings": {"recent": block("0000000001-25-000003", "2025-04-15T20:15:00.000Z"),
+                                               "files": []}},
+        }
+        self.pages = {"0000000002-26-000001": "2026-01-20 06:30:00", "0000000002-25-000009": "2025-10-14 06:30:00",
+                      "0000000002-25-000004": "2025-04-11 06:45:00", "0000000001-25-000003": "2025-04-15 16:15:00"}
+        self.asked = []
+
+    def get(self, url):
+        self.asked.append(url)
+        name = url.rsplit("/", 1)[1]
+        if name in self.subs:
+            return _Resp(self.subs[name])
+        acc = name.removesuffix("-index.htm")
+        return _Resp(f'<div class="infoHead">Accepted</div>\n<div class="info">{self.pages[acc]}</div>')
+
+
+def test_a_replay_window_older_than_the_recent_block_reads_the_history_page_that_covers_it(monkeypatch):
+    """JPM's recent block starts 2025-10-06, so its Apr 2025 results were never in the
+    replay's texts: the desk saw "8-K 2.02" and no press release, in the window where the
+    banks open results season. XOM's filings under its old CIK were missing from every
+    window. Only the pages that overlap the window are read, and each filing keeps the
+    CIK it was listed under, since its text is filed there."""
+    monkeypatch.setitem(earnings.FORMER_CIKS, "XYZ", (1,))
+    edgar = _History()
+    blocks = earnings.submission_blocks(edgar, 2, "XYZ", sleep=0, recent_only=True,
+                                        window=(pd.Timestamp("2025-04-11 09:10", tz=TZ),
+                                                pd.Timestamp("2025-05-02 15:25", tz=TZ)))
+    pages = [u.rsplit("/", 1)[1] for u in edgar.asked if u.endswith(".json")]
+    assert pages == ["CIK0000000002.json", "CIK0000000002-submissions-002.json", "CIK0000000001.json"]
+    ev = pd.concat([filings.parse_events(b, documents=True).assign(cik=b["_cik"]) for b in blocks])
+    by_acc = ev.set_index("accession")
+    assert by_acc.loc["0000000002-25-000004", "cik"] == 2 and by_acc.loc["0000000001-25-000003", "cik"] == 1
+    assert by_acc.loc["0000000001-25-000003", "accepted"].strftime("%H:%M") == "16:15"
+
+    edgar = _History()   # live (no window): the recent block alone, as before
+    earnings.submission_blocks(edgar, 2, "XYZ", sleep=0, recent_only=True)
+    assert [u.rsplit("/", 1)[1] for u in edgar.asked if u.endswith(".json")] == ["CIK0000000002.json"]

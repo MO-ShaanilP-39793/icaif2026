@@ -182,24 +182,44 @@ def checked_times(client, cik: int, block: dict, sleep: float = 0.12,
 
 
 def submission_blocks(client, cik: int, ticker: str, sleep: float = 0.12,
-                      recent_only: bool = False, checks: Optional[list] = None) -> list[dict]:
+                      recent_only: bool = False, checks: Optional[list] = None,
+                      window: Optional[tuple] = None) -> list[dict]:
     """Every filings block EDGAR holds for a name, former CIKs included, each with its
-    acceptance times checked against EDGAR's filing pages (`checked_times`).
+    acceptance times checked against EDGAR's filing pages (`checked_times`) and tagged
+    with the CIK it came from (`_cik`): a filing's text lives under that CIK's path.
 
     `recent_only` reads the current CIK's latest block alone (its last 1,000 filings
     or at least a year): one request a name instead of one per page of history. That
     is all a live round needs on top of a snapshot, and the full history of ~100
     names takes about five minutes, longer than a round's scorer is given.
+
+    `window` (first, last) adds, to the recent block, every block a replay of that span
+    needs: the older history pages whose filing dates overlap it, and the former CIKs'.
+    The recent block of a heavy filer reaches back only a year or less (JPM's, filing
+    ~26,000 prospectuses a year, starts 2025-10-06), so the Apr 2025 window's bank 8-Ks,
+    JPM's results among them, replayed as item codes with no text, and XOM's filings
+    under its pre-2026 CIK in every window.
     """
     blocks = []
-    former = () if recent_only else FORMER_CIKS.get(ticker.upper(), ())
+    lo = hi = None
+    if window is not None:
+        # Filing dates, not acceptance times: an 8-K accepted after 17:30 ET is dated the
+        # next business day, so the overlap is widened by a few days on each side.
+        lo = (pd.Timestamp(window[0]) - pd.Timedelta(days=4)).strftime("%Y-%m-%d")
+        hi = (pd.Timestamp(window[1]) + pd.Timedelta(days=4)).strftime("%Y-%m-%d")
+    former = FORMER_CIKS.get(ticker.upper(), ()) if (window is not None or not recent_only) else ()
     for c in (cik, *former):
         sub = client.get(SUBMISSIONS_URL.format(name=f"CIK{c:010d}.json")).raise_for_status().json()
-        blocks.append(checked_times(client, c, sub["filings"]["recent"], sleep, checks))
-        for extra in ([] if recent_only else sub["filings"].get("files", [])):
+        blocks.append({**checked_times(client, c, sub["filings"]["recent"], sleep, checks), "_cik": c})
+        pages = sub["filings"].get("files", [])
+        if window is not None:
+            pages = [f for f in pages if f.get("filingFrom", "") <= hi and f.get("filingTo", "") >= lo]
+        elif recent_only:
+            pages = []
+        for extra in pages:
             time.sleep(sleep)
             page = client.get(SUBMISSIONS_URL.format(name=extra["name"])).raise_for_status().json()
-            blocks.append(checked_times(client, c, page, sleep, checks))
+            blocks.append({**checked_times(client, c, page, sleep, checks), "_cik": c})
         time.sleep(sleep)
     return blocks
 
