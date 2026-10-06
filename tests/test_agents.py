@@ -353,7 +353,7 @@ def test_a_grok_request_constrains_the_answer_to_the_schema_and_sends_the_effort
     unknown field Bedrock drops in silence, so every replay would run at the default
     effort while logging "high"."""
     fake = FakeBedrock(_converse(ENTRY))
-    brain = brains.make("grok-4.7", "high")
+    brain = BedrockBrain("grok-4.7", "high")   # ruled out live; kept for cached replays
     brain._client = fake
     got = brain.decide("entry", "SYSTEM", {"a": 1}, EntryDecision, timeout=30)
     req = fake.requests[0]
@@ -415,17 +415,20 @@ def test_the_grok_budget_stops_spending_and_the_desk_keeps_trading_on_the_rule()
 
 
 def test_each_model_goes_to_its_own_provider_and_answers_never_share_a_cache_entry():
-    """A cache keyed without the provider would hand Opus's answer to a Grok replay."""
+    """A cache keyed without the provider would hand Opus's answer to a Gemini replay, or a
+    cached Grok answer to a desk that may no longer ask Grok."""
     assert isinstance(brains.make("claude-opus-5"), ClaudeBrain)
-    assert isinstance(brains.make("grok-4.7"), BedrockBrain)
-    assert set(brains.ALLOWED_MODELS) == set(brains.CLAUDE_MODELS) | set(brains.BEDROCK_MODELS)
-    assert set(brains.PRICES) == set(brains.ALLOWED_MODELS)
+    assert isinstance(brains.make("gemini-2.5-pro"), brains.GeminiBrain)
+    assert set(brains.ALLOWED_MODELS) == set(brains.CLAUDE_MODELS) | set(brains.GEMINI_MODELS)
+    assert set(brains.ALLOWED_MODELS) <= set(brains.PRICES)
     with pytest.raises(ValueError):
-        brains.make("grok-4")       # not on Bedrock: refused, not sent to Anthropic
+        brains.make("grok-4")       # not allowed: refused, not sent to any provider
     with pytest.raises(ValueError):
-        ClaudeBrain(model="grok-4.7")
-    keys = {CachedBrain.key(brains.make(m).name, "entry", "S", {}, EntryDecision) for m in ("claude-opus-5", "grok-4.7")}
-    assert len(keys) == 2
+        ClaudeBrain(model="gemini-2.5-pro")
+    names = [brains.make("claude-opus-5").name, brains.make("gemini-2.5-pro").name,
+             BedrockBrain("grok-4.7").name]
+    keys = {CachedBrain.key(n, "entry", "S", {}, EntryDecision) for n in names}
+    assert len(keys) == 3
 
 
 def test_a_missing_key_or_lapsed_aws_login_is_named_before_the_shadow_falls_back(monkeypatch):

@@ -296,10 +296,21 @@ buys risk parity at the regime-blended exposure, then holds. The LLM desk decide
 its own paper book, and its decision is logged beside the submitted one. The fallback
 chain is the agent's book, then the rule's, then no submission. `--submit rule` (the
 default, and Validation's) puts in the rule's book. `--submit agent` waits for the
-Roadmap's step-6 gate. The shadow's LLM is `--model` (default `claude-opus-5`, which
-needs `ANTHROPIC_API_KEY`); `--model grok-4.7` asks Grok 4.7 on Bedrock with the AWS SSO
-login, which lapses, so each round warns when it can't be used. The same flag picks the
-model in `tools/agent_replay.py` and `tools/live_dry_run.py`.
+Roadmap's step-6 gate. The shadow's LLM is `--model` (default `gemini-2.5-pro`, which
+needs `GEMINI_API_KEY` in `.env`; `gemini-2.5-flash` and the kit's Claude models, which
+need `ANTHROPIC_API_KEY`, are the others). Each round warns when it can't be used. The
+same flag picks the model in `tools/agent_replay.py` and `tools/live_dry_run.py`.
+
+**Models since 2026-10-06.** The organizers ruled Grok 4.7 out: the kit's "xAI Grok 4" is
+read strictly, which excludes 4.6 too, so `brains.make` refuses every Grok model and the
+Grok replays in `output/agent` are research only. Claude on Bedrock is refused for our
+AWS account ("not available for channel program accounts"; it is billed through a
+reseller). "Gemini 2.5 Pro / Flash" are named exactly and reachable with our key, so
+`GeminiBrain` asks them through the Gemini API, with no tools (no search grounding) and an
+explicit thinking budget per effort. Their knowledge cutoff is January 2025, so every
+results-season window from Apr 2025 on is after it. Gemini refuses a schema whose capped
+text sits in a long list ("too many states"), so `gemini_schema` sends length caps as words
+and pydantic enforces them.
 
 ```bash
 .venv/bin/python tools/live_dry_run.py --round 1            # one round's book, now, nothing uploaded
@@ -722,9 +733,9 @@ What code owns, each with tests:
   earlier). A late, failed or invalid role is skipped and the desk goes on; a failed PM,
   or a list code refuses, means no trade, or the 75% inverse-vol book before the first
   buy. Every skip and fallback is counted.
-- **Two tiers**: quick (analysts, debate, trader, event analyst; Grok 4.7 at medium) and
-  deep (risk manager, PM, reflection; at high), each role cached under its own key and
-  costed per role.
+- **Two tiers**: quick (analysts, debate, trader, event analyst; Gemini 2.5 Flash at
+  medium) and deep (risk manager, PM, reflection; Gemini 2.5 Pro at high), each role
+  cached under its own key and costed per role. Grok 4.7, the first choice, was ruled out.
 - **Triggers**: v1's three, on held names, each with its tag. The PM's list at a trigger
   may name only the triggered names and set no exposure, or it is refused: anything
   wider is a morning decision taken without the analysts, the debate or the risk manager.

@@ -60,7 +60,7 @@ def _common(p):
     p.add_argument("--shadow", choices=["claude", "rule", "none"], default="claude",
                    help="the agent desk's brain (claude = the LLM in --model; spends, capped per phase)")
     p.add_argument("--model", default=brains.DEFAULT_MODEL, choices=brains.ALLOWED_MODELS,
-                   help="the shadow's LLM (grok-4.7 asks Bedrock with the AWS login)")
+                   help="the shadow's LLM (Gemini through its API, Claude through Anthropic)")
     p.add_argument("--no-scores", action="store_true", help="skip the daily model (shadow only)")
     p.add_argument("--out", default=None, help="phase directory (default output/live/<phase>)")
 

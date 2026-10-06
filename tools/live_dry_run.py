@@ -60,7 +60,7 @@ def main() -> None:
     ap.add_argument("--out", type=Path, default=None, help="phase dir (default output/live/dryrun-<ts>)")
     ap.add_argument("--shadow", choices=["claude", "rule", "none"], default="rule")
     ap.add_argument("--model", default=runner.brains.DEFAULT_MODEL, choices=runner.brains.ALLOWED_MODELS,
-                    help="the LLM behind --shadow claude (grok-4.7 asks Bedrock)")
+                    help="the LLM behind --shadow claude (Gemini through its API, Claude through Anthropic)")
     ap.add_argument("--no-scores", action="store_true")
     args = ap.parse_args()
     imports = time.perf_counter() - T0

@@ -1,7 +1,7 @@
 """Ask the model for a window's biggest moves, and flag a window it appears to remember.
 
     .venv/bin/python tools/memory_probe.py --on 2026-01-21              # prints the cost, stops
-    .venv/bin/python tools/memory_probe.py --on 2026-01-21 --yes        # asks Grok 4.7
+    .venv/bin/python tools/memory_probe.py --on 2026-01-21 --yes        # asks Gemini 2.5 Pro
     .venv/bin/python tools/memory_probe.py --board --yes                # the board's 8 windows
     .venv/bin/python tools/memory_probe.py --on 2024-07-24 --yes        # a control it should flag
 
@@ -46,7 +46,7 @@ def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--on", action="append", default=[], help="a window's first session (repeatable)")
     ap.add_argument("--board", action="store_true", help="add the board's non-overlapping windows")
-    ap.add_argument("--model", default="grok-4.7", choices=brains.ALLOWED_MODELS)
+    ap.add_argument("--model", default=brains.DEFAULT_MODEL, choices=brains.ALLOWED_MODELS)
     # The deep roles' effort: a model that thinks harder recalls more, and the PM, which
     # decides, thinks at high. Probed at medium, a window could pass that the PM remembers.
     ap.add_argument("--effort", default="high", choices=["low", "medium", "high", "xhigh", "max"])

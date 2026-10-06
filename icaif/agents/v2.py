@@ -88,8 +88,8 @@ CORE = ("name", "weight_now", "ret_1d", "ret_5d", "ret_20d", "vol_ann_20d", "vol
 class V2Config(DeskConfig):
     # (model, effort) per tier; the analysts, debate and trader are quick, the risk manager
     # and the PM deep. The replay tool builds one brain per tier from these.
-    tiers: dict = field(default_factory=lambda: {"quick": ("grok-4.7", "medium"),
-                                                 "deep": ("grok-4.7", "high")})
+    tiers: dict = field(default_factory=lambda: {"quick": ("gemini-2.5-flash", "medium"),
+                                                 "deep": ("gemini-2.5-pro", "high")})
     slots: dict = field(default_factory=lambda: dict(SLOTS))
     grace_s: float = 15.0          # past a slot, how long a call already running is awaited
     min_call_s: float = 5.0        # a slot with less left than this is not asked

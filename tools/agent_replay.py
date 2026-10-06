@@ -3,7 +3,7 @@
     .venv/bin/python tools/agent_replay.py                          # rule brain: free
     .venv/bin/python tools/agent_replay.py --ledgers-only           # the same check, ~3 min
     .venv/bin/python tools/agent_replay.py --brain claude --max-calls 60 --yes
-    .venv/bin/python tools/agent_replay.py --brain claude --model grok-4.7 --yes   # Bedrock
+    .venv/bin/python tools/agent_replay.py --brain claude --model gemini-2.5-pro --yes   # Gemini API
     .venv/bin/python tools/agent_replay.py --desk v2 --ledgers-only  # v2 on code = the hold
 
 **`--desk v2`** (`agents/v2.py`) runs the morning chain. On the rule brain every role is

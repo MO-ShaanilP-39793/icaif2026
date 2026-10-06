@@ -483,13 +483,15 @@ def test_a_rehearsals_rounds_cannot_name_a_real_one():
 
 def test_the_scheduled_worker_asks_the_model_the_phase_was_started_with(tmp_path):
     """Each round runs in a child the scheduler spawns; without --model in its argv every
-    round silently reverts to Opus while the phase log says Grok."""
-    cfg = runner.Config(phase="validation", model="grok-4.7", out=tmp_path)
+    round silently reverts to the default model while the phase log says Flash. And a
+    model the organizers ruled out (Grok 4.7, 2026-10-06) must not start a phase."""
+    cfg = runner.Config(phase="validation", model="gemini-2.5-flash", out=tmp_path)
     argv = runner.worker_argv(cfg, {"id": "validation-2026-10-08-r1"}, tmp_path / "s.json")
-    assert argv[argv.index("--model") + 1] == "grok-4.7"
-    assert isinstance(runner.make_brain(cfg, runner.State(tmp_path)), brains.BedrockBrain)
-    with pytest.raises(ValueError):
-        runner.Config(phase="validation", model="grok-4", out=tmp_path)
+    assert argv[argv.index("--model") + 1] == "gemini-2.5-flash"
+    assert isinstance(runner.make_brain(cfg, runner.State(tmp_path)), brains.GeminiBrain)
+    for ruled_out in ("grok-4.7", "grok-4"):
+        with pytest.raises(ValueError):
+            runner.Config(phase="validation", model=ruled_out, out=tmp_path)
 
 
 def test_a_sharp_move_today_wakes_the_shadows_analyst_while_the_submitted_book_holds(world):
