@@ -120,3 +120,44 @@ class FreeDecision(_Strict):
 
 
 SCHEMAS["free"] = FreeDecision
+
+
+# ----------------------------------------------------------------------------- desk v2
+
+class AddLine(_Strict):
+    """Buy one name up to a stated weight: a new name, or more of one held."""
+
+    name: str
+    weight: float = Field(ge=0.0, le=0.30,
+                          description="The name's weight of NAV after the trade; above its "
+                                      "current weight, at most 6 decimals.")
+    why: str = Field(max_length=300)
+
+
+class CutLine(_Strict):
+    """Sell one held name outright."""
+
+    name: str
+    why: str = Field(max_length=300)
+
+
+class TradeList(_Strict):
+    """The trader's proposal, and the portfolio manager's decision (desk v2).
+
+    Lines name what changes and nothing else, so a name no line touches keeps its weight
+    unless `target_exposure` scales it. Code compiles the list into weights
+    (`agents.tradelist.compile_trades`) and refuses it whole if any line is wrong: a list
+    with its bad line dropped is a book nobody proposed. No lines and no exposure is a hold.
+    """
+
+    adds: list[AddLine] = Field(max_length=30)
+    cuts: list[CutLine] = Field(max_length=30)
+    trims: list[Trim] = Field(max_length=30)
+    target_exposure: Optional[float] = Field(
+        ge=0.0, le=1.0,
+        description="Gross weight after the trade, reached by scaling the names no line "
+                    "touches; null leaves the gross where the lines put it.")
+    rationale: str = Field(max_length=1500)
+
+
+SCHEMAS["trade_list"] = TradeList
