@@ -177,7 +177,6 @@
   <p class="muted" id="off-win-note" style="margin: -4px 0 10px"></p>
   <div class="panel scroll"><table id="off-window"></table></div>
   </div>
-  <div id="off-caveat" class="note-box" hidden></div>
   <div id="off-excluded"></div>
   <h2>Every submission to this suite</h2>
   <details class="panel" style="padding: 10px 14px"><summary>Newest first, agents included; every version is a look at these windows</summary>
@@ -469,8 +468,6 @@
     });
     $("official").hidden = false; $("off-status").hidden = true;
     setupOffWindows(o);
-    $("off-caveat").hidden = !o.suite.caveat;
-    $("off-caveat").textContent = o.suite.caveat;
 
     const byReason = new Map();
     for (const e of o.excluded) byReason.set(e.reason, [...(byReason.get(e.reason) || []), e.strategy]);

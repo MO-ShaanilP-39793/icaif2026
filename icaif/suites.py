@@ -32,7 +32,6 @@ class Suite:
     span: tuple                 # (first, last) ISO day any window of the suite may touch
     windows: tuple = ()         # fixed suites only: ((first session, last session), ...)
     n_days: int = WINDOW_DAYS
-    caveat: str = ""
 
     @property
     def fixed(self) -> bool:
@@ -48,12 +47,11 @@ class Suite:
 
     def doc(self) -> dict:
         return {"name": self.name, "title": self.title, "span": list(self.span),
-                "windows": [list(w) for w in self.windows], "n_days": self.n_days,
-                "caveat": self.caveat}
+                "windows": [list(w) for w in self.windows], "n_days": self.n_days}
 
 
-def _fixed(name: str, title: str, windows: tuple, caveat: str = "") -> Suite:
-    return Suite(name, title, (windows[0][0], windows[-1][1]), windows, caveat=caveat)
+def _fixed(name: str, title: str, windows: tuple) -> Suite:
+    return Suite(name, title, (windows[0][0], windows[-1][1]), windows)
 
 
 SUITES = {s.name: s for s in (
@@ -61,10 +59,7 @@ SUITES = {s.name: s for s in (
           ("2026-01-02", "2026-06-30")),
     _fixed("official4", "Earnings season",
            (("2025-04-11", "2025-05-02"), ("2025-10-13", "2025-10-31"),
-            ("2026-04-13", "2026-05-01"), ("2026-07-13", "2026-07-31")),
-           caveat="The 2025 windows may be in-sample for any method trained on 2025 data, "
-                  "and four known windows are easy to overfit: tuning against them reads "
-                  "as skill here and is not."),
+            ("2026-04-13", "2026-05-01"), ("2026-07-13", "2026-07-31"))),
 )}
 
 

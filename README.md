@@ -161,7 +161,7 @@ across windows as a histogram. Bins are shared down a column, so shapes compare 
 - **Earnings season tab.** The official4 board, four windows each opening as a quarter's
   reporting starts: each entrant's place, score and return in
   each of the four windows, the mean over them, submission counts (every version, agents
-  included, counts as a look) and the suite's caveat. In a fixed suite agentic entries rank
+  included, counts as a look). In a fixed suite agentic entries rank
   in the one field beside submissions and references, with their model, calls and cost;
   on the holdout they stay on their own panel, since they cover a few of ~109 windows.
   Two views: *by strategy*, each entrant's place in each of the four windows (sortable by

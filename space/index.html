@@ -72,7 +72,6 @@
   button.secondary { background: var(--panel); color: var(--accent); border-color: var(--line); }
   #submitform { grid-template-columns: 1fr 1fr 2fr auto; }
   #suitenote { margin: 12px 0 0; }
-  .caveat { color: var(--warn); }
   iframe.board { width: 100%; height: 560px; border: 1px solid var(--line); border-radius: 8px; background: var(--panel); }
   @media (max-width: 640px) { #submitform { grid-template-columns: 1fr; } #submitform label { grid-column: auto !important; } }
   [hidden] { display: none !important; }
@@ -402,8 +401,7 @@
     $("start").disabled = $("end").disabled = fixed;
     $("suitenote").innerHTML = `<strong>${esc(s.title)}</strong>: ` + (fixed
       ? `${s.windows.length} windows of ${s.n_days} sessions, from ${s.windows.map((w) => `${w[0]} to ${w[1]}`).join("; ")}.`
-      : `every ${s.n_days}-day window starting on a trading day from ${s.span[0]} to ${s.span[1]}.`) +
-      (s.caveat ? ` <span class="caveat">${esc(s.caveat)}</span>` : "");
+      : `every ${s.n_days}-day window starting on a trading day from ${s.span[0]} to ${s.span[1]}.`);
     $("results").hidden = true; $("rejected").hidden = true;
     lastEntry = null; refreshSubmit();
     $("boardframe").src = boardUrl();
