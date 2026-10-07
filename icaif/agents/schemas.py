@@ -18,6 +18,24 @@ class _Strict(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
 
+# Free text is read, never executed, so its cap is a request, not a gate. The model is
+# sent the stated cap, and validation refuses only a runaway past PROSE_OVERRUN times
+# it. Held to the stated cap, one field a few characters over failed the whole answer
+# and the desk ran on without it: on the 2026-04-13 replay Flash lost the trader's list
+# on 8 of 15 mornings, and Pro still lost 7 of 181 answers (debate turns, lessons, a
+# news note), each counted only as "failed". A bound stays because the roles after
+# read every report again: unbounded, one verbose role grows every later prompt. Names,
+# weights and trade lines stay exact; only prose is loosened.
+PROSE_OVERRUN = 1.5
+
+
+def prose(stated: int, **kw):
+    """A free-text field: the model is told `stated` characters (the schema's maxLength,
+    so the request is unchanged); validation allows up to PROSE_OVERRUN times that."""
+    return Field(max_length=int(stated * PROSE_OVERRUN), json_schema_extra={"maxLength": stated},
+                 **kw)
+
+
 class Exclusion(_Strict):
     """One name left out of the entry, and the signal that put it there.
 
@@ -62,7 +80,7 @@ class Trim(_Strict):
     name: str
     fraction: Literal["quarter", "half"] = Field(description="Of the position, sold.")
     cause: TrimCause
-    why: str = Field(max_length=300)
+    why: str = prose(300)
 
 
 class ReviewDecision(_Strict):
@@ -131,14 +149,14 @@ class AddLine(_Strict):
     weight: float = Field(ge=0.0, le=0.30,
                           description="The name's weight of NAV after the trade; above its "
                                       "current weight, at most 6 decimals.")
-    why: str = Field(max_length=300)
+    why: str = prose(300)
 
 
 class CutLine(_Strict):
     """Sell one held name outright."""
 
     name: str
-    why: str = Field(max_length=300)
+    why: str = prose(300)
 
 
 class TradeList(_Strict):
@@ -157,7 +175,7 @@ class TradeList(_Strict):
         ge=0.0, le=1.0,
         description="Gross weight after the trade, reached by scaling the names no line "
                     "touches; null leaves the gross where the lines put it.")
-    rationale: str = Field(max_length=1500)
+    rationale: str = prose(1500)
 
 
 SCHEMAS["trade_list"] = TradeList
@@ -168,13 +186,13 @@ class NameView(_Strict):
 
     name: str
     lean: Literal["buy", "hold", "trim", "sell", "avoid"]
-    note: str = Field(max_length=300)
+    note: str = prose(300)
 
 
 class AnalystReport(_Strict):
     """The market, news and quant analysts' answer: a view, never a trade."""
 
-    summary: str = Field(max_length=1200)
+    summary: str = prose(1200)
     names: list[NameView] = Field(max_length=30,
                                   description="Only the names worth the desk's attention today.")
 
@@ -184,20 +202,20 @@ class EarningsCall(_Strict):
 
     name: str
     lean: Literal["hold", "trim", "exit", "buy", "avoid"]
-    hold_cost: str = Field(max_length=250, description="What holding through the release risks.")
-    trim_cost: str = Field(max_length=250, description="What a quarter or half trim costs and saves.")
-    exit_cost: str = Field(max_length=250, description="What selling it all costs and gives up.")
+    hold_cost: str = prose(250, description="What holding through the release risks.")
+    trim_cost: str = prose(250, description="What a quarter or half trim costs and saves.")
+    exit_cost: str = prose(250, description="What selling it all costs and gives up.")
 
 
 class EarningsReport(_Strict):
-    summary: str = Field(max_length=800)
+    summary: str = prose(800)
     calls: list[EarningsCall] = Field(max_length=30)
 
 
 class DebateTurn(_Strict):
     """A bull's or a bear's turn: the case, and the points the other side must answer."""
 
-    argument: str = Field(max_length=2000)
+    argument: str = prose(2000)
     points: list[str] = Field(max_length=6)
 
 
@@ -210,7 +228,7 @@ class RiskReview(_Strict):
     exposure_signoff: Optional[float] = Field(
         ge=0.75, le=1.0,
         description="The highest gross weight you sign off, above 0.75; null signs off none.")
-    rationale: str = Field(max_length=1500)
+    rationale: str = prose(1500)
 
 
 class PMDecision(_Strict):
@@ -220,7 +238,7 @@ class PMDecision(_Strict):
     action: Literal["approve", "amend", "hold"]
     trade_list: Optional[TradeList] = Field(
         description="Required for amend: the whole list to trade instead. Null otherwise.")
-    rationale: str = Field(max_length=1500)
+    rationale: str = prose(1500)
 
 
 SCHEMAS.update(analyst=AnalystReport, earnings_report=EarningsReport, debate=DebateTurn,
@@ -232,11 +250,11 @@ class EventCase(_Strict):
 
     name: str
     lean: Literal["hold", "add", "trim", "exit"]
-    case: str = Field(max_length=600, description="Why, knowing whether the move has happened.")
+    case: str = prose(600, description="Why, knowing whether the move has happened.")
 
 
 class EventReport(_Strict):
-    summary: str = Field(max_length=600)
+    summary: str = prose(600)
     cases: list[EventCase] = Field(max_length=30)
 
 
@@ -247,18 +265,18 @@ class TriggerDecision(_Strict):
     action: Literal["hold", "trade"]
     trade_list: Optional[TradeList] = Field(
         description="Required for trade: lines for the triggered names only. Null for hold.")
-    rationale: str = Field(max_length=1000)
+    rationale: str = prose(1000)
 
 
 class Lesson(_Strict):
-    text: str = Field(max_length=300, description="What to do differently, or keep doing.")
+    text: str = prose(300, description="What to do differently, or keep doing.")
     settlements: list[str] = Field(max_length=6, description="The ids of the settlements it rests on.")
 
 
 class Reflection(_Strict):
     """After a close: what the settled decisions say, as at most four lessons."""
 
-    summary: str = Field(max_length=800)
+    summary: str = prose(800)
     lessons: list[Lesson] = Field(max_length=4)
 
 

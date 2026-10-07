@@ -55,14 +55,16 @@ def test_gemini_is_never_sent_a_tool_so_it_cannot_search_the_web():
 def test_the_schema_gemini_decodes_carries_no_length_caps_and_pydantic_still_enforces_them():
     """Gemini refuses the trader's and PM's schemas with "too many states" while a reason
     is capped inside a 30-item list, so every v2 decision would fall back. Moved into
-    words, the caps must still hold: a 2,000-character rationale is refused, not kept."""
+    words, the caps must still hold: a rationale past the prose overrun (1.5 times the
+    stated 1,500) is refused, not kept."""
     sent = brains.gemini_schema(S.TradeList)
     text = json.dumps(sent)
     assert "maxLength" not in text and "maxItems" not in text
     assert '"maximum": 0.3' in text      # numeric bounds stay: Gemini honours them
     assert "at most 1500 characters" in text
+    assert _ask(_Gemini({**HOLD, "rationale": "x" * 2000})).rationale == "x" * 2000
     with pytest.raises(brains.BrainError, match="fails TradeList"):
-        _ask(_Gemini({**HOLD, "rationale": "x" * 2000}))
+        _ask(_Gemini({**HOLD, "rationale": "x" * 2251}))
 
 
 @pytest.mark.parametrize("body,why", [
