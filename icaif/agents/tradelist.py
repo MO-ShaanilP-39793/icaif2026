@@ -43,6 +43,20 @@ HELD = W.GRID               # a weight below this is flooring residue, not a pos
 # stated 0.000493 was submitted as 0.000492. Lifted by this first, each grid weight is
 # submitted as stated, and anything off the grid still floors.
 NUDGE = W.GRID * 1e-6
+# The roles see each weight to 4 decimals (`observe._r`) and code checks the exact sum.
+# A PM filling the book to exactly 0.75 from the weights it is shown can land up to 30 x
+# 0.00005 over, which it has no way to see: on the 2026-04-13 replay it aimed at the
+# cap, landed at 0.7500x, and the whole list was refused for being "0.7500 over 0.75",
+# so the desk held. A gross over an exposure cap below 1.0 by no more than that is
+# traded as stated; nothing is clipped, and 1.0 itself is never exceeded.
+SHOWN_DECIMALS = 4
+GROSS_SLACK = 30 * 0.5 * 10 ** -SHOWN_DECIMALS
+
+
+def gross_limit(exposure_cap: float) -> float:
+    """The highest gross a list may reach under `exposure_cap`: the cap plus what the
+    roles cannot see of it, and never above 1.0."""
+    return exposure_cap if exposure_cap >= 1.0 else min(exposure_cap + GROSS_SLACK, 1.0)
 
 
 class TradeListError(ValueError):
@@ -144,7 +158,7 @@ def compile_trades(tl: TradeList, current: pd.Series, to_ticker: dict, *, budget
     if over:
         errors.append("over the 30% cap: " + ", ".join(f"{t} {target[t]:.4f}" for t in over))
     gross = float(target.sum())
-    if gross > exposure_cap + 1e-12:
+    if gross > gross_limit(exposure_cap) + 1e-12:
         errors.append(f"gross {gross:.4f} is over the {exposure_cap:g} allowed")
     turnover = float((target - current).abs().sum())
     if not resolved and turnover < MIN_TRADE:

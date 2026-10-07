@@ -98,6 +98,26 @@ def test_each_rule_refuses_the_list(tl, needle, kw):
     _refused(tl, needle, **kw)
 
 
+def test_a_pm_filling_the_book_to_the_cap_from_the_weights_it_is_shown_is_not_refused():
+    """Each weight is shown to 4 decimals. Here 29 held names at 0.02504 read as 0.025, so
+    an add of 0.025 fills the book to exactly 0.75 by everything the PM can see, and to
+    0.75116 in fact. Refused as "0.7512 over the 0.75 allowed", the desk held instead of
+    trading the list its PM chose, with nothing in the payload to have warned it."""
+    from icaif.agents import observe
+    from icaif.agents.tradelist import GROSS_SLACK, gross_limit
+
+    cur = pd.Series(0.02504, index=TICKERS)
+    cur[TICKERS[-1]] = 0.0
+    shown = sum(observe._r(w) for w in cur) + 0.025
+    assert shown == pytest.approx(0.75, abs=1e-12)
+    got = _go(_tl(adds=[(TICKERS[-1], 0.025)]), current=cur, exposure_cap=0.75)
+    assert got.target.sum() == pytest.approx(0.75116)            # traded as stated
+    assert got.target[TICKERS[-1]] == 0.025
+    _refused(_tl(adds=[(TICKERS[-1], 0.025 + GROSS_SLACK)]), "over the 0.75 allowed",
+             current=cur, exposure_cap=0.75)
+    assert gross_limit(0.9995) == 1.0 and gross_limit(1.0) == 1.0   # never past 100%
+
+
 def test_scaling_a_name_past_the_cap_is_refused_not_clipped():
     """Clipped at 30%, the book would land under the exposure the PM chose, saying nothing."""
     cur = CURRENT.copy()

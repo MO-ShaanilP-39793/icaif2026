@@ -60,7 +60,7 @@ from icaif.agents.budget import TurnoverBudget, window_rounds
 from icaif.agents.desk import Desk, DeskConfig
 from icaif.agents.schemas import (AnalystReport, DebateTurn, EarningsReport, EventReport,
                                   PMDecision, Reflection, RiskReview, TradeList, TriggerDecision)
-from icaif.agents.tradelist import TradeListError, compile_trades
+from icaif.agents.tradelist import TradeListError, compile_trades, gross_limit
 from icaif.agents.triggers import TriggerTags, move_since_close
 
 ANALYSTS = ("market", "earnings", "news", "quant")
@@ -358,7 +358,7 @@ class V2Desk(Desk):
                "gross_after": round(gross, 4),
                "lines": [{"name": x["name"], "action": x["action"], "from": round(x["from"], 4),
                           "to": round(x["to"], 4)} for x in got.lines]}
-        if gross > free + 1e-12:
+        if gross > gross_limit(free) + 1e-12:
             out["needs_exposure_signoff"] = f"gross {gross:.4f} is above {free:.4f}"
         return out
 
