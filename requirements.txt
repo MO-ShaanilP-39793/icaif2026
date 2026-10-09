@@ -3,7 +3,10 @@
 # later would mean re-validating every number produced before the switch.
 pandas==2.3.3
 numpy==2.3.5
-pyarrow==25.0.1
+# 20.0.0, not the 25.0.1 first pinned: AutoGluon 1.5 needs pyarrow below 21, so installing it
+# downgraded every environment to 20.0.0, and every number in this repo was produced on it.
+# Pinned at 25.0.1 the file could not be installed as written (a fresh VM needed an override).
+pyarrow==20.0.0
 yfinance==1.7.0
 httpx==0.28.1
 pytest
