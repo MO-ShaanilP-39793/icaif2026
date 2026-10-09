@@ -80,6 +80,10 @@ class DeskConfig:
     round_budget_s: float = 360.0
     timeouts: dict = field(default_factory=lambda: {"entry": 240.0, "review": 120.0,
                                                     "event": 120.0})
+    # Enter from cash at the first round the desk sees, not only at a round 1. Off
+    # everywhere but a Validation runner that missed its round 1 (`runner.Config.late_entry`):
+    # with it on, the backtested rule would buy at a time it was never scored at.
+    enter_any_round: bool = False
     # A journal error raises (replays, tests) or is recorded and the round goes on
     # without memory (live): the memory informs a role, and a bug in it must not cost
     # the submitted book its entry.
@@ -489,7 +493,8 @@ class Desk:
         if ctx.round == 1:
             self.book.nav.append(nav)
         if not self.book.entered:
-            return self._enter(ctx, tickers, current, nav) if ctx.round == 1 else None
+            enter_now = ctx.round == 1 or self.cfg.enter_any_round
+            return self._enter(ctx, tickers, current, nav) if enter_now else None
         if ctx.round == 1:
             return self._review(ctx, tickers, current, nav) if self.cfg.review else None
         return self._events(ctx, tickers, current, nav) if self.cfg.events else None

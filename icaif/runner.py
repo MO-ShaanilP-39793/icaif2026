@@ -104,8 +104,15 @@ class Config:
     shadow_cost_cap: float = 10.0  # USD per phase
     model: str = brains.DEFAULT_MODEL
     effort: str = "high"
+    # Validation only: the rule may enter from cash after round 1. On 2026-10-09 the runner
+    # started 70 s after Validation's last round-1 upload cutoff, and without this every
+    # later round holds, so the first real upload would have been Official's entry, the one
+    # round that matters. Refused for any other phase, so Official's entry rule can't change.
+    late_entry: bool = False
 
     def __post_init__(self):
+        if self.late_entry and self.phase != "validation":
+            raise ValueError("late_entry is for Validation only; Official enters at round 1")
         if self.submit not in ("rule", "agent"):
             raise ValueError(f"submit must be 'rule' or 'agent', not {self.submit!r}")
         if self.shadow not in ("claude", "rule", "none"):
@@ -367,7 +374,8 @@ def entered(st: State, book: Optional[P.Book]) -> tuple[bool, str]:
 
 
 def guard(target: Optional[dict], current: Optional[pd.Series], *, source: str,
-          entered: bool, book_all_cash: bool, round_no: int) -> tuple[bool, str]:
+          entered: bool, book_all_cash: bool, round_no: int,
+          late_entry: bool = False) -> tuple[bool, str]:
     """(upload?, why): the last check between a desk's answer and decision.json.
 
     The kit re-sizes every name to its target at the fill, so a "hold" uploaded as
@@ -387,7 +395,7 @@ def guard(target: Optional[dict], current: Optional[pd.Series], *, source: str,
             return False, "the rule trades once, at entry, and this phase's book has entered"
         if not book_all_cash:
             return False, "an entry over a book that holds shares"
-        if round_no != 1:
+        if round_no != 1 and not late_entry:
             return False, "the rule enters only at round 1"
     if moved.sum() < MIN_TURNOVER:
         return False, f"hold: turnover {moved.sum():.4f} is drift, not a decision"
@@ -449,6 +457,7 @@ def run_desk(name: str, brain, cfg: Config, st: State, mkt: sim.Market, r: Round
     the submitted book's entry must not wait on a bug in what the agent is shown.
     """
     dcfg = DeskConfig(window_days=cfg.window_days, anonymize=False, journal_strict=False,
+                      enter_any_round=cfg.late_entry,
                       round_budget_s=budget_s if budget_s is not None else cfg.agent_budget_s)
     desk = Desk(brain, dcfg, **(inputs or {}))
     desk.restore(st.data["desks"].get(name), mkt.tickers)
@@ -759,7 +768,8 @@ def _round(cfg, r: Round, st: State, session, doors: Doors, rec: dict, t0: float
     # 4. the guard, and the file
     ok, why = (False, "no desk produced an answer") if source == "none" else guard(
         chosen, current, source=source, entered=was,
-        book_all_cash=bool(book is not None and book.all_cash), round_no=r.number)
+        book_all_cash=bool(book is not None and book.all_cash), round_no=r.number,
+        late_entry=cfg.late_entry)
     if ok and cfg.live and not getattr(session, "creds", None):
         ok, why = False, "no team credentials in starter-kit/.icaif; nothing can be uploaded"
     sub = {"source": source, "action": "trade" if ok else "hold", "guard": why}
@@ -947,6 +957,8 @@ def worker_argv(cfg: Config, row: dict, schedule_path: Path, as_of=None) -> list
         argv.append("--live")
     if not cfg.scoring:
         argv.append("--no-scores")
+    if cfg.late_entry:
+        argv.append("--late-entry")
     if as_of is not None:
         argv += ["--as-of", pd.Timestamp(as_of).isoformat()]
     return argv

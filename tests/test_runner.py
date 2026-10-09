@@ -565,3 +565,43 @@ def test_a_har_forecast_that_cannot_be_made_is_recorded_and_the_other_inputs_sti
     monkeypatch.setattr(live, "vol_forecasts", lambda *a: "forecasts")
     kw, meta = runner.agent_inputs(_cfg(world), mkt, r)
     assert kw["vol"] == "forecasts" and meta["vol"] == "ok"
+
+
+# ----------------------------------------------------------------------------- late entry (Validation)
+
+def test_a_validation_runner_that_missed_round_1_enters_at_its_next_round_only_when_asked(world):
+    """On 2026-10-09 the runner started 70 s after Validation's last round-1 upload cutoff;
+    without the switch every later round holds and the first real upload would have been
+    Official's entry. With it the rule buys its book at the next round, from cash, once."""
+    held = _play(world, _cfg(world, phase="validation"), _doors(world), DAY1, 2)
+    assert held["submitted"]["action"] == "hold"
+
+    cfg = _cfg(world, phase="validation", late_entry=True)
+    rec = _play(world, cfg, _doors(world), DAY1, 2)
+    sub = rec["submitted"]
+    assert sub["action"] == "trade" and sub["source"] == "rule" and sub["upload"]["status"] == "dry-run"
+    kit.validate_weights(_written(rec)["weights"])
+    again = _play(world, cfg, _doors(world), DAY1, 3)
+    assert again["submitted"]["action"] == "hold"          # entered: never a second entry
+
+
+def test_late_entry_is_refused_outside_validation_and_reaches_every_worker(tmp_path):
+    """Official enters at round 1 only; a switch that could reach it would let the rule buy
+    at a time it was never scored at. A worker spawned without the flag would silently
+    fall back to round-1-only entry while the phase log said otherwise."""
+    for phase in ("official", "test"):
+        with pytest.raises(ValueError, match="Validation only"):
+            runner.Config(phase=phase, late_entry=True, out=tmp_path)
+    cfg = runner.Config(phase="validation", late_entry=True, out=tmp_path)
+    assert "--late-entry" in runner.worker_argv(cfg, {"id": "validation-2026-10-09-r2"}, tmp_path / "s.json")
+    assert "--late-entry" not in runner.worker_argv(runner.Config(phase="validation", out=tmp_path),
+                                                    {"id": "validation-2026-10-09-r2"}, tmp_path / "s.json")
+
+
+def test_the_guard_lets_the_rule_enter_after_round_1_only_with_the_switch():
+    args = dict(current=pd.Series(0.0, index=TICKERS), source="rule", entered=False,
+                book_all_cash=True, round_no=2)
+    assert runner.guard({t: 0.025 for t in TICKERS}, **args)[0] is False
+    assert runner.guard({t: 0.025 for t in TICKERS}, **args, late_entry=True) == (True, "trade")
+    entered = dict(args, entered=True)
+    assert runner.guard({t: 0.025 for t in TICKERS}, **entered, late_entry=True)[0] is False

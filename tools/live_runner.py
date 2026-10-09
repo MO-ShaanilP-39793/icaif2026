@@ -61,7 +61,8 @@ def _cfg(args, phase=None) -> runner.Config:
     return runner.Config(phase=phase or args.phase, submit=args.submit, shadow=args.shadow,
                          live=getattr(args, "live", False),
                          out=Path(args.out) if getattr(args, "out", None) else None,
-                         scoring=not args.no_scores, model=args.model)
+                         scoring=not args.no_scores, model=args.model,
+                         late_entry=getattr(args, "late_entry", False))
 
 
 def _common(p):
@@ -73,6 +74,8 @@ def _common(p):
                    help="the shadow's LLM (Gemini through its API, Claude through Anthropic)")
     p.add_argument("--no-scores", action="store_true", help="skip the daily model (shadow only)")
     p.add_argument("--out", default=None, help="phase directory (default output/live/<phase>)")
+    p.add_argument("--late-entry", action="store_true",
+                   help="Validation only: the rule may enter from cash after round 1")
 
 
 def cmd_round(args) -> int:
