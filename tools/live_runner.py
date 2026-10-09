@@ -39,6 +39,16 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+# The kit's own client (httpx) verifies TLS against certifi alone. Behind the office's
+# Netskope proxy, which re-signs every host, each portfolio read and upload then failed as
+# a bare "Network request failed": registration on 2026-10-08 only got through a launcher
+# that did this first. Done here, at import, it covers the scheduler and every round
+# worker it spawns (each runs this file afresh); macOS verifies, so nothing is turned off.
+# Off that network (a cloud VM) the OS trust store simply agrees with certifi.
+import truststore  # noqa: E402
+
+truststore.inject_into_ssl()
+
 import pandas as pd  # noqa: E402
 
 from icaif import calendar, live, runner  # noqa: E402
