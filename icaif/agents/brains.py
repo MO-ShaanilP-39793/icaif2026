@@ -522,10 +522,13 @@ def credentials_problem(model: str) -> Optional[str]:
 class CachedBrain:
     """Wraps a brain; answers from disk when the same question was asked before."""
 
-    def __init__(self, inner, directory: Path, offline: bool = False):
+    def __init__(self, inner, directory: Path, offline: bool = False, repeat: int = 0):
+        """`repeat` > 0 asks every question again under its own keys, to measure how far
+        two answers to the same question differ. A noise check reusing repeat 0's cache
+        would compare every answer with itself and report no noise at all."""
         import threading
 
-        self.inner, self.dir, self.offline = inner, Path(directory), offline
+        self.inner, self.dir, self.offline, self.repeat = inner, Path(directory), offline, int(repeat)
         self.dir.mkdir(parents=True, exist_ok=True)
         self.name = f"cached({inner.name})"
         self.hits = self.misses = 0
@@ -534,13 +537,15 @@ class CachedBrain:
         self._lock = threading.Lock()
 
     @staticmethod
-    def key(brain_name, role, system, payload, schema) -> str:
-        blob = json.dumps({"brain": brain_name, "role": role, "system": system,
-                           "payload": payload, "schema": schema.__name__}, sort_keys=True)
-        return hashlib.sha256(blob.encode()).hexdigest()
+    def key(brain_name, role, system, payload, schema, repeat: int = 0) -> str:
+        doc = {"brain": brain_name, "role": role, "system": system,
+               "payload": payload, "schema": schema.__name__}
+        if repeat:   # repeat 0 keeps the keys every earlier answer was cached under
+            doc["repeat"] = int(repeat)
+        return hashlib.sha256(json.dumps(doc, sort_keys=True).encode()).hexdigest()
 
     def decide(self, role, system, payload, schema, timeout):
-        k = self.key(self.inner.name, role, system, payload, schema)
+        k = self.key(self.inner.name, role, system, payload, schema, self.repeat)
         path = self.dir / f"{k}.json"
         if path.exists():
             with self._lock:

@@ -281,3 +281,73 @@ class Reflection(_Strict):
 
 
 SCHEMAS.update(event_report=EventReport, trigger=TriggerDecision, reflection=Reflection)
+
+
+# ----------------------------------------------------------------------------- desk v3
+
+class EntryWeight(_Strict):
+    """One name in the PM's entry book. A share of NAV, or of the equity sleeve when code
+    fixes the gross; code checks the 30% cap on the book as bought, so the bound here is
+    the widest either reading allows."""
+
+    name: str
+    weight: float = Field(ge=0.0, le=1.0)
+
+
+CONDITION_KINDS = {
+    # scope "name": the condition watches one name in the book
+    "move_from_entry_sigma": "name", "move_from_entry_pct": "name", "earnings_gap_pct": "name",
+    "give_back_from_peak": "name", "new_8k_item": "name",
+    # scope "book" and "market"
+    "drawdown_from_peak_pct": "book", "drawdown_from_entry_pct": "book",
+    "basket_move_from_entry_pct": "market", "vol_ratio_above": "market",
+}
+NAME_ACTIONS = ("review", "trim_quarter", "trim_half", "exit")
+BOOK_ACTIONS = ("review", "set_gross")
+
+
+class Condition(_Strict):
+    """When the PM would act, stated at entry with every input in front of it.
+
+    Later roles check facts against these instead of re-arguing the entry with less
+    information. A closed vocabulary, so code can evaluate each one: a condition in
+    prose would be a judgement every later role makes again, and no two would agree on
+    whether it had fired.
+    """
+
+    kind: Literal[tuple(CONDITION_KINDS)] = Field(
+        description="What is watched. Thresholds: *_sigma in daily HAR sigmas, signed "
+                    "(-2.5 is a fall of 2.5 sigmas); *_pct in percent, signed for moves "
+                    "(-3 is a 3% fall) and positive for drawdowns (3 is 3% below); "
+                    "give_back_from_peak a fraction of the gain since entry given back "
+                    "(0.5); vol_ratio_above the basket's vol over its 3-year median "
+                    "(1.8); new_8k_item fires on any 8-K carrying `item`.")
+    name: Optional[str] = Field(description="The name watched, for the name kinds; null otherwise.")
+    threshold: Optional[float] = Field(description="Required for every kind but new_8k_item.")
+    item: Optional[str] = Field(description="new_8k_item only: the 8-K item, e.g. \"2.05\".")
+    action: Literal["review", "trim_quarter", "trim_half", "exit", "set_gross"] = Field(
+        description="What you intend when it fires: review (look again), a trim or an exit "
+                    "of the name, or set_gross for the book.")
+    gross: Optional[float] = Field(ge=0.0, le=1.0, description="Required for set_gross.")
+    why: str = prose(300)
+
+
+class PMEntry(_Strict):
+    """The portfolio manager's entry: the book, the thesis, and the plan's conditions."""
+
+    weights: list[EntryWeight] = Field(max_length=30, description="Every name to hold; "
+                                       "names left out are not bought. Empty is all cash.")
+    thesis: str = prose(1500)
+    conditions: list[Condition] = Field(max_length=12)
+
+
+class PMCheck(_Strict):
+    """After code's self-check: keep the draft, or replace it once with a whole entry."""
+
+    action: Literal["confirm", "revise"]
+    revised: Optional[PMEntry] = Field(description="Required for revise: the whole entry "
+                                       "to trade instead. Null for confirm.")
+    rationale: str = prose(800)
+
+
+SCHEMAS.update(pm_entry=PMEntry, pm_check=PMCheck)

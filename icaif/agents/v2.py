@@ -150,6 +150,17 @@ class V2Desk(Desk):
 
     # ------------------------------------------------------------------ calls
 
+    # The role names, tiers and prompts a subclass asks under (desk v3 reuses these calls).
+    # The prefix keys the cache and the cost by role: a v3 PM sharing "v2_pm" would be
+    # handed a v2 PM's cached answer whenever their payloads matched.
+    PREFIX = "v2"
+
+    def _tier(self, role: str) -> str:
+        return ROLE_TIER[role]
+
+    def _system(self, role: str) -> str:
+        return prompts_v2.SYSTEM[role]
+
     def _left(self, slot: str) -> float:
         return self.cfg.slots[slot] - (time.perf_counter() - self._t_chain)
 
@@ -174,15 +185,16 @@ class V2Desk(Desk):
         started = []
         for key, payload, schema, check in asks:
             role = _role(key)
-            tier = ROLE_TIER[role]
-            system = prompts_v2.SYSTEM[role]
+            tier = self._tier(role)
+            system = self._system(role)
             left = self._left(slot)
             if left < self.cfg.min_call_s:
                 self._record(ctx, key, tier, "skipped", f"slot spent ({left:.0f}s left)", None,
                              payload, system, 0.0)
                 out[key] = None
                 continue
-            fut = self._pool.submit(self.brains[tier].decide, f"v2_{key}", system, payload, schema, left)
+            fut = self._pool.submit(self.brains[tier].decide, f"{self.PREFIX}_{key}", system, payload,
+                                    schema, left)
             started.append((key, tier, system, payload, check, fut, time.perf_counter()))
         for key, tier, system, payload, check, fut, t0 in started:
             source, reason, answer = "brain", None, None
