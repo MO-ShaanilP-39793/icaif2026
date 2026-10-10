@@ -502,3 +502,21 @@ def test_a_capped_book_lowers_only_a_book_above_the_floors_gross_and_keeps_its_s
     low = capped_book(book, floor_gross(0.75))
     assert sum(low.values()) == pytest.approx(0.25)
     assert low["A"] / low["B"] == pytest.approx(1.5)
+
+
+
+def test_a_sharpe_objective_tells_every_role_sharpe_alone_and_names_no_cash_level():
+    """Under a cash overlay set by code, a PM told the four-rank game would keep weighing
+    cash against drawdown and turnover rank: a choice that is no longer its own."""
+    shares = {t: 0.25 for t in TICKERS[:4]}
+    b = Script(pm=lambda p: _entry(shares), pm_check=_confirm)
+    d = _Full({"quick": b, "deep": b}, V3Config(analysts="reports_raw", objective="sharpe",
+                                               gross=("fixed", 1.0)))
+    sim.run(d, _mkt(), START, 1)
+    for role, system, payload in b.seen:
+        assert "judged on one number: its Sharpe ratio" in system, role
+        assert "mean of the four ranks" not in system and "turnover rank" not in system, role
+        assert "overlay" not in system.lower() and "overlay" not in json.dumps(payload).lower()
+    assert d.entry["source"] == "brain" and d.entry["gross"] == pytest.approx(1.0, abs=1e-5)
+    with pytest.raises(ValueError):
+        V3Config(objective="return")

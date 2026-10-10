@@ -221,7 +221,8 @@ def arm_name(args) -> str:
          else args.gross.replace(":", ""))
     streams = (f"_s16r{args.run:02d}" if args.design else
                "".join(f"-{s}" for s in sorted(args.drop)))
-    return (f"v3_{args.analysts}_{g}{streams}{'_evidence' if args.evidence else ''}"
+    return (f"v3_{args.analysts}_{g}{streams}{'_sharpe' if args.objective == 'sharpe' else ''}"
+            f"{'_evidence' if args.evidence else ''}"
             f"{'_nocheck' if args.no_self_check else ''}{f'_r{args.repeat}' if args.repeat else ''}")
 
 
@@ -257,7 +258,8 @@ def estimate(args, n_windows: int, quick: str, deep: str) -> tuple[int, float]:
 def run_arm(args, market, starts, out: Path) -> None:
     cfg = V3Config(analysts=args.analysts, gross=parse_gross(args.gross),
                    streams=tuple(s for s in STREAMS if s not in set(args.drop)),
-                   evidence=args.evidence, self_check=not args.no_self_check, anonymize=False)
+                   evidence=args.evidence, self_check=not args.no_self_check, anonymize=False,
+                   objective=args.objective)
     quick = (args.quick_model, args.quick_effort)
     deep = (args.deep_model, args.deep_effort)
     n_calls, usd = estimate(args, len(starts), quick[0], deep[0])
@@ -326,7 +328,7 @@ def run_arm(args, market, starts, out: Path) -> None:
     (out / "chain.jsonl").write_text("\n".join(json.dumps(e, default=str) for e in chain))
     (out / "config.json").write_text(json.dumps({"arm": name, "split": args.split, "windows": [str(s) for s in starts],
                                                  "config": {k: getattr(cfg, k) for k in
-                                                            ("analysts", "gross", "streams", "evidence",
+                                                            ("analysts", "gross", "streams", "evidence", "objective",
                                                              "self_check", "tiers", "slots")},
                                                  "quick": quick, "deep": deep, "repeat": args.repeat,
                                                  "cash_floor": args.cash_floor or 0.0,
@@ -372,6 +374,9 @@ def main() -> None:
     ap.add_argument("--run", type=int, default=None, help="with --design: the row, 1-16")
     ap.add_argument("--drop", nargs="*", default=[], choices=list(STREAMS))
     ap.add_argument("--evidence", action="store_true", help="the PM's prompt carries our backtest findings")
+    ap.add_argument("--objective", choices=["contest", "sharpe"], default="contest",
+                    help="sharpe: every role is told the book is judged on Sharpe alone; use with "
+                         "--gross fixed:1, and score the cash split as an overlay")
     ap.add_argument("--no-self-check", action="store_true")
     ap.add_argument("--repeat", type=int, default=0, help="ask again under repeat N's cache keys")
     ap.add_argument("--windows", type=int, default=None, help="the split's first K windows only")

@@ -134,6 +134,10 @@ class V3Config(V2Config):
     gross: tuple = ("free",)         # ("free",) | ("band", lo, hi) | ("fixed", g)
     streams: tuple = STREAMS
     self_check: bool = True
+    # What every role is told the book is judged on: "contest" (the four ranks) or
+    # "sharpe" (Sharpe alone, for a book whose cash split code sets outside the PM's
+    # decision; run it with gross ("fixed", 1.0) so the PM writes shares of its book).
+    objective: str = "contest"
     # The observation carries the regime model's read; `streams` decides whether a role
     # sees it. v2 hid it outright (the free desk trusted "calm" through a 3% fall); v3
     # measures it instead.
@@ -146,6 +150,8 @@ class V3Config(V2Config):
     def __post_init__(self):
         if self.analysts not in ("none", "reports_raw", "reports_only"):
             raise ValueError(f"analysts must be none, reports_raw or reports_only, not {self.analysts!r}")
+        if self.objective not in ("contest", "sharpe"):
+            raise ValueError(f"objective must be contest or sharpe, not {self.objective!r}")
         unknown = sorted(set(self.streams) - set(STREAMS))
         if unknown:
             raise ValueError(f"unknown streams {unknown}; the streams are {', '.join(STREAMS)}")
@@ -181,7 +187,10 @@ class V3Desk(V2Desk):
         return ROLE_TIER[role]
 
     def _system(self, role: str) -> str:
-        return (prompts_v3.SYSTEM_EVIDENCE if self.cfg.evidence else prompts_v3.SYSTEM)[role]
+        table = {("contest", False): prompts_v3.SYSTEM, ("contest", True): prompts_v3.SYSTEM_EVIDENCE,
+                 ("sharpe", False): prompts_v3.SYSTEM_SHARPE,
+                 ("sharpe", True): prompts_v3.SYSTEM_SHARPE_EVIDENCE}
+        return table[(self.cfg.objective, self.cfg.evidence)][role]
 
     # ------------------------------------------------------------------ state
 

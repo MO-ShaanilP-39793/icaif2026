@@ -169,3 +169,45 @@ signals favour or flag for a book held 15 sessions, and how the shapes would siz
 SYSTEM = {"market": MARKET, "earnings": EARNINGS, "news": NEWS, "quant": QUANT,
           "pm": PM, "pm_check": CHECK}
 SYSTEM_EVIDENCE = dict(SYSTEM, pm=PM_EVIDENCE, pm_check=CHECK_EVIDENCE)
+
+
+# ----------------------------------------------------------------------------- objective "sharpe"
+
+# The book's split between cash and stocks is set by code, outside the PM's decision, and
+# the PM is not told it (owner's design, 2026-10-10). Sharpe uses a zero risk-free rate, so
+# scaling a book leaves it unchanged: under such an overlay Sharpe is the one metric the
+# book's composition still decides, and drawdown and turnover follow the overlay. A PM told
+# the four-rank game would keep weighing cash against drawdown and turnover rank, a choice
+# no longer its own, so this variant tells every role the objective is Sharpe alone. It
+# names no cash level and no overlay: the PM writes shares of its book (a sleeve of gross
+# 1), and code scales the book afterwards.
+_FOUR_RANKS = """- Each entrant is ranked against the others on four metrics: cumulative return,
+  Sharpe ratio, maximum drawdown (lower is better) and turnover (lower is better). The
+  final score is the mean of the four ranks. Fees are already in the return; turnover
+  is ranked on its own as well. Buying a whole book from cash is one book of turnover.
+"""
+_SHARPE_ONLY = """- Your book is judged on one number: its Sharpe ratio over the window, the mean of
+  its round-by-round returns over their standard deviation (zero risk-free rate,
+  annualised). Fees are in the returns. Choose the book you expect to have the best
+  risk-adjusted return over the 15 sessions; how much of it is in stocks versus cash
+  does not change its Sharpe and is not part of your decision.
+"""
+_HOLD_COST = """something material happens, and every trade after entry costs turnover rank.
+"""
+_HOLD_COST_SHARPE = """something material happens; every trade after entry pays the fee.
+"""
+assert _FOUR_RANKS in GAME and _HOLD_COST in GAME
+GAME_SHARPE = GAME.replace(_FOUR_RANKS, _SHARPE_ONLY).replace(_HOLD_COST, _HOLD_COST_SHARPE)
+_CONDITIONS_SHARPE = CONDITIONS.replace("every trade costs the fee and turnover rank.",
+                                        "every trade costs the fee.")
+assert _CONDITIONS_SHARPE != CONDITIONS
+
+
+def _sharpe(text: str) -> str:
+    out = text.replace(GAME, GAME_SHARPE).replace(CONDITIONS, _CONDITIONS_SHARPE)
+    assert GAME_SHARPE in out
+    return out
+
+
+SYSTEM_SHARPE = {k: _sharpe(v) for k, v in SYSTEM.items()}
+SYSTEM_SHARPE_EVIDENCE = {k: _sharpe(v) for k, v in SYSTEM_EVIDENCE.items()}

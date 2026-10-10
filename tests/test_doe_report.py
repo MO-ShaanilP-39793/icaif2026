@@ -78,3 +78,24 @@ def test_with_too_few_windows_to_measure_a_difference_the_simpler_choice_stands(
     assert R.choose_floor(one)[0] == 0.0
     arch = {"reports_raw": pd.Series([3.0], index=["a"]), "none": pd.Series([3.6], index=["a"])}
     assert R.choose_architecture(arch, R.COST)[0] == "none"
+
+
+def _raw(effect_se: dict) -> dict:
+    """{measure: frame} from {stream: {measure: (effect, se)}}."""
+    out = {}
+    for m in R.RAW_SIGN:
+        out[m] = pd.DataFrame({s: {"effect": v[m][0], "se": v[m][1]} for s, v in effect_se.items()}).T
+    return out
+
+
+def test_the_raw_rule_keeps_a_stream_better_on_two_measures_unless_a_third_is_clearly_worse():
+    """Round 2's own cases: HAR vol better on all three; universe buys Sharpe with a
+    drawdown worse by 1.3 SE; filings worse on all three; macro better on two, a little
+    worse on Sharpe."""
+    e = _raw({
+        "har_vol": {"cumulative_return": (0.0029, 0.0017), "sharpe_ratio": (0.27, 0.29), "maximum_drawdown": (-0.0019, 0.0015)},
+        "universe": {"cumulative_return": (0.0005, 0.0023), "sharpe_ratio": (0.32, 0.24), "maximum_drawdown": (0.0021, 0.0017)},
+        "filings": {"cumulative_return": (-0.0020, 0.0017), "sharpe_ratio": (-0.08, 0.28), "maximum_drawdown": (0.0010, 0.0010)},
+        "macro": {"cumulative_return": (0.0008, 0.0016), "sharpe_ratio": (-0.15, 0.18), "maximum_drawdown": (-0.0014, 0.0018)},
+    })
+    assert R.keep_streams_raw(e) == ["har_vol", "macro"]

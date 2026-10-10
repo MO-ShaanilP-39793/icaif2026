@@ -66,6 +66,14 @@ analysts have the most to digest).
 *Decision rule:* the lowest mean score on the primary field. If the best is within one
 SE of a cheaper arm, take the cheaper arm (A1 < A3 < A2 in cost and latency).
 
+*Result (2026-10-09/10): **reports only**, fixed by the owner.* Mean score 3.24 (single PM),
+3.00 (reports + raw), 3.01 (reports only); the rule picks reports only as the cheaper of a
+tie. On raw numbers reports only led all three measures that differ: mean return 0.49%
+(0.22%, 0.09%), Sharpe 2.15 (1.68, 2.02), max drawdown 2.98% (3.20%, 3.22%), and it
+finished best of the three in 7, 6 and 6 of 13 windows on them. Turnover tracks the
+gross alone (all ~85% invested). Two of its PM calls first timed out while the Mac
+slept; the arm was rerun awake, re-asking only those two.
+
 ### Round 2: streams (16 arms, a 2^(7-3) fractional factorial, resolution IV)
 
 On round 1's architecture, no cash floor. Sixteen arms, each including a different half
@@ -105,10 +113,32 @@ minus the mean of the 8 without. Its effect is the mean over the 13 windows, wit
 those 13 values. The same is done for each raw metric, so we can see how a stream helps,
 not only whether (headlines may lower drawdown and cost return, for instance).
 
-*Decision rule:* keep a stream if its effect is negative (helps) by more than one SE.
-Drop it if it's positive by more than one SE (noise that hurts). In between, **drop it**:
-each stream costs prompt length, latency and money, and a stream that can't show its
-worth in 16 x 13 entries isn't earning its place.
+*Decision rule, as first written (ranks):* keep a stream if its effect is negative (helps)
+by more than one SE. Drop it if it's positive by more than one SE (noise that hurts). In
+between, **drop it**: each stream costs prompt length, latency and money, and a stream
+that can't show its worth in 16 x 13 entries isn't earning its place.
+
+*Decision rule, as revised by the owner after seeing the results (raw numbers):* keep a
+stream if it improves at least two of return, Sharpe and max drawdown, and worsens none
+by more than one SE (`doe_report.keep_streams_raw`). Raw numbers don't depend on our
+guess at the rival field. This changed the rule after the data was seen, which is
+recorded here so the hold-out check is read with that in mind.
+
+*Result (2026-10-10), z = effect / SE, signed so positive is better:*
+
+| Stream | Return | Sharpe | Max drawdown | Rank rule | Raw rule |
+| --- | ---: | ---: | ---: | --- | --- |
+| HAR vol | +0.29% (1.6) | +0.27 (0.9) | -0.19% (1.3) | drop | keep |
+| regime read | +0.21% (1.3) | +0.20 (1.0) | -0.20% (1.1) | drop | keep |
+| headlines | +0.18% (1.2) | +0.15 (0.5) | -0.06% (0.9) | drop | keep |
+| model ranks | +0.21% (0.9) | +0.53 (1.2) | +0.15% (-0.8) | keep | keep |
+| macro | +0.08% (0.5) | -0.15 (-0.8) | -0.14% (0.8) | drop | keep |
+| universe ranking | +0.05% (0.2) | +0.32 (1.3) | +0.21% (-1.3) | keep | drop |
+| 8-K filings | -0.20% (-1.2) | -0.08 (-0.3) | +0.10% (-1.0) | drop | drop |
+
+**Fixed by the owner: every stream but the 8-K filings.** That is the raw rule's set plus
+the universe ranking, whose Sharpe gain the owner kept over the rule's drawdown guard.
+Round 2 cost about $22; one window's PM call hit a Gemini 503 and was re-asked.
 
 ### Round 3: cash floor (2 arms, plus free scoring of the rest)
 
@@ -128,6 +158,68 @@ all seven floors. If not, the remaining floors are run for real (5 more arms).
 of "no floor", choose no floor, since a constraint has to earn its place too. For
 reference, round 0's holds scored worse at every deep floor than at 75% invested, so a
 deep floor wins only if the PM's own names behave differently under it.
+
+*Result so far (2026-10-10), base: reports only, every stream but 8-K filings.* The free
+scores ranked 50% cash first (3.00 against 3.28 for no floor), but the check failed: told a
+floor, the PM picks a different book, not a scaled one (about half the names shared with
+its no-floor book, share correlation 0.14-0.23), and the real floors scored 0.3 better
+(40%) and 0.3 worse (90%) than their capped stand-ins. Capping keeps Sharpe flat (1.58 to
+1.53, as the owner reasoned); a real floor doesn't.
+
+| | Mean return | Sharpe | Mean max DD | Turnover | Score |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| no floor (65-96% invested) | -0.04% | 1.58 | 3.24% | 0.81% | 3.28 |
+| real 40% floor (40-60% invested) | **+0.42%** | **2.52** | 2.05% | 0.53% | **2.79** |
+| real 90% floor (10% invested) | -0.06% | 0.55 | 0.45% | 0.10% | 3.38 |
+| *inverse-vol hold 75%* | *+0.12%* | *2.01* | *2.65%* | *0.72%* | *2.81* |
+
+So, as the design says when the check fails, the other floors run for real (20, 50 and 75%,
+run in parallel). The no-floor arm here (3.28) and round 2's all-streams row (3.01) differ
+only by the filings stream, and round 2 says dropping it should help slightly, yet
+the arm without it scored 0.27 worse: run-to-run noise is large, and round 4 measures it before any floor's lead is read as real.
+
+*All real floors (2026-10-10; 20, 50 and 75% ran in parallel):*
+
+| PM told: at least ... cash | Invested | Return | Sharpe | Max DD | Turnover | Score |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| 0% | 84% | -0.04% | 1.58 | 3.24% | 0.81% | 3.28 |
+| 20% | 73% | +0.37% | 2.23 | 2.73% | 0.70% | 2.90 |
+| 40% | 55% | +0.42% | 2.52 | 2.05% | 0.53% | 2.79 |
+| 50% | 48% | -0.04% | 1.44 | 2.02% | 0.46% | 3.10 |
+| 75% | 25% | +0.03% | 1.35 | 0.92% | 0.24% | 3.08 |
+| 90% | 10% | -0.06% | 0.55 | 0.45% | 0.10% | 3.38 |
+
+Drawdown and turnover fall steadily with cash; return and Sharpe don't follow it. 40% and
+50% invested almost alike (55%, 48%) yet scored Sharpe 2.52 and 1.44: cash can't do that,
+so the gap is which names the PM happened to pick. A real floor mostly measures the PM's
+run-to-run variation, not the floor.
+
+### The overlay: code sets the cash split, the PM is never told (owner's design)
+
+Sharpe has a zero risk-free rate (`starter-kit/docs/evaluation.md`), so scaling a book
+leaves it unchanged, while drawdown and turnover shrink with the scale. The owner's design
+takes the cash split out of the PM's hands: the PM writes its book, and code scales it.
+Every round-2 and round-3 book was already written by a PM that knew of no later scaling,
+so the design is scored on all 221 of them (`doe_report.py overlay`, no calls):
+
+| Invested | Return | Sharpe | Max DD | Turnover | DD rank | Turnover rank | Score | vs as chosen |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| as the PM chose (65-96%) | 0.06% | 1.53 | 2.99% | 0.82% | 3.09 | 2.57 | 3.30 | |
+| 50% | ~0 | 1.51 | 1.84% | 0.48% | 2.15 | 2.00 | 3.00 | -0.31 (better in 121, worse in 21) |
+| 25% | ~0 | 1.49 | 0.92% | 0.24% | 2.00 | 2.00 | 3.02 | -0.28 |
+| 10% | ~0 | 1.48 | 0.37% | 0.10% | 2.00 | 2.00 | 3.06 | -0.25 |
+| 1% | ~0 | 1.47 | 0.04% | 0.01% | 2.00 | 2.00 | 3.07 | -0.23 |
+
+Every overlay beats the PM's own cash choice. Below about 25% invested the drawdown and
+turnover ranks stop improving (on the modelled field a pure-cash rival always holds rank
+1 and every invested rival is already beaten), while the return rank keeps falling. So
+whether 1% beats 25% turns on whether the real field holds a pure-cash team.
+
+**A "maximise Sharpe" PM, under the overlay** (`--objective sharpe --gross fixed:1`: every
+role told the book is judged on Sharpe alone; no prompt or input names a cash level).
+Its books' Sharpe was 1.14 against the four-rank PM's 1.52 (difference -0.38, SE 0.60,
+higher in 6 of 13), and under every overlay it scored 0.04-0.06 worse (SE 0.11-0.14).
+Within noise both ways; the four-rank prompt stays.
 
 ### Round 4: noise (2 arms)
 

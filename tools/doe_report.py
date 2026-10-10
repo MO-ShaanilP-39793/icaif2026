@@ -4,6 +4,7 @@
     .venv/bin/python tools/doe_report.py streams TAG x16           # round 2: each stream's effect
     .venv/bin/python tools/doe_report.py cash BASE [--real TAG ..] # round 3: the cash floor
     .venv/bin/python tools/doe_report.py noise TAG TAG [TAG]       # round 4: repeats of one arm
+    .venv/bin/python tools/doe_report.py overlay TAG ...           # each arm's books at fixed cash splits
     .venv/bin/python tools/doe_report.py table TAG ...             # every window's responses, as CSV
 
 A TAG is a directory under output/entry/ written by `tools/entry_replay.py arm`. Scores
@@ -17,9 +18,12 @@ of the table after the fact:
 - **Architecture**: the lowest mean score, unless a cheaper architecture is within one
   SE of it (paired), in which case the cheapest such. Cost: none < reports_only <
   reports_raw.
-- **Streams**: a stream is kept only if its main effect helps by more than one SE. Every
-  other stream is dropped: one that can't show its worth in 16 x 13 entries isn't
-  earning its prompt length, latency and money.
+- **Streams, on raw numbers** (the rule of record since 2026-10-10): a stream is kept if
+  it improves at least two of return, Sharpe and max drawdown, and worsens none of them
+  by more than one SE. Raw numbers don't depend on our guess at the rival field, and
+  the ranks do. Turnover is left out: a hold's turnover is its gross, which no stream
+  moves by more than a few hundredths of a percent. The rank rule (kept only if the
+  overall score improves by more than one SE) is still printed beside it.
 - **Cash floor**: the lowest mean score, unless "no floor" is within one SE of it.
 - **Noise**: reported, and used to read the others: a gap smaller than the spread
   between repeats of one arm is not a finding.
@@ -31,6 +35,7 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import numpy as np  # noqa: E402
 import pandas as pd  # noqa: E402
@@ -140,8 +145,31 @@ def stream_effects(scores: dict, included: dict) -> pd.DataFrame:
 
 
 def keep_streams(effects: pd.DataFrame) -> list:
-    """Kept only if the stream helps by more than one SE; a tie drops it."""
+    """The rank rule: kept only if the score improves by more than one SE; a tie drops it."""
     return [s for s, r in effects.iterrows() if r["effect"] < -r["se"]]
+
+
+# The raw measures the streams rule weighs, each signed so that positive is better.
+RAW_SIGN = {"cumulative_return": 1.0, "sharpe_ratio": 1.0, "maximum_drawdown": -1.0}
+
+
+def keep_streams_raw(effects: dict) -> list:
+    """The raw rule: improves at least two of return, Sharpe and drawdown, and worsens
+    none by more than one SE. `effects`: {measure: `stream_effects` frame}.
+
+    Judged on direction, not on each effect clearing its own noise: on 13 windows almost
+    no single stream's effect does (most sit within 1-1.6 SE), so a significance rule
+    would keep nothing and call it a finding. The one-SE guard still drops a stream that
+    clearly costs on one measure for what it buys on another (the universe ranking in
+    round 2: Sharpe up, drawdown worse by 1.3 SE).
+    """
+    keep = []
+    for s in effects["sharpe_ratio"].index:
+        signed = {m: sign * effects[m].loc[s, "effect"] for m, sign in RAW_SIGN.items()}
+        z = {m: signed[m] / effects[m].loc[s, "se"] for m in RAW_SIGN}
+        if sum(v > 0 for v in signed.values()) >= 2 and not any(v < -1.0 for v in z.values()):
+            keep.append(s)
+    return keep
 
 
 def choose_floor(scores: dict) -> tuple:
@@ -215,8 +243,13 @@ def cmd_streams(tags: list) -> None:
         e = stream_effects({r: a.rows()[resp] for r, a in runs.items()}, included)
         cols[resp] = e["effect"].round(5)
     print(pd.DataFrame(cols).to_string())
-    keep = keep_streams(primary)
-    print(f"\nround 2 verdict: keep {keep or 'none'}; drop {[s for s in STREAMS if s not in keep]}.")
+    raw = {m: stream_effects({r: a.rows()[m] for r, a in runs.items()}, included) for m in RAW_SIGN}
+    print("\nthe raw rule's reading (z = effect / SE, signed so positive is better):")
+    print(pd.DataFrame({m: (RAW_SIGN[m] * raw[m]["effect"] / raw[m]["se"]).round(2) for m in RAW_SIGN}).to_string())
+    rank_keep = keep_streams(primary)
+    keep = keep_streams_raw(raw)
+    print(f"\nthe rank rule would keep {rank_keep or 'none'}.")
+    print(f"round 2 verdict (raw rule): keep {keep or 'none'}; drop {[s for s in STREAMS if s not in keep]}.")
     print("The kept set is generally not one of the 16 rows: rounds 3 and 4 run it as its own arm "
           f"(entry_replay.py arm --analysts {arch.pop()} --drop {' '.join(s for s in STREAMS if s not in keep)}).")
 
@@ -262,7 +295,8 @@ def cmd_cash(base: str, real: list) -> None:
 def cmd_noise(tags: list) -> None:
     arms = [Arm(t) for t in tags]
     same_windows(arms)
-    cfgs = [{k: v for k, v in a.config["config"].items()} for a in arms]
+    # A run recorded before a setting existed ran at that setting's default.
+    cfgs = [dict({"objective": "contest"}, **a.config["config"]) for a in arms]
     if any(c != cfgs[0] for c in cfgs):
         raise SystemExit("noise compares repeats of one arm: the configs differ")
     reps = sorted(a.config.get("repeat", 0) for a in arms)
@@ -283,6 +317,53 @@ def cmd_noise(tags: list) -> None:
     print("\nA gap between arms smaller than the SD of the arm's mean is not a finding.")
 
 
+OVERLAYS = (0.01, 0.05, 0.10, 0.25, 0.50)
+
+
+def cmd_overlay(tags: list) -> None:
+    """Each arm's books scaled to fixed invested shares the PM never saw, and scored.
+
+    The owner's design (2026-10-10): code sets the cash split, independent of the PM. A
+    hold trades once, so a book bought again at a lower gross is exactly that split
+    (`v3.BoughtBook`); Sharpe, with a zero risk-free rate, doesn't move, and drawdown
+    and turnover shrink with it. Scored against the same fields as every arm.
+    """
+    from datetime import date
+
+    from icaif import markets, sim
+    from icaif.agents.v3 import BoughtBook
+    import entry_replay as E
+
+    m = markets.research_market()
+    arms = [Arm(t) for t in tags]
+    starts = sorted({date.fromisoformat(w) for a in arms for w in a.books()})
+    flds = E.fields(m, starts)
+    out = []
+    for a in arms:
+        rows = []
+        for w, book in a.books().items():
+            if not book or sum(book.values()) <= 0:
+                continue
+            d = date.fromisoformat(w)
+            rows.append(E.metrics_row(sim.run(BoughtBook(book), m, d, 15), d, "as_chosen"))
+            for g in OVERLAYS:
+                rows.append(E.metrics_row(sim.run(BoughtBook(book, g), m, d, 15), d, f"overlay_{int(g * 100)}"))
+        out.append(E.ranked(pd.DataFrame(rows), flds).assign(tag=a.tag))
+    out = pd.concat(out, ignore_index=True)
+    out.to_csv(OUT / "overlay_scores.csv", index=False)
+    cols = list(METRICS) + [f"rank_{m_}" for m_ in METRICS] + ["overall_score"]
+    for f in FIELDS:
+        o = out[out["field"] == f]
+        s = o.groupby("strategy")[cols].mean()
+        s[["cumulative_return", "maximum_drawdown", "turnover"]] *= 100
+        p = o.pivot_table(index=["tag", "window"], columns="strategy", values="overall_score")
+        s["vs_as_chosen"] = [(p[k] - p["as_chosen"]).mean() for k in s.index]
+        s["n"] = o.groupby("strategy").size()
+        print(f"\n{f} field" + ("  (primary)" if f == "no_clone" else "") + " (return, drawdown, turnover in %)")
+        print(s.round(3).to_string())
+    print(f"\n-> {OUT / 'overlay_scores.csv'}")
+
+
 def cmd_table(tags: list) -> None:
     rows = []
     for t in tags:
@@ -299,7 +380,7 @@ def cmd_table(tags: list) -> None:
 
 def main() -> None:
     ap = argparse.ArgumentParser()
-    ap.add_argument("command", choices=["arch", "streams", "cash", "noise", "table"])
+    ap.add_argument("command", choices=["arch", "streams", "cash", "noise", "overlay", "table"])
     ap.add_argument("tags", nargs="+")
     ap.add_argument("--real", nargs="*", default=[], help="cash: real-floor arms to check the free scores")
     args = ap.parse_args()
@@ -313,6 +394,8 @@ def main() -> None:
         cmd_cash(args.tags[0], args.real)
     elif args.command == "noise":
         cmd_noise(args.tags)
+    elif args.command == "overlay":
+        cmd_overlay(args.tags)
     else:
         cmd_table(args.tags)
 
