@@ -32,6 +32,7 @@ and these are a research split, not a board.
 """
 
 import copy
+import time
 from dataclasses import dataclass, field
 from typing import Optional
 
@@ -413,7 +414,10 @@ class V3Desk(V2Desk):
                                       "rationale": final.thesis if final is not None else "",
                                       "conditions": len(final.conditions) if final is not None else 0,
                                       "from": how},
-                         "traded": w is not None})
+                         "traded": w is not None,
+                         # The live runner reports every role's latency; the whole entry's
+                         # (analysts, draft and check) is what a deadline is spent on.
+                         "latency_s": round(time.perf_counter() - self._t_chain, 3)})
         return w
 
 

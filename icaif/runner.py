@@ -109,8 +109,24 @@ class Config:
     # later round holds, so the first real upload would have been Official's entry, the one
     # round that matters. Refused for any other phase, so Official's entry rule can't change.
     late_entry: bool = False
+    # The agent desk: "v1" (the levered desk) or "v3" (the PM's entry, then hold; the
+    # owner's choice for Official, 2026-10-11). v3 asks `quick_model` for its analysts
+    # and `model` for its PM, and `overlay` is the invested share code holds whatever
+    # the PM's book sums to, the PM never told. With an overlay, a rule book that stands
+    # in for a failed v3 desk is scaled to the same share: the fallback must not put 85%
+    # of the book in stocks when the desk it stands in for would have put 10%.
+    desk: str = "v1"
+    quick_model: Optional[str] = None
+    overlay: Optional[float] = None
 
     def __post_init__(self):
+        if self.desk not in ("v1", "v3"):
+            raise ValueError(f"desk must be 'v1' or 'v3', not {self.desk!r}")
+        if self.overlay is not None and (self.desk != "v3" or not 0.0 < self.overlay <= 1.0):
+            raise ValueError("overlay is v3's invested share, in (0, 1]")
+        self.quick_model = self.quick_model or self.model
+        if self.quick_model not in brains.ALLOWED_MODELS:
+            raise ValueError(f"quick_model must be one of {brains.ALLOWED_MODELS}, not {self.quick_model!r}")
         if self.late_entry and self.phase != "validation":
             raise ValueError("late_entry is for Validation only; Official enters at round 1")
         if self.submit not in ("rule", "agent"):
@@ -438,12 +454,40 @@ class _Spent:
 
 
 def make_brain(cfg: Config, st: State):
-    if cfg.shadow == "rule":
+    """The agent desk's brain; for v3, {"quick": analysts' brain, "deep": the PM's}."""
+    if cfg.desk == "v3":
+        from icaif.agents.v3 import HoldBrain
+
+        if cfg.shadow == "rule":
+            return {"quick": HoldBrain(), "deep": HoldBrain()}
+    elif cfg.shadow == "rule":
         return brains.RuleBrain()
     left = cfg.shadow_cost_cap - float(st.data.get("spent_usd", 0.0))
     if left <= 0:
         return _Spent(cfg.shadow_cost_cap)
+    if cfg.desk == "v3":
+        # Each tier may spend what is left: the cap is checked before a call, so the two
+        # together can overrun it by at most one entry's calls (about $0.25).
+        return {"quick": brains.make(cfg.quick_model, "medium", max_cost=left),
+                "deep": brains.make(cfg.model, cfg.effort, max_cost=left)}
     return brains.make(cfg.model, cfg.effort, max_cost=left)
+
+
+def v3_config(cfg: Config, budget_s: float):
+    """v3 as stage 1 chose it (stage1_doe.md): the analysts' reports only, every stream but
+    the 8-K filings, the four-rank prompt, the PM's own book scaled to `cfg.overlay`.
+
+    The slots are fractions of the round's budget, not the replay's fixed 17 minutes: a
+    live entry runs inside the runner's lead after scoring, and a PM still thinking at the
+    deadline costs the entry. 3.1 Pro took about a minute an entry in replay.
+    """
+    from icaif.agents.v3 import STREAMS, V3Config
+
+    return V3Config(window_days=cfg.window_days, anonymize=False, journal_strict=False,
+                    analysts="reports_only", streams=tuple(s for s in STREAMS if s != "filings"),
+                    overlay=cfg.overlay, round_budget_s=budget_s,
+                    slots={"analysts": 0.4 * budget_s, "pm": 0.8 * budget_s, "pm_check": budget_s},
+                    tiers={"quick": (cfg.quick_model, "medium"), "deep": (cfg.model, cfg.effort)})
 
 
 def run_desk(name: str, brain, cfg: Config, st: State, mkt: sim.Market, r: Round,
@@ -456,10 +500,16 @@ def run_desk(name: str, brain, cfg: Config, st: State, mkt: sim.Market, r: Round
     that fails is recorded and the desk decides without memory (`journal_strict` off):
     the submitted book's entry must not wait on a bug in what the agent is shown.
     """
-    dcfg = DeskConfig(window_days=cfg.window_days, anonymize=False, journal_strict=False,
-                      enter_any_round=cfg.late_entry,
-                      round_budget_s=budget_s if budget_s is not None else cfg.agent_budget_s)
-    desk = Desk(brain, dcfg, **(inputs or {}))
+    budget = budget_s if budget_s is not None else cfg.agent_budget_s
+    if name == "agent" and cfg.desk == "v3":
+        from icaif.agents.v3 import V3Desk
+
+        tiers = brain if isinstance(brain, dict) else {"quick": brain, "deep": brain}
+        desk = V3Desk(tiers, v3_config(cfg, budget), **(inputs or {}))
+    else:
+        dcfg = DeskConfig(window_days=cfg.window_days, anonymize=False, journal_strict=False,
+                          enter_any_round=cfg.late_entry, round_budget_s=budget)
+        desk = Desk(brain, dcfg, **(inputs or {}))
     desk.restore(st.data["desks"].get(name), mkt.tickers)
     if entered_now is not None:
         desk.book.entered = entered_now
@@ -516,6 +566,16 @@ def journal_files(cfg: Config, st: State) -> None:
             "phase": cfg.phase, "desk": name, "book": books.get(name, name), "submit": cfg.submit,
             "rounds_on_record": len(j.get("rounds", [])), "pnl_since": Journal.from_json(j).since(),
             "journal": j}), indent=1))
+
+
+def overlaid(weights: dict, share: float, tickers) -> dict:
+    """`weights` scaled to invested share `share` (only ever down, so no cap is breached)."""
+    from icaif import weights as W
+
+    total = float(sum(weights.values()))
+    if total <= share:
+        return weights
+    return W.safe({t: v * share / total for t, v in weights.items()}, list(tickers))
 
 
 def _describe(w: Optional[dict], info: dict, current: Optional[pd.Series]) -> dict:
@@ -762,6 +822,9 @@ def _round(cfg, r: Round, st: State, session, doors: Doors, rec: dict, t0: float
         chosen, source = rule_w, "rule"
         if cfg.submit == "agent":
             rec["warnings"].append("the agent desk failed; the rule's answer stands")
+            if cfg.overlay is not None and chosen is not None:
+                chosen = overlaid(chosen, cfg.overlay, tickers)
+                rec["warnings"].append(f"the rule's book is scaled to the {cfg.overlay:.0%} overlay")
     else:
         chosen, source = None, "none"
 
@@ -836,7 +899,12 @@ def _round(cfg, r: Round, st: State, session, doors: Doors, rec: dict, t0: float
     for k, pb in papers.items():
         st.data["paper"][k] = pb.to_json()
     for label in ("rule", "agent", "shadow"):
-        x = rec.get(label) or {}
+        x = rec.get(label)
+        # rec["shadow"] starts as the shadow setting's name and becomes a record only when
+        # the shadow runs; in agent mode it never does, and reading the name as a record
+        # crashed every agent-mode round after its upload.
+        if not isinstance(x, dict):
+            continue
         for issue in x.get("journal_issues", []):
             rec["warnings"].append(f"journal ({label}): {issue}")
         if x.get("journal_error"):
@@ -857,29 +925,39 @@ def _agent(cfg, r, st, doors, rec, mkt, book, current, *, reserve_s, entered_now
         rec["warnings"].append(f"{label}: {left():.0f}s left before the deadline; not run")
         rec[label] = {"action": "not run", "why": "no time left"}
         return None, False
-    brain, meta, budget = None, {}, 0.0
+    brain, meta, budget, recorders = None, {}, 0.0, []
     try:
         if cfg.scoring:
             rec[f"{label}_scores"] = doors.score(cfg, r, doors.now(), left())
         inputs, meta = doors.inputs(cfg, mkt, r)
-        brain = Recording(doors.brain(cfg, st))
-        problem = brains.credentials_problem(cfg.model) if cfg.shadow == "claude" else None
-        if problem:
-            rec["warnings"].append(f"{label}: {problem}; every role falls back to the rule")
+        made = doors.brain(cfg, st)
+        if isinstance(made, dict):
+            tiers = {k: Recording(b) for k, b in made.items()}
+            recorders = list(tiers.values())
+            brain = tiers["deep"]
+        else:
+            brain = tiers = Recording(made)
+            recorders = [brain]
+        for m_ in {cfg.model, cfg.quick_model} if cfg.desk == "v3" else {cfg.model}:
+            problem = brains.credentials_problem(m_) if cfg.shadow == "claude" else None
+            if problem:
+                rec["warnings"].append(f"{label}: {problem}; every role falls back to the rule")
         budget = min(cfg.agent_budget_s, max(left(), 0))
-        w, info = run_desk("agent", brain, cfg, st, mkt, r, book, entered_now=entered_now,
+        w, info = run_desk("agent", tiers, cfg, st, mkt, r, book, entered_now=entered_now,
                            inputs=inputs, budget_s=budget)
     except Exception as err:  # noqa: BLE001
         rec["errors"].append(f"{label} desk: {type(err).__name__}: {err}")
         rec[label] = {"action": "failed", "error": f"{type(err).__name__}: {err}", "inputs": meta}
         return None, False
     finally:
-        if brain is not None:
-            if isinstance(brain.inner, brains.PAID):
-                st.data["spent_usd"] = float(st.data.get("spent_usd", 0.0)) + brain.inner.cost()
-            if brain.calls:
-                write_atomic(cfg.out / r.id / f"{label}_calls.json",
-                             json.dumps(live._clean(brain.calls), indent=1, default=str))
+        calls = []
+        for b in (recorders if brain is not None else []):
+            if isinstance(b.inner, brains.PAID):
+                st.data["spent_usd"] = float(st.data.get("spent_usd", 0.0)) + b.inner.cost()
+            calls += b.calls
+        if calls:
+            write_atomic(cfg.out / r.id / f"{label}_calls.json",
+                         json.dumps(live._clean(calls), indent=1, default=str))
     rec[label] = {**_describe(w, info, current), "inputs": meta, "brain": brain.name,
                   "budget_s": round(budget, 1)}
     return w, True
@@ -959,6 +1037,10 @@ def worker_argv(cfg: Config, row: dict, schedule_path: Path, as_of=None) -> list
         argv.append("--no-scores")
     if cfg.late_entry:
         argv.append("--late-entry")
+    if cfg.desk != "v1":
+        argv += ["--desk", cfg.desk, "--quick-model", cfg.quick_model]
+    if cfg.overlay is not None:
+        argv += ["--overlay", repr(cfg.overlay)]
     if as_of is not None:
         argv += ["--as-of", pd.Timestamp(as_of).isoformat()]
     return argv

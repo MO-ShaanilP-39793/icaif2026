@@ -605,3 +605,92 @@ def test_the_guard_lets_the_rule_enter_after_round_1_only_with_the_switch():
     assert runner.guard({t: 0.025 for t in TICKERS}, **args, late_entry=True) == (True, "trade")
     entered = dict(args, entered=True)
     assert runner.guard({t: 0.025 for t in TICKERS}, **entered, late_entry=True)[0] is False
+
+
+# ----------------------------------------------------------------------------- desk v3 (Official)
+
+def _v3(world, **kw):
+    kw.setdefault("overlay", 0.10)
+    return _cfg(world, submit="agent", desk="v3", **kw)
+
+
+def _v3_brain(stated):
+    from tests.test_v3 import Script, _confirm, _entry
+
+    return Script(pm=lambda p: _entry(stated), pm_check=_confirm)
+
+
+def _gross(rec):
+    return sum(float(w) for w in _written(rec)["weights"].values())
+
+
+def test_v3_enters_with_the_pms_names_at_the_overlays_share_and_the_pm_never_hears_of_it(world):
+    """Official's entry: the PM's book, scaled by code to 10% invested. A runner that
+    submitted the PM's own gross would put the book 80% in stocks."""
+    stated = {t: 0.1 for t in TICKERS[:8]}
+    cfg = _v3(world)
+    rec = _play(world, cfg, _doors(world, brain=_v3_brain(stated)), DAY1, 1)
+    assert rec["submitted"]["source"] == "agent" and rec["submitted"]["action"] == "trade"
+    assert _gross(rec) == pytest.approx(0.10, abs=30e-6)
+    w = {k: float(v) for k, v in _written(rec)["weights"].items() if float(v) > 0}
+    assert set(w) == set(stated) and max(w.values()) - min(w.values()) < 2e-6     # shape kept
+    calls = json.loads((cfg.out / rec["round_id"] / "agent_calls.json").read_text())
+    roles = {c["role"] for c in calls}
+    assert {"v3_pm", "v3_pm_check", "v3_market", "v3_quant"} <= roles
+    for c in calls:
+        assert "overlay" not in json.dumps(c["payload"]).lower()
+        assert c["payload"].get("gross_rule", {"rule": "free"})["rule"] == "free"
+
+
+def test_after_v3_enters_every_round_holds_and_the_pm_is_not_asked_again(world):
+    brain = _v3_brain({t: 0.1 for t in TICKERS[:8]})
+    cfg = _v3(world)
+    _play(world, cfg, _doors(world, brain=brain), DAY1, 1)
+    asked = len(brain.seen)
+    for day, n in ((DAY1, 2), (DAY1, 7), (DAY2, 1)):
+        rec = _play(world, cfg, _doors(world, brain=brain), day, n)
+        assert rec["submitted"]["action"] == "hold", (day, n, rec["submitted"])
+        assert not (cfg.out / rec["round_id"] / "decision.json").exists()
+    assert len(brain.seen) == asked
+
+
+def test_a_v3_pm_that_fails_enters_with_inverse_vol_at_the_overlays_share(world):
+    from icaif.agents.v3 import HoldBrain
+
+    rec = _play(world, _v3(world), _doors(world, brain=HoldBrain()), DAY1, 1)
+    assert rec["submitted"]["source"] == "agent" and _gross(rec) == pytest.approx(0.10, abs=30e-6)
+    assert len([w for w in _written(rec)["weights"].values() if float(w) > 0]) == 30
+
+
+def test_a_v3_desk_that_crashes_hands_the_entry_to_the_rule_scaled_to_the_overlay(world):
+    """The rule alone enters at the regime's 30-85%: standing in for a desk that would
+    have put 10% in stocks, unscaled it would be the opposite of the cash decision."""
+    def broken(cfg, mkt, r):
+        raise RuntimeError("inputs down")
+
+    rec = _play(world, _v3(world), _doors(world, brain=_v3_brain({}), inputs=broken), DAY1, 1)
+    assert rec["submitted"]["source"] == "rule" and rec["rule"]["gross"] > 0.25
+    assert _gross(rec) == pytest.approx(0.10, abs=30e-6)
+    assert any("overlay" in w for w in rec["warnings"])
+
+
+def test_v3_settings_are_checked_and_reach_every_scheduled_worker(tmp_path):
+    cfg = runner.Config(phase="official", submit="agent", desk="v3", model="gemini-3.1-pro-preview",
+                        quick_model="gemini-3.1-pro-preview", overlay=0.1, out=tmp_path)
+    argv = runner.worker_argv(cfg, {"id": "r1"}, tmp_path / "s.json")
+    i = argv.index("--overlay")
+    assert argv[i + 1] == "0.1" and argv[argv.index("--desk") + 1] == "v3"
+    assert argv[argv.index("--quick-model") + 1] == "gemini-3.1-pro-preview"
+    with pytest.raises(ValueError):
+        runner.Config(phase="official", overlay=0.1)              # an overlay is v3's
+    with pytest.raises(ValueError):
+        runner.Config(phase="official", desk="v3", overlay=1.5)
+
+
+
+def test_an_agent_mode_round_records_no_error_once_its_book_is_out(world):
+    """Agent mode never runs the shadow, so rec["shadow"] stays the setting's name; the
+    end-of-round loop read it as a record and logged a crash on every round."""
+    pick = EntryDecision(shape="inverse_vol", views="none", exposure=0.5, avoid=[], rationale="r")
+    rec = _play(world, _cfg(world, submit="agent"), _doors(world, brain=Scripted(entry=pick)), DAY1, 1)
+    assert rec["errors"] == [] and rec["submitted"]["source"] == "agent"

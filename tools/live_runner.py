@@ -62,7 +62,9 @@ def _cfg(args, phase=None) -> runner.Config:
                          live=getattr(args, "live", False),
                          out=Path(args.out) if getattr(args, "out", None) else None,
                          scoring=not args.no_scores, model=args.model,
-                         late_entry=getattr(args, "late_entry", False))
+                         late_entry=getattr(args, "late_entry", False),
+                         desk=getattr(args, "desk", "v1"), quick_model=getattr(args, "quick_model", None),
+                         overlay=getattr(args, "overlay", None))
 
 
 def _common(p):
@@ -74,6 +76,12 @@ def _common(p):
                    help="the shadow's LLM (Gemini through its API, Claude through Anthropic)")
     p.add_argument("--no-scores", action="store_true", help="skip the daily model (shadow only)")
     p.add_argument("--out", default=None, help="phase directory (default output/live/<phase>)")
+    p.add_argument("--desk", choices=["v1", "v3"], default="v1",
+                   help="the agent desk: v1 (levered) or v3 (the PM's entry, then hold)")
+    p.add_argument("--quick-model", default=None, choices=brains.ALLOWED_MODELS,
+                   help="v3: the analysts' model (default --model)")
+    p.add_argument("--overlay", type=float, default=None,
+                   help="v3: the invested share code holds, the PM never told (0.1 = 90%% cash)")
     p.add_argument("--late-entry", action="store_true",
                    help="Validation only: the rule may enter from cash after round 1")
 
@@ -208,7 +216,8 @@ def _report(out: Path) -> None:
     print(f"\n{'round':<{n}}{'ready s':>8}{'rule':>7}{'upload':>11}{'shadow':>9}  outcome")
     for x in rows:
         sub = x.get("submitted", {})
-        shadow = (x.get("shadow") or {}).get("action", "-")
+        sh = x.get("shadow")
+        shadow = sh.get("action", "-") if isinstance(sh, dict) else "-"   # agent mode: no shadow
         print(f"{x['round_id']:<{n}}{str(x.get('ready_before_deadline_s', '-')):>8}"
               f"{(x.get('rule') or {}).get('action', '-'):>7}"
               f"{sub.get('upload', {}).get('status', '-'):>11}{shadow:>9}  {x.get('outcome')}")
