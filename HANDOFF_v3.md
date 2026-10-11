@@ -129,8 +129,8 @@ against the noise.
   (Gemini, Alpaca), `starter-kit/.env` (Codabench token, profile) and
   `starter-kit/.icaif/` (the team token, issued once and never reset).
   `SEC_USER_AGENT` is exported in `~/.profile`; confirm it is in the environment of the
-  shell that runs `run`. **The HF read token used for the data download appeared in the VM
-  session's transcript: delete it on HF if that hasn't been done.**
+  shell that runs `run`. The HF read token used for the data download appeared in the VM
+  session's transcript; the owner deleted it on HF (confirmed Oct 11).
 - **CPU.** The e2 landed on a 2014 Broadwell, 4-8x slower than the Mac. In `--submit agent`
   mode, scoring and inputs run **before** v3 decides, so they sit on the entry's critical
   path. Measured in a dry run: scoring about 44 s, inputs about 71 s. v3's own chain was
