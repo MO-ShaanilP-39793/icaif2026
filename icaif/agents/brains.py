@@ -322,10 +322,20 @@ class GeminiBrain:
 
     The key comes from GEMINI_API_KEY or .env and travels in a header, never the URL,
     so no error message or log line can carry it. HTTPS goes through `net.ssl_context`.
+
+    With GEMINI_VERTEX_PROJECT set, the same request goes to Agent Platform (Vertex AI)
+    instead, billed to that GCP project and authorised by the machine's Google identity
+    (the VM's service account), never by the key. The VM's free-tier key answered every
+    3.1 Pro call with HTTP 429 (2026-10-11), so on it the PM was never consulted and
+    every entry would have been the coded fallback. Vertex accepted the body unchanged
+    (the JSON schema and the thinking level) and answers in the same shape.
     """
 
     WIRE = 1
     URL = "https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
+    # Gemini 3 previews are served from the global endpoint only.
+    VERTEX_URL = ("https://aiplatform.googleapis.com/v1/projects/{project}/locations/global"
+                  "/publishers/google/models/{model}:generateContent")
     THINKING = {"low": 1024, "medium": 4096, "high": 16384, "xhigh": 24576, "max": 32768}
     MAX_THINKING = {"gemini-2.5-pro": 32768, "gemini-2.5-flash": 24576,
                     "gemini-3.1-pro-preview": 32768, "gemini-3.8-flash": 32768}
@@ -338,7 +348,7 @@ class GeminiBrain:
 
     def __init__(self, model: str = "gemini-2.5-pro", effort: str = "high",
                  max_calls: Optional[int] = None, client=None,
-                 max_cost: Optional[float] = None):
+                 max_cost: Optional[float] = None, vertex_project: Optional[str] = None):
         if model not in GEMINI_MODELS:
             raise ValueError(f"{model!r} is not a Gemini model the kit allows; known: {GEMINI_MODELS}")
         if effort not in self.THINKING:
@@ -349,6 +359,10 @@ class GeminiBrain:
         self.budget = min(self.THINKING[effort], self.MAX_THINKING[model])
         self._lock = threading.Lock()
         self._client = client
+        # The transport is not in the name: the same model answers the same question either
+        # way, so a cache filled through the key stays valid through Vertex.
+        self.vertex_project = vertex_project if vertex_project is not None else gemini_vertex_project()
+        self._credentials = None
         self.name = f"gemini:{model}:{effort}:wire{self.WIRE}"
         self.records: list[dict] = []
 
@@ -404,15 +418,38 @@ class GeminiBrain:
         except ValueError as err:
             raise BrainError(f"answer fails {schema.__name__}: {err}") from err
 
+    def url(self) -> str:
+        if self.vertex_project:
+            return self.VERTEX_URL.format(project=self.vertex_project, model=self.model)
+        return self.URL.format(model=self.model)
+
+    def headers(self) -> dict:
+        """One credential per transport: the API key never goes to Vertex and the token
+        never goes to the Gemini API, so neither reaches a host that has no use for it."""
+        if self.vertex_project:
+            return {"Authorization": f"Bearer {self._vertex_token()}"}
+        return {"x-goog-api-key": gemini_key()}
+
+    def _vertex_token(self) -> str:
+        # Under the lock: the analysts ask in parallel, and one refresh serves them all.
+        with self._lock:
+            if self._credentials is None:
+                self._credentials = vertex_credentials()
+            if not self._credentials.valid:
+                import google.auth.transport.requests
+
+                self._credentials.refresh(google.auth.transport.requests.Request())
+            return self._credentials.token
+
     def _post(self, body: dict, timeout: float):
         if self._client is not None:
-            return self._client.post(self.URL.format(model=self.model), json=body, timeout=timeout)
+            return self._client.post(self.url(), json=body, timeout=timeout)
         import httpx
 
         from icaif import net
 
-        with httpx.Client(verify=net.ssl_context(), headers={"x-goog-api-key": gemini_key()}) as c:
-            return c.post(self.URL.format(model=self.model), json=body, timeout=timeout)
+        with httpx.Client(verify=net.ssl_context(), headers=self.headers()) as c:
+            return c.post(self.url(), json=body, timeout=timeout)
 
     def _record(self, role, body, latency, error):
         u = (body or {}).get("usageMetadata") or {}
@@ -459,21 +496,48 @@ def gemini_schema(schema: type[BaseModel]) -> dict:
     return walk(schema.model_json_schema())
 
 
-def gemini_key() -> str:
-    """GEMINI_API_KEY from the environment, else from the repo's .env; raises if neither."""
+def _setting(name: str) -> str:
+    """`name` from the environment, else from the repo's .env, else ""."""
     import os
 
     from icaif import data
 
-    key = os.environ.get("GEMINI_API_KEY", "").strip()
+    value = os.environ.get(name, "").strip()
     env = data.ROOT / ".env"
-    if not key and env.exists():
+    if not value and env.exists():
         for line in env.read_text().splitlines():
-            if line.startswith("GEMINI_API_KEY="):
-                key = line.split("=", 1)[1].strip().strip('"').strip("'")
+            if line.startswith(f"{name}="):
+                value = line.split("=", 1)[1].strip().strip('"').strip("'")
+    return value
+
+
+def gemini_key() -> str:
+    """GEMINI_API_KEY from the environment, else from the repo's .env; raises if neither."""
+    key = _setting("GEMINI_API_KEY")
     if not key:
         raise BrainError("GEMINI_API_KEY is not set (environment or .env)")
     return key
+
+
+def gemini_vertex_project() -> str:
+    """The GCP project Gemini is asked through (Vertex), or "" to use the API key."""
+    return _setting("GEMINI_VERTEX_PROJECT")
+
+
+def vertex_credentials():
+    """The machine's Google identity, scoped for Vertex; raises BrainError if it has none.
+
+    On the VM this is its service account, through the metadata server. The VM must carry
+    the cloud-platform scope: with the default scopes the token is issued but every call
+    is refused (403), which would be a fallback in every round.
+    """
+    try:
+        import google.auth
+
+        creds, _ = google.auth.default(scopes=["https://www.googleapis.com/auth/cloud-platform"])
+    except Exception as err:  # noqa: BLE001 - no identity is a failed call, reported here
+        raise BrainError(f"no Google credentials for Vertex ({type(err).__name__}: {err})") from err
+    return creds
 
 
 def make(model: str = DEFAULT_MODEL, effort: str = "high", *, max_calls: Optional[int] = None,
@@ -514,9 +578,16 @@ def credentials_problem(model: str) -> Optional[str]:
 
     if model in GEMINI_MODELS:
         try:
-            gemini_key()
+            if gemini_vertex_project():
+                import google.auth.transport.requests
+
+                vertex_credentials().refresh(google.auth.transport.requests.Request())
+            else:
+                gemini_key()
         except BrainError as err:
             return str(err)
+        except Exception as err:  # noqa: BLE001 - any failure here is a failed round later
+            return f"Vertex token refresh failed ({type(err).__name__}: {err})"
         return None
     if model in BEDROCK_MODELS:
         try:

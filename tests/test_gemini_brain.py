@@ -130,3 +130,46 @@ def test_a_gemini_3_model_is_asked_by_a_fixed_thinking_level_never_a_token_budge
     medium = brains.GeminiBrain(model, "medium").request("s", {}, S.PMCheck)["generationConfig"]
     assert medium["thinkingConfig"] == {"thinkingLevel": "medium"}
     assert model in brains.ALLOWED_MODELS and model in brains.PRICES
+
+
+def test_through_vertex_the_project_is_asked_and_the_api_key_is_never_read(monkeypatch):
+    """On the VM the key's free tier refused every 3.1 Pro call, so the PM fell back in
+    every rehearsal. With a project set, the call must go to that project on Vertex with
+    the machine's token; a key sent along would reach a host with no use for it."""
+    def no_key():
+        raise AssertionError("the API key was read on the Vertex path")
+
+    monkeypatch.setattr(brains, "gemini_key", no_key)
+    brain = brains.GeminiBrain("gemini-3.1-pro-preview", "high", vertex_project="icaif2026")
+    monkeypatch.setattr(brain, "_vertex_token", lambda: "tok")
+    assert brain.url() == ("https://aiplatform.googleapis.com/v1/projects/icaif2026/locations/global"
+                           "/publishers/google/models/gemini-3.1-pro-preview:generateContent")
+    assert brain.headers() == {"Authorization": "Bearer tok"}
+
+
+def test_without_a_project_the_gemini_api_gets_the_key_and_never_a_google_token(monkeypatch):
+    monkeypatch.setattr(brains, "gemini_key", lambda: "k")
+    monkeypatch.setattr(brains, "vertex_credentials", lambda: (_ for _ in ()).throw(AssertionError))
+    brain = brains.GeminiBrain("gemini-3.1-pro-preview", "high", vertex_project="")
+    assert brain.url().startswith("https://generativelanguage.googleapis.com/")
+    assert brain.headers() == {"x-goog-api-key": "k"}
+
+
+def test_the_transport_is_not_in_the_brain_name_so_cached_answers_carry_over():
+    """A name that changed with the transport would re-ask, and re-pay, every cached
+    question in every replay the moment a machine switched to Vertex."""
+    via_key = brains.GeminiBrain("gemini-3.1-pro-preview", "high", vertex_project="")
+    via_vertex = brains.GeminiBrain("gemini-3.1-pro-preview", "high", vertex_project="icaif2026")
+    assert via_key.name == via_vertex.name
+
+
+def test_a_machine_with_no_google_identity_is_reported_before_the_round(monkeypatch):
+    """Without credentials every Vertex call fails and falls back to the rule silently; the
+    preflight must name the problem instead of passing."""
+    monkeypatch.setenv("GEMINI_VERTEX_PROJECT", "icaif2026")
+
+    def none():
+        raise brains.BrainError("no Google credentials for Vertex (DefaultCredentialsError: x)")
+
+    monkeypatch.setattr(brains, "vertex_credentials", none)
+    assert "no Google credentials" in brains.credentials_problem("gemini-3.1-pro-preview")

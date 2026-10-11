@@ -23,3 +23,6 @@ scikit-learn==1.7.2
 anthropic==1.9.0
 # The Grok brain asks Bedrock (BedrockBrain) with the AWS SSO login. Imported lazily too.
 boto3==1.43.102
+# The Gemini brain asks Vertex with the machine's Google identity when GEMINI_VERTEX_PROJECT
+# is set (the VM). Already installed by the stack; pinned to the VM's version. Imported lazily.
+google-auth==2.61.0
