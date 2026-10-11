@@ -7,6 +7,9 @@ behind every change; the commit messages are long on purpose.
 
 Nothing in this file is a secret, and no secret belongs in it.
 
+**Since this was written:** see `JOURNAL_2026-10-11.md` (the VM moved to Vertex AI, and
+alerts went live).
+
 ## Where things stand
 
 - **Official (Oct 12-30, 2026) enters with desk v3, stage 1.** Round 1 on Oct 12
