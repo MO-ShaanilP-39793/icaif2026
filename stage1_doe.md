@@ -1,5 +1,12 @@
 # Stage 1 design of experiment: tuning v3's entry
 
+**Outcome (2026-10-11).** Official enters with: four analysts' reports only, every stream
+but the 8-K filings, the four-rank prompt, Gemini 3.1 Pro in every role (analysts at
+thinking level medium, PM at high), and the PM's book scaled by code to 10% invested, the
+PM never told. On the 9 hold-out windows its books' Sharpe was 1.66 against the 75% hold's
+0.08, and its score 2.64 against 2.81 (within noise). Details in "Round 4", "Gemini 3" and
+"Hold-out check" below.
+
 Drafted 2026-10-08, revised the same day: **v3 is what we submit** (the owner's decision),
 so these experiments choose its settings; they are not a test of whether to use it.
 Stage 1 only: the PM decides the entry on day 1, and the book is held
@@ -230,6 +237,41 @@ arms smaller than it is not a finding. This runs last so it measures the configu
 that will actually be used. If it shows round 1 or 3's winners were within noise, the
 tie rules above apply retroactively, and that is recorded.
 
+*Result (2026-10-10).* Three runs of the chosen setup, every role asked fresh:
+
+| Identical setup | Invested | Return | Sharpe | Max DD | Score |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| original | 84% | -0.04% | 1.58 | 3.24% | 3.28 |
+| repeat 1 | 81% | +0.53% | 2.01 | 2.59% | 3.21 |
+| repeat 2 | 85% | +0.25% | 1.90 | 2.91% | 3.17 |
+
+Window by window the PM is inconsistent (two runs share 58% of names, share correlation
+0.27, a window's score moves ~0.5); over 13 windows a setup's mean score moves ~0.05 and
+its mean Sharpe ~0.2. Two repeats of the told-40% floor (Sharpe 1.60 and 1.52 against the
+first run's 2.52) put its noise nearer 0.13: a setup's 13-window score plausibly moves
+0.05-0.13 run to run. Re-read against it: the analysts' gain over a single PM (0.23-0.24)
+holds; the Sharpe prompt's deficit holds (1.14 against 1.83 pooled); a told floor picks no
+better than no floor (pooled Sharpe 1.88 against 1.83), so a floor's score gain is its
+cash. The cash split therefore stays code's (the overlay); on all 39 books of the chosen
+setup, 50% invested scored 2.96, 25% 3.03 and 10% 3.08, against 3.22 as the PM chose.
+**The owner set 10% invested (90% cash)** for Official, on the view that the real field
+may hold no pure-cash team (below ~25% the modelled field's ranks stop improving, because
+its cash entrant holds rank 1 on drawdown and turnover).
+
+### Gemini 3 (2026-10-11)
+
+The organizers allowed Gemini 3.1 Pro (preview) and 3.8 Flash (the owner). Google lists no
+knowledge cutoff for either, so `tools/memory_probe.py` ran first on the 13 selection
+windows plus a mid-2024 control, which both models recalled almost exactly (correlation
+0.99-1.00): 3.1 Pro remembered none (7 clean, 6 declined to guess); **3.8 Flash remembered
+the two February 2025 windows** (earnings reactions correlating 0.90 with what happened)
+and declined in 10. Flash's reports could carry hindsight to the PM in a replay (not live,
+where the future is unknown), so the run asked **3.1 Pro in every role**: reports only,
+every stream but filings, the PM's book at 10% invested. It scored exactly as 2.5's 39
+books at 10% (3.08 each; Sharpe 1.79 against 1.78, SE 0.51, better in 5 of 13), never
+revised a draft, and held more concentrated books (median 10 names against 13). The owner
+chose 3.1 Pro for Official.
+
 ## Hold-out check: once, no gate
 
 The chosen settings are committed, then run once on the 9 hold-out windows (2026) beside
@@ -239,6 +281,30 @@ that were luckiest on those 13 windows? Choosing the best of ~20 arms on the sam
 that score them favours luck. If the runner-up beats the choice on the hold-out, the
 edge on the 13 didn't hold up: it was noise, and the tie rule (cheaper or simpler wins) decides. The
 hold-out numbers are also the honest estimate of tuned v3 for the write-up.
+
+*Result (2026-10-11), the chosen setup as Official runs it* (`--split confirm
+--confirm-choice 9bfbeba`, 3.1 Pro in every role, 10% invested; $1.78, every window the
+PM's own entry, all 9 confirmed drafts):
+
+| 9 hold-out windows, no-clone field | Return | Sharpe | Max DD | Turnover | Score |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| **v3 as configured (10% invested)** | +0.12% | **1.66** | 0.31% | 0.10% | 2.64 |
+| the same names at 75% invested | +0.92% | 1.71 | 2.28% | 0.71% | 2.50 |
+| inverse-vol hold 75% | -0.12% | 0.08 | 1.88% | 0.71% | 2.81 |
+| rule (risk parity, regime-sized) | -0.01% | 0.46 | 1.89% | 0.80% | 2.75 |
+| cash | 0 | 0 | 0 | 0 | 2.17 |
+
+The PM's books beat the hold's Sharpe in 6 of 9 windows (1.66 against 0.08), the first
+out-of-sample sign its picks add value; across all 22 windows its books average about
+1.74 against the hold's 1.22. v3's score beats the hold's by 0.17 (SE 0.24, better in 4,
+worse in 4). The memory probe flagged 2026-08-24 on one weak signal (largest-move
+correlation 0.43, p 0.03, but directions 11 of 20 against 11.2 by chance and guesses a
+seventh of the moves; the probe flags a pure guesser in ~11% of windows); without it v3
+and the hold tie at 2.63. Here the names at 75% invested scored better than at 10%, where
+the selection windows had favoured less invested: the cash level's effect is small
+against the noise in both directions. The runner-up was not run: after round 4 the
+closest calls were cash levels, which the overlay scores without calls, and the change of
+model moved every comparison onto a new base.
 
 ## Size, cost and time
 

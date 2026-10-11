@@ -354,6 +354,13 @@ results-season window from Apr 2025 on is after it. Gemini refuses a schema whos
 text sits in a long list ("too many states"), so `gemini_schema` sends length caps as words
 and pydantic enforces them.
 
+**Gemini 3 since 2026-10-11.** The organizers allowed Gemini 3.1 Pro (`gemini-3.1-pro-preview`,
+$2.00 / $12.00 per million tokens) and 3.8 Flash (`gemini-3.8-flash`, $0.75 / $3.75 until
+2026-12-31). Gemini 3 takes a named thinking level, not a budget, so each effort maps to a
+fixed level (`xhigh` and `max` send `high`, its top). Google lists no knowledge cutoff for
+either; the memory probe found 3.1 Pro clean on the 2025 windows and 3.8 Flash remembering
+February 2025, so replays ask 3.1 Pro in every role (Flash's memory matters to replays only).
+
 ```bash
 .venv/bin/python tools/live_dry_run.py --round 1            # one round's book, now, nothing uploaded
 .venv/bin/python tools/live_runner.py rehearse              # today's 7 rounds at real times, dry
@@ -827,6 +834,38 @@ when its metrics match it takes its board place rather than tie with its own cop
 Across tags it prints each strategy's score minus the hold's and the rule's, with the SE
 over windows that share no day: the gate's test. Windows past the board's span (Jul-Sep)
 are listed with their metrics only.
+
+## Desk v3: Official's entry (`icaif/agents/v3.py`; `v3_desk_plan.md`, `stage1_doe.md`)
+
+The score pays for one well-chosen book left alone, so v3 spends its thinking on the entry.
+**Stage 1, which Official runs:** at round 1 from cash, four analysts (market, earnings,
+news, quant) each read their own slice of the observation and report; the PM reads the
+reports and a minimal market table, writes a book, a thesis and plan conditions in a
+vocabulary code can check, sees code's self-check of the draft (concentration, expected vol,
+beta, recent drawdown, the reference books at its gross) and confirms or revises once. Code
+then scales the book to `overlay`, the invested share it holds, the PM never told
+(Sharpe has a zero risk-free rate, so scaling leaves it unchanged while drawdown and
+turnover shrink). The book is held to the window's end. Stage 2 (an analyst each round and
+a senior associate each morning, escalating to the PM) is designed, not built.
+
+The settings came from a designed experiment on 13 post-cutoff selection windows and 9
+hold-out windows (`stage1_doe.md`; `tools/entry_replay.py` runs an arm, `tools/doe_report.py`
+applies the rules): reports only (analysts beat a single PM by 0.23-0.24, about 4 noise
+units), every stream but the 8-K filings (the only stream worse on return, Sharpe and
+drawdown), the four-rank prompt (a "maximise Sharpe" prompt picked worse), Gemini 3.1 Pro in
+every role (level with 2.5), and **10% invested** (the owner's call: the overlay always beat
+the PM's own cash choice; how far to go turns on whether the real field holds a pure-cash
+team). On the hold-out, v3's books had Sharpe 1.66 against the 75% hold's 0.08, and v3
+scored 2.64 against 2.81 (SE 0.24). A desk whose every role is answered in code equals the
+inverse-vol hold trade for trade in all 22 windows (`entry_replay.py ledgers`, at 75% and at
+a 30% sleeve); under an overlay it buys inverse-vol at the overlay's share (tested).
+
+Live: `tools/live_runner.py run --phase official --live --submit agent --desk v3 --model
+gemini-3.1-pro-preview --quick-model gemini-3.1-pro-preview --overlay 0.1`, after `arm
+--phase official --submit agent` (the owner's, at a terminal). A failed PM buys inverse-vol
+at the overlay's share; a crashed v3 desk hands the entry to the rule, scaled to the same
+share. Rehearsed dry on 2026-10-09: every input loaded, the chain took 46 s, round 1 was
+ready 516 s before its deadline, rounds 2-7 held, $0.16.
 
 ## Credentials
 
