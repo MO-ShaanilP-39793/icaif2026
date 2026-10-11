@@ -114,8 +114,19 @@ def test_effort_sets_an_explicit_thinking_budget_within_each_models_limit():
 def test_a_model_the_organizers_ruled_out_cannot_be_asked():
     """Grok 4.7 was ruled out on 2026-10-06, and "Grok 4" read strictly excludes 4.6 too.
     The Bedrock brain stays for cached replays, but no tool or round may ask it."""
-    for model in ("grok-4.7", "grok-4.6", "gemini-3.8-flash"):
+    for model in ("grok-4.7", "grok-4.6", "gemini-3.5-flash"):   # 3.8 Flash allowed since 2026-10-11
         with pytest.raises(ValueError):
             brains.make(model, "high")
     assert "grok-4.7" not in brains.ALLOWED_MODELS
     assert isinstance(brains.make("gemini-2.5-flash", "medium"), brains.GeminiBrain)
+
+
+@pytest.mark.parametrize("model", ["gemini-3.1-pro-preview", "gemini-3.8-flash"])
+def test_a_gemini_3_model_is_asked_by_a_fixed_thinking_level_never_a_token_budget(model):
+    """Gemini 3 reads a named level; a budget sent instead would ask at whatever depth the
+    API chose, and a rerun could think differently from the run it repeats."""
+    cfg = brains.GeminiBrain(model, "high").request("s", {"a": 1}, S.PMCheck)["generationConfig"]
+    assert cfg["thinkingConfig"] == {"thinkingLevel": "high"}
+    medium = brains.GeminiBrain(model, "medium").request("s", {}, S.PMCheck)["generationConfig"]
+    assert medium["thinkingConfig"] == {"thinkingLevel": "medium"}
+    assert model in brains.ALLOWED_MODELS and model in brains.PRICES

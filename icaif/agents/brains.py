@@ -38,7 +38,13 @@ CLAUDE_MODELS = ("claude-opus-5", "claude-sonnet-5", "claude-haiku-4-5")
 # through a profile; the bare model id is refused for on-demand calls.
 BEDROCK_MODELS = {"grok-4.7": "us.xai.grok-4.7"}
 BEDROCK_REGION = "us-east-1"
-GEMINI_MODELS = ("gemini-2.5-pro", "gemini-2.5-flash")
+# Gemini 3.1 Pro (preview) and 3.8 Flash: allowed by the organizers, per the owner on
+# 2026-10-11; the vendored kit's `llm_and_external_data.md` still lists only 2.5. Google
+# publishes no knowledge cutoff for either (their model pages, 2026-10-11): a replay on a
+# window they may have read measures memory, so `tools/memory_probe.py` checks a window
+# before it is scored with them.
+GEMINI_3 = ("gemini-3.1-pro-preview", "gemini-3.8-flash")
+GEMINI_MODELS = ("gemini-2.5-pro", "gemini-2.5-flash") + GEMINI_3
 ALLOWED_MODELS = CLAUDE_MODELS + GEMINI_MODELS
 DEFAULT_MODEL = "gemini-2.5-pro"
 # USD per million tokens: input, output, cache read, cache write (5-minute TTL).
@@ -52,7 +58,11 @@ PRICES = {"claude-opus-5": (5.0, 25.0, 0.50, 6.25),
           # are billed as output. Implicit caching has no write charge; charged as input.
           # Above 200k the price doubles, and no v2 prompt comes near it (~20k at most).
           "gemini-2.5-pro": (1.25, 10.00, 0.125, 1.25),
-          "gemini-2.5-flash": (0.30, 2.50, 0.03, 0.30)}
+          "gemini-2.5-flash": (0.30, 2.50, 0.03, 0.30),
+          # Google's pricing page, 2026-10-11. 3.8 Flash's rate is introductory to
+          # 2026-12-31 (then 1.50 / 7.50), past the contest, so it is the one that applies.
+          "gemini-3.1-pro-preview": (2.00, 12.00, 0.20, 2.00),
+          "gemini-3.8-flash": (0.75, 3.75, 0.075, 0.75)}
 
 
 class BrainError(RuntimeError):
@@ -317,7 +327,11 @@ class GeminiBrain:
     WIRE = 1
     URL = "https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
     THINKING = {"low": 1024, "medium": 4096, "high": 16384, "xhigh": 24576, "max": 32768}
-    MAX_THINKING = {"gemini-2.5-pro": 32768, "gemini-2.5-flash": 24576}
+    MAX_THINKING = {"gemini-2.5-pro": 32768, "gemini-2.5-flash": 24576,
+                    "gemini-3.1-pro-preview": 32768, "gemini-3.8-flash": 32768}
+    # Gemini 3 sets thinking by a named level, not a token budget. Each effort maps to one
+    # level, fixed here, so a rerun asks at the same depth.
+    LEVEL = {"low": "low", "medium": "medium", "high": "high", "xhigh": "high", "max": "high"}
     ANSWER_TOKENS = 16000   # room for the answer beyond the thinking budget
     REFUSED = ("SAFETY", "RECITATION", "PROHIBITED_CONTENT", "BLOCKLIST", "SPII",
                "LANGUAGE", "IMAGE_SAFETY", "OTHER")
@@ -348,7 +362,8 @@ class GeminiBrain:
                 "responseMimeType": "application/json",
                 "responseJsonSchema": gemini_schema(schema),
                 "maxOutputTokens": self.budget + self.ANSWER_TOKENS,
-                "thinkingConfig": {"thinkingBudget": self.budget},
+                "thinkingConfig": ({"thinkingLevel": self.LEVEL[self.effort]} if self.model in GEMINI_3
+                                   else {"thinkingBudget": self.budget}),
             },
         }
 

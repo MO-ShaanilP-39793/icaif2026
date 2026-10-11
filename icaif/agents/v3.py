@@ -138,6 +138,13 @@ class V3Config(V2Config):
     # "sharpe" (Sharpe alone, for a book whose cash split code sets outside the PM's
     # decision; run it with gross ("fixed", 1.0) so the PM writes shares of its book).
     objective: str = "contest"
+    # The invested share code holds, whatever the PM's book sums to; None leaves the PM's
+    # own gross. The PM is never told (owner's design, 2026-10-10): its book is scaled to
+    # this share before it is submitted. Sharpe has a zero risk-free rate, so the scaling
+    # leaves it unchanged while drawdown and turnover shrink with it; told, the PM would
+    # weigh a cash choice that is no longer its own, and over three repeats a PM told a
+    # floor picked no better (pooled Sharpe 1.88 against 1.83).
+    overlay: Optional[float] = None
     # The observation carries the regime model's read; `streams` decides whether a role
     # sees it. v2 hid it outright (the free desk trusted "calm" through a 3% fall); v3
     # measures it instead.
@@ -150,6 +157,8 @@ class V3Config(V2Config):
     def __post_init__(self):
         if self.analysts not in ("none", "reports_raw", "reports_only"):
             raise ValueError(f"analysts must be none, reports_raw or reports_only, not {self.analysts!r}")
+        if self.overlay is not None and not 0.0 < self.overlay <= 1.0:
+            raise ValueError(f"overlay is an invested share in (0, 1], not {self.overlay!r}")
         if self.objective not in ("contest", "sharpe"):
             raise ValueError(f"objective must be contest or sharpe, not {self.objective!r}")
         unknown = sorted(set(self.streams) - set(STREAMS))
@@ -165,7 +174,10 @@ class V3Config(V2Config):
     @property
     def fallback_gross(self) -> float:
         """A sleeve arm falls back to inverse-vol at its own gross: at 75% a fallback would
-        carry the cash question into an arm built to hold it fixed."""
+        carry the cash question into an arm built to hold it fixed. Under an overlay the
+        fallback is the overlay's share, for the same reason."""
+        if self.overlay is not None:
+            return self.overlay
         return self.gross[1] if self.gross[0] == "fixed" else FALLBACK_GROSS
 
 
@@ -377,9 +389,16 @@ class V3Desk(V2Desk):
         else:
             self.plan = {"thesis": final.thesis, "from": how,
                          "conditions": [c.model_dump() for c in final.conditions]}
+            rec["pm_gross"] = round(float(book.sum()), 6)
             if float(book.sum()) <= compiler.HELD:
                 self.book.entered = True     # all cash, chosen: entered, nothing to buy
             else:
+                if self.cfg.overlay is not None:
+                    # Scaled to code's share after every check: the PM's book passed the
+                    # 30% cap at its own gross, and scaling down can't breach it.
+                    book = book * (self.cfg.overlay / float(book.sum()))
+                    if float(book.max()) > W.CAP + 1e-12:
+                        raise ValueError(f"an overlay of {self.cfg.overlay:g} takes a name over the 30% cap")
                 weights = W.safe({t: v + NUDGE if v > 0 else 0.0 for t, v in book.items()}, tickers)
                 w = self._take(weights, float(sum(weights.values())), current, nav)
         bought = w if w is not None else {}

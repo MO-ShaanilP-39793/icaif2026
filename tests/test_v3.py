@@ -520,3 +520,30 @@ def test_a_sharpe_objective_tells_every_role_sharpe_alone_and_names_no_cash_leve
     assert d.entry["source"] == "brain" and d.entry["gross"] == pytest.approx(1.0, abs=1e-5)
     with pytest.raises(ValueError):
         V3Config(objective="return")
+
+
+
+def test_an_overlay_scales_the_pms_book_to_codes_share_and_the_pm_never_hears_of_it():
+    """The PM decides as if its book were the book; code holds the cash. A PM told the
+    share would weigh a cash choice that is no longer its own."""
+    stated = {TICKERS[0]: 0.3, TICKERS[1]: 0.3, TICKERS[2]: 0.2}
+    b = Script(pm=lambda p: _entry(stated), pm_check=_confirm)
+    d = _desk(b, cfg=V3Config(overlay=0.10, analysts="reports_only"))
+    got = sim.run(d, _mkt(), START, 2)
+    assert d.entry["pm_gross"] == pytest.approx(0.8) and d.entry["gross"] == pytest.approx(0.10, abs=1e-5)
+    assert d.entry["weights"][TICKERS[0]] == pytest.approx(0.0375, abs=1e-6)          # shape kept
+    assert sum(got.ledger.iloc[0][TICKERS]) * 100 / sim.INITIAL_NAV == pytest.approx(0.10, abs=1e-5)
+    for _, system, payload in b.seen:
+        text = (system + json.dumps(payload)).lower()
+        assert "overlay" not in text and "0.1" not in json.dumps(payload.get("gross_rule", {}))
+    assert _asked(b, "pm")[0]["gross_rule"] == {"rule": "free", "range": [0.0, 1.0]}
+
+
+def test_under_an_overlay_a_failed_entry_buys_inverse_vol_at_the_overlays_share():
+    m = _mkt()
+    d = _desk(HoldBrain(), cfg=V3Config(overlay=0.10))
+    got = sim.run(d, m, START, N)
+    want = sim.run(baselines.scaled(baselines.InverseVolHold, 0.10)(), m, START, N)
+    pd.testing.assert_frame_equal(got.ledger, want.ledger)
+    with pytest.raises(ValueError):
+        V3Config(overlay=0.0)
