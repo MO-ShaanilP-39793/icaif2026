@@ -8,7 +8,8 @@ behind every change; the commit messages are long on purpose.
 Nothing in this file is a secret, and no secret belongs in it.
 
 **Since this was written:** see `JOURNAL_2026-10-11.md` (the VM moved to Vertex AI, and
-alerts went live).
+alerts went live) and **`JOURNAL_2026-10-12.md`: Official runs at 99.9% cash
+(`--overlay 0.001`, not 0.1), which needs the guard fix on main pulled first.**
 
 ## Where things stand
 
