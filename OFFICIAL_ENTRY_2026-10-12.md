@@ -1,7 +1,7 @@
 # Official entry, Oct 12, 2026: the picks and why
 
 Desk v3, stage 1. One book bought at round 1 (submission 1583, uploaded 09:02:57 ET,
-executing at 09:30 ET) and held unchanged to Oct 30. Code scaled the PM's book to 0.1%
+executed 09:30 ET) and held unchanged to Oct 30. Code scaled the PM's book to 0.1%
 invested, with 99.9% in cash, without telling the PM.
 
 ## The book
@@ -25,7 +25,8 @@ invested, with 99.9% in cash, without telling the PM.
 
 Tech is 48% of the book (NVDA, MSFT, AMZN, GOOGL, CRM). Healthcare is 30% (TMO, LLY,
 JNJ, UNH), and defensives and financials make up the rest. 17 of the 30 names are
-not held. These are the submitted targets; the server's fill may differ slightly.
+not held. The server's book confirms the fill: the 13 names at these weights to within
+rounding, cash $998,999 (a fee of about $1).
 
 ## The market view
 
