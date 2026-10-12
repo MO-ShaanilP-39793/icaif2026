@@ -4,6 +4,7 @@
     .venv/bin/python tools/chain_replay.py run              # prints the cost estimate and stops
     .venv/bin/python tools/chain_replay.py run --yes        # official4, the four Earnings season windows
     .venv/bin/python tools/chain_replay.py run --on 2025-04-11 --yes
+    .venv/bin/python tools/chain_replay.py stage1 --overlay 0.5 --offline   # stage 1 alone, for the board
 
 Each window runs twice from the same entry: stage 1 (`V3Desk`, entry then hold) and B
 (`ChainDesk`). Both use Official's configuration (the reports-only analysts, every stream
@@ -175,9 +176,54 @@ def run(args, market, starts, out: Path) -> None:
     print(f"\nlog: {out}   ({time.time() - t0:.0f}s)")
 
 
+AGENT = data.ROOT / "output" / "agent"
+DESK = "desk_v3_stage1"
+
+
+def stage1(args, market, starts) -> None:
+    """Stage 1 alone at `--overlay`, written as `agent_replay` writes a run, one per window
+    (output/agent/<tag>/windows.csv and <tag>.out), for `tools/submit_agentic.py`.
+
+    The PM is never told the overlay, so its payloads, and with them its cached answers, are
+    the same at every share: a run at another overlay is the same entry bought at another
+    gross. `--offline` makes that a guarantee rather than a hope: an answer not in the cache
+    fails, the desk falls back, and the fallback count says so.
+    """
+    cfg = dict(OFFICIAL, overlay=args.overlay)
+    kw = desk_inputs(market, starts, real_names=True)
+    pct = int(round(args.overlay * 100))
+    for s in starts:
+        live = {"quick": brains.make(MODEL, "medium", max_calls=args.max_calls),
+                "deep": brains.make(MODEL, "high", max_calls=args.max_calls)}
+        cached = {k: brains.CachedBrain(b, CACHE, offline=args.offline) for k, b in live.items()}
+        d = V3Desk(cached, V3Config(**cfg), **kw)
+        res = sim.run(d, market, s, windows.WINDOW_DAYS)
+        rows = [metrics_row(res, s, DESK)]
+        for ref, fac in ((HOLD, baselines.scaled(baselines.InverseVolHold, 0.75)),
+                         (f"inv_vol_hold_{pct}", baselines.scaled(baselines.InverseVolHold, args.overlay))):
+            rows.append(metrics_row(sim.run(fac(), market, s, windows.WINDOW_DAYS), s, ref))
+        tag = f"v3_stage1_ov{pct}_{s}"
+        out = AGENT / tag
+        out.mkdir(parents=True, exist_ok=True)
+        pd.DataFrame(rows).to_csv(out / "windows.csv", index=False)
+        (out / "entry.json").write_text(json.dumps({"entry": d.entry, "plan": d.plan}, default=str, indent=1))
+        lines = [f"{MODEL}-{eff}: {len(live[k].records)} calls, ${live[k].cost():.2f}; "
+                 f"cache hits {cached[k].hits}, misses {cached[k].misses}"
+                 for k, eff in (("quick", "medium"), ("deep", "high"))]
+        falls = ", ".join(f"{k} {v}" for k, v in sorted(d.fallbacks.items())) or "none"
+        (AGENT / f"{tag}.out").write_text(f"stage 1 at overlay {args.overlay:g}, window {s}\n"
+                                          + "\n".join(lines) + f"\nfallbacks: {falls}\n")
+        m = res.metrics()
+        print(f"{tag}: {d.entry['source']} ({d.entry.get('final')}), gross {d.entry['gross']:.4f}, "
+              f"return {m['cumulative_return']:+.4f}, sharpe {m['sharpe_ratio']:.2f}; {' | '.join(lines)}; "
+              f"fallbacks {falls}")
+
+
 def main() -> None:
     ap = argparse.ArgumentParser()
-    ap.add_argument("command", choices=["ledgers", "run"])
+    ap.add_argument("command", choices=["ledgers", "run", "stage1"])
+    ap.add_argument("--overlay", type=float, default=OFFICIAL["overlay"],
+                    help="stage1: the invested share code holds (0.5 = 50%% cash)")
     ap.add_argument("--suite", default="official4")
     ap.add_argument("--on", default=None, help="one window, by its first session")
     ap.add_argument("--budget", type=int, default=2)
@@ -195,6 +241,8 @@ def main() -> None:
         if on not in starts:
             raise SystemExit(f"{on} starts no {args.suite} window")
         starts = [on]
+    if args.command == "stage1":
+        return stage1(args, market, starts)
     run(args, market, starts, OUT / (args.tag or f"b_{args.suite}_{len(starts)}w_budget{args.budget}"))
 
 
