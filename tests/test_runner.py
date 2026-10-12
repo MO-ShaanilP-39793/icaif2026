@@ -172,6 +172,20 @@ def test_the_guard_uploads_only_a_real_trade(kw, ok, why):
     assert got is ok and why in reason
 
 
+@pytest.mark.parametrize("source", ["agent", "rule"])
+def test_an_entry_from_cash_at_a_tenth_of_a_percent_is_uploaded_not_read_as_drift(source):
+    """At 99.9% cash the whole entry turns over 0.001 of NAV, under the drift floor: read as
+    drift it uploads nothing, and the phase runs all cash with only a "hold" to say so."""
+    tiny = {t: 0.001 / len(TICKERS) for t in TICKERS}
+    args = dict(source=source, entered=False, book_all_cash=True, round_no=1)
+    assert runner.guard(tiny, pd.Series(0.0, index=TICKERS), **args) == (True, "trade")
+    held = pd.Series(0.001 / len(TICKERS), index=TICKERS)
+    drift = {t: 1.05 * 0.001 / len(TICKERS) for t in TICKERS}
+    ok, why = runner.guard(drift, held, source="agent", entered=True, book_all_cash=False, round_no=4)
+    assert ok is False and "drift" in why, "once a book holds shares the floor still applies"
+
+
+
 # ----------------------------------------------------------------------------- the upload gate
 
 class FakeSession:

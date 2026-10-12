@@ -413,7 +413,11 @@ def guard(target: Optional[dict], current: Optional[pd.Series], *, source: str,
             return False, "an entry over a book that holds shares"
         if round_no != 1 and not late_entry:
             return False, "the rule enters only at round 1"
-    if moved.sum() < MIN_TURNOVER:
+    # A book of cash has no drift: an entry from it is the decision whatever its size. Held
+    # to the drift floor, a 0.1%-invested entry (turnover 0.001) read as drift, nothing was
+    # uploaded, and the phase would have run all cash with no warning but a "hold".
+    from_cash = float(current.abs().max()) <= compiler.HELD     # the book itself, not a flag
+    if moved.sum() < MIN_TURNOVER and not from_cash:
         return False, f"hold: turnover {moved.sum():.4f} is drift, not a decision"
     return True, "trade"
 
