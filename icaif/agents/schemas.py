@@ -351,3 +351,38 @@ class PMCheck(_Strict):
 
 
 SCHEMAS.update(pm_entry=PMEntry, pm_check=PMCheck)
+
+
+# ----------------------------------------------------------------------------- desk v3, stage 2 (B)
+
+REDUCTIONS = {"trim_quarter": 0.75, "trim_half": 0.5, "exit": 0.0}
+
+
+class ReduceLine(_Strict):
+    """One held name made smaller: what is left is the fraction `REDUCTIONS[to]` of it."""
+
+    name: str
+    to: Literal[tuple(REDUCTIONS)]
+
+
+class ChainDecision(_Strict):
+    """The PM after entry, when code wakes it: hold, or make the book smaller.
+
+    Sell-only by construction: there is no field that buys. Every motive the chain exists
+    for (results, a crash, booking a gain before the window ends) reduces the book, and a
+    lever that could add would let a wake-up turn into the morning rewrites that lost v1
+    and v2 their windows.
+    """
+
+    action: Literal["hold", "reduce"]
+    lines: list[ReduceLine] = Field(max_length=30, description="reduce: the names to trim or "
+                                    "exit. Empty with a gross, or on hold.")
+    gross: Optional[float] = Field(ge=0.0, le=1.0, description="reduce: the whole book's new "
+                                   "gross, below today's (0 = all cash). Null to leave it.")
+    drop_conditions: list[str] = Field(max_length=12, description="Ids of plan conditions to remove.")
+    add_conditions: list[Condition] = Field(max_length=6)
+    cites: list[str] = Field(max_length=12, description="The ids of the events this decision answers.")
+    rationale: str = prose(1000)
+
+
+SCHEMAS.update(chain_decision=ChainDecision)
