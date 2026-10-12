@@ -191,7 +191,9 @@ def stage1(args, market, starts) -> None:
     """
     cfg = dict(OFFICIAL, overlay=args.overlay)
     kw = desk_inputs(market, starts, real_names=True)
-    pct = int(round(args.overlay * 100))
+    # The share in percent, named exactly: rounded to a whole percent, 0.1% would be "0"
+    # and every run under 0.5% would share one directory.
+    pct = f"{args.overlay * 100:g}".replace(".", "p")
     for s in starts:
         live = {"quick": brains.make(MODEL, "medium", max_calls=args.max_calls),
                 "deep": brains.make(MODEL, "high", max_calls=args.max_calls)}
