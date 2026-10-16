@@ -163,12 +163,16 @@ def events(phase: str, phase_dir: Path, now: datetime, alive) -> list[dict]:
     return out
 
 
-def send(msg: dict, topic: str, server: str = "https://ntfy.sh") -> None:
+def send(msg: dict, topic: str, server: str = "https://ntfy.sh", email: str | None = None) -> None:
+    """Post to the topic; with `email`, ntfy.sh also mails the message to that address."""
     from icaif import net
 
+    headers = {"Title": msg["title"].encode("ascii", "replace").decode(),
+               "Priority": msg["priority"], "Tags": msg.get("tags", "")}
+    if email:
+        headers["Email"] = email
     req = urllib.request.Request(f"{server}/{topic}", data=msg["body"].encode() or b" ", method="POST",
-                                 headers={"Title": msg["title"].encode("ascii", "replace").decode(),
-                                          "Priority": msg["priority"], "Tags": msg.get("tags", "")})
+                                 headers=headers)
     with urllib.request.urlopen(req, timeout=10, context=net.ssl_context()) as r:
         if r.status != 200:
             raise OSError(f"ntfy answered HTTP {r.status}")
