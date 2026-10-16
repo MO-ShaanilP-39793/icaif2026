@@ -98,3 +98,21 @@ def test_a_failed_report_is_sent_as_a_failure_not_silence(monkeypatch):
     monkeypatch.setattr(alert_watch, "setting", lambda name: "x")
     assert D.main([]) == 1
     assert sent[0]["title"] == "Official daily report failed" and "Alpaca unreachable" in sent[0]["body"]
+
+
+def test_a_refused_email_never_costs_the_push(monkeypatch):
+    """ntfy.sh refuses anonymous email with HTTP 400. Sent in one request with the push,
+    the refusal took the push down with it, and the owner heard nothing that evening."""
+    import alert_watch
+
+    pushes = []
+
+    def send(m, topic, email=None):
+        if email:
+            raise OSError("HTTP 400: anonymous email sending is not allowed")
+        pushes.append(m)
+
+    monkeypatch.setattr(D, "gather", lambda: (_ for _ in ()).throw(ConnectionError("x")))
+    monkeypatch.setattr(alert_watch, "send", send)
+    monkeypatch.setattr(alert_watch, "setting", lambda name: "someone@example.com")
+    assert D.main([]) == 1 and len(pushes) == 1

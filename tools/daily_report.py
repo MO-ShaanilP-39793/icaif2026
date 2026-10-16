@@ -1,4 +1,4 @@
-"""Official's four metrics, estimated each evening and sent to the owner (push and email).
+"""Official's four metrics, estimated each evening and pushed to the owner's phone (ntfy).
 
     .venv/bin/python tools/daily_report.py            # compute and send now
     .venv/bin/python tools/daily_report.py --boot     # the VM's boot hook (see below)
@@ -153,8 +153,18 @@ def main(argv=None) -> int:
         print(f"{now:%F %T %Z}: outside the report window; nothing sent, VM left running")
         return OUTSIDE
     topic, email = setting("NTFY_TOPIC"), setting("NTFY_EMAIL")
-    post = (lambda m: print(m["title"], m["body"], sep="\n")) if args.dry else \
-        (lambda m: send(m, topic, email=email or None))
+    def post(m):
+        """The push first, then the email on its own: ntfy.sh refuses anonymous email
+        (HTTP 400, 2026-10-16), and sent together a refused email lost the push too."""
+        if args.dry:
+            print(m["title"], m["body"], sep="\n")
+            return
+        send(m, topic)
+        if email:
+            try:
+                send(m, topic, email=email)
+            except Exception as err:  # noqa: BLE001 - the push already went
+                print(f"{now:%F %T %Z}: email not sent: {type(err).__name__}: {err}")
     try:
         cash, shares, server_nav, opens, closes, executions, final = gather()
         m = metrics(cash, shares, opens, closes, executions, final)
